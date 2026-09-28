@@ -32,7 +32,7 @@ export default defineConfig({
       },
       // favicon.ico اینجا هم نمی‌آید — `includeAssets` مستقیم به پیش‌کش اضافه
       // می‌کند و همان ۴۰۴ دوباره تکرار می‌شد
-      includeAssets: ['icon.svg', 'apple-touch-icon-180x180.png'],
+      includeAssets: ['icon.png', 'apple-touch-icon-180x180.png'],
       manifest: {
         name: 'آنستریم — Unstream',
         short_name: 'آنستریم',

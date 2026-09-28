@@ -375,3 +375,69 @@ class TestUserPageRouting:
     def test_a_soundcloud_track_link_never_reaches_the_profile_route(self, routes):
         assert asyncio.run(catalog.resolve_artist(None, "https://soundcloud.com/dorcci/gonah")) is None
         assert routes == []
+
+
+class TestArtistRouting:
+    def test_apple_and_spotify_aliases_in_id_are_recognized(self, monkeypatch):
+        called = []
+
+        def dummy_detail(source: str):
+            return ArtistDetail(
+                id=f"{source}:artist:1", name="Artist", source=source, sourceUrl="x",
+                subtitle="", kind="artist",
+            )
+
+        async def fake_itunes_artist(client, ident):
+            called.append(f"itunes:{ident}")
+            return dummy_detail("apple")
+
+        async def fake_spotify_artist(client, ident):
+            called.append(f"spotify:{ident}")
+            return dummy_detail("spotify")
+
+        monkeypatch.setattr(itunes, "artist", fake_itunes_artist)
+        monkeypatch.setattr(spotify, "artist", fake_spotify_artist)
+        monkeypatch.setattr(spotify, "enabled", lambda: True)
+
+        # apple:artist:123 should route to itunes
+        res_apple = asyncio.run(catalog.resolve_artist(None, "apple:artist:123"))
+        assert res_apple is not None
+        assert called[-1] == "itunes:123"
+
+        # spotify:artist:456 should route to spotify
+        res_spotify = asyncio.run(catalog.resolve_artist(None, "spotify:artist:456"))
+        assert res_spotify is not None
+        assert called[-1] == "spotify:456"
+
+    def test_spotify_artist_without_key_falls_back_from_id(self, monkeypatch):
+        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        called = []
+
+        async def fake_fallback(client, url):
+            called.append(url)
+            return ArtistDetail(
+                id="sp:artist:fallback", name="Fallback Artist", source="spotify",
+                sourceUrl=url, subtitle="", kind="artist",
+            )
+
+        monkeypatch.setattr(catalog, "_spotify_artist_fallback", fake_fallback)
+
+        res = asyncio.run(catalog.resolve_artist(None, "sp:artist:abc123xyz"))
+        assert res is not None
+        assert called == ["https://open.spotify.com/artist/abc123xyz"]
+
+    def test_soundcloud_tab_urls_are_cleaned_for_artist_page(self, monkeypatch):
+        called = []
+
+        def fake_sc_user(url):
+            called.append(url)
+            return ArtistDetail(
+                id="sc:artist:1", name="Dorcci", source="soundcloud",
+                sourceUrl=url, subtitle="", kind="artist",
+            )
+
+        monkeypatch.setattr(ytdlp, "soundcloud_user", fake_sc_user)
+
+        res = asyncio.run(catalog.resolve_artist(None, "https://soundcloud.com/dorcci/tracks"))
+        assert res is not None
+        assert called == ["https://soundcloud.com/dorcci"]

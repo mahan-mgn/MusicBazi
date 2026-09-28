@@ -145,3 +145,34 @@ def test_an_uncached_album_during_a_real_blackout_says_so(client, monkeypatch):
 
     res = client.get("/api/album", params={"ref": "itunes:album:never-seen"})
     assert res.status_code == 503
+
+
+def test_an_online_artist_visit_is_always_fetched_fresh(client, monkeypatch, artist):
+    """
+    ورودِ دوباره به صفحه‌ی هنرمند وقتی آنلاین است باید از پلتفرم بیاید، نه کش.
+
+    قبلاً stale-while-revalidate تا یک ساعت صفحه‌ی کهنه را برمی‌گرداند و انتشارِ
+    تازه تا رفرشِ دستی دیده نمی‌شد. کش فقط برای قطعیِ بین‌الملل می‌ماند.
+    """
+    from app import catcache
+    from app.models import ArtistDetail
+
+    stale = ArtistDetail(**artist.model_dump(), topTracks=[LIVE])
+    catcache.remember_ref(artist.id, "artist", stale)
+
+    fresh_track = Track(
+        id="deezer:track:new",
+        title="Brand New Release",
+        artist=artist.name,
+        durationMs=1000,
+        source="deezer",
+        sourceUrl="https://example.com/new",
+    )
+
+    async def fake_artist(http, ref):
+        return ArtistDetail(**artist.model_dump(), topTracks=[fresh_track])
+
+    monkeypatch.setattr(catalog, "resolve_artist", fake_artist)
+
+    body = client.get("/api/artist", params={"ref": artist.id}).json()
+    assert [t["title"] for t in body["topTracks"]] == ["Brand New Release"]

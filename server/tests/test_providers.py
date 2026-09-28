@@ -324,6 +324,24 @@ class TestArtistTrackBackfill:
         assert out.topTracks == mine
         assert refs == []
 
+    def test_soundcloud_is_not_refilled_from_albums(self, refs):
+        """محبوب‌های ساندکلاد ترتیب پخش دارند؛ پر کردن از آلبوم آن را خراب می‌کند."""
+        mine = [_track("Quiet Hit", "Dorcci", "soundcloud")]
+        detail = ArtistDetail(
+            id="sc:artist:1",
+            name="Dorcci",
+            source="soundcloud",
+            sourceUrl="x",
+            subtitle="",
+            topTracks=mine,
+            albums=[self._album("YOUNG MORVARID", 12, "soundcloud")],
+        )
+
+        out = asyncio.run(catalog._fill_tracks(None, detail))
+
+        assert out.topTracks == mine
+        assert refs == []
+
     def test_a_partial_list_is_topped_up_without_losing_it(self, refs):
         """
         دیزر برای هنرمندی با هفت آلبوم فقط یک ترک برگرداند. آن یک ترک محبوبِ
@@ -425,6 +443,8 @@ class TestDeezerAlbumRows:
         assert single.trackCount == 1
         # آلبوم را نمی‌دانیم چند ترک است؛ صفر یعنی نامعلوم، نه خالی
         assert album.trackCount == 0
+        assert single.releaseType == "single"
+        assert album.releaseType == "album"
 
     def test_a_real_count_still_wins(self):
         """`/search/album` خودش nb_tracks می‌دهد و حدس نباید جایش را بگیرد."""
@@ -993,6 +1013,37 @@ class TestAlbumArtistStamp:
 
         assert detail.tracks[0].albumArtist == "Various Artists"
 
+    def test_album_artwork_stamps_on_all_tracks(self):
+        """کاور آلبوم باید روی همه‌ی ترک‌ها بنشیند، حتی ترکی که قبلاً کاور سینگل داشته."""
+        tracks = self._tracks("FUCK MUSIC", "Mvshreghi", "Mvshreghi")
+        tracks[0].artworkUrl = "https://cdn.example.com/single-cover.jpg"
+        tracks[1].artworkUrl = None
+
+        detail = AlbumDetail(
+            id="sc:playlist:2304743880", title="FUCK MUSIC", artist="Mvshreghi", year=2026,
+            trackCount=2, source="soundcloud", sourceUrl="x",
+            artworkUrl="https://cdn.example.com/album-cover.jpg",
+            releaseType="album",
+            durationMs=2, tracks=tracks,
+        )
+
+        assert detail.tracks[0].artworkUrl == "https://cdn.example.com/album-cover.jpg"
+        assert detail.tracks[1].artworkUrl == "https://cdn.example.com/album-cover.jpg"
+
+    def test_playlist_does_not_stamp_artwork(self):
+        """پلی‌لیست نباید کاورِ خودش را روی ترک‌ها بنشاند."""
+        tracks = self._tracks("Party", "A", "B")
+        tracks[0].artworkUrl = "https://cdn.example.com/track-a.jpg"
+
+        detail = AlbumDetail(
+            id="sc:playlist:99", title="Party", artist="User", year=2025,
+            trackCount=2, source="soundcloud", sourceUrl="x",
+            artworkUrl="https://cdn.example.com/playlist-cover.jpg",
+            durationMs=2, tracks=tracks,
+        )
+
+        assert detail.tracks[0].artworkUrl == "https://cdn.example.com/track-a.jpg"
+
 
 class TestReleaseYearParsing:
     """
@@ -1047,3 +1098,75 @@ class TestReleaseYearParsing:
         assert ytdlp._year("20190507") == 2019
         assert ytdlp._year(None) == 0
         assert ytdlp._year("bogus") == 0
+
+    def test_soundcloud_track_carries_release_year(self):
+        entry = soundcloud.as_entry(
+            {
+                "title": "WIND",
+                "permalink_url": "https://soundcloud.com/x/wind",
+                "created_at": "2026/03/01 12:00:00 +0000",
+                "duration": 180000,
+            }
+        )
+        assert entry["release_date"].startswith("2026")
+        track = ytdlp._entry_to_track(entry, "soundcloud", None)
+        assert track.year == 2026
+        assert ytdlp._track_year({}) is None
+
+
+class TestReleaseType:
+    def test_spotify_ep_is_a_short_single(self):
+        ep = spotify._album_head({"id": "1", "name": "EP", "album_type": "single", "total_tracks": 4})
+        single = spotify._album_head({"id": "2", "name": "A", "album_type": "single", "total_tracks": 1})
+        album = spotify._album_head({"id": "3", "name": "LP", "album_type": "album", "total_tracks": 12})
+
+        assert ep.releaseType == "ep"
+        assert single.releaseType == "single"
+        assert album.releaseType == "album"
+
+    def test_apple_compilation_is_not_own_release(self):
+        own = {"collectionId": 1, "collectionName": "Mine", "artistId": 9, "trackCount": 10}
+        compilation = {
+            "collectionId": 2,
+            "collectionName": "Hits",
+            "collectionType": "Compilation",
+            "artistId": 9,
+            "trackCount": 20,
+        }
+        guest = {
+            "collectionId": 3,
+            "collectionName": "Various",
+            "collectionArtistId": 99,
+            "artistId": 9,
+            "trackCount": 15,
+        }
+
+        assert itunes._own_release(own, 9) is True
+        assert itunes._own_release(compilation, 9) is False
+        assert itunes._own_release(guest, 9) is False
+        assert itunes._release_type(compilation) == "compilation"
+        assert itunes._release_type(own) == "album"
+
+    def test_soundcloud_one_track_set_is_a_single(self):
+        row = {
+            "id": 1,
+            "title": "A",
+            "user": {"username": "B", "id": 7},
+            "track_count": 1,
+            "permalink_url": "u",
+        }
+        album = soundcloud._album(row)
+        assert album.releaseType == "single"
+        assert album.artistId == "sc:artist:7"
+
+    def test_soundcloud_verified_flag_is_mapped(self):
+        row = {
+            "id": 1,
+            "username": "accia",
+            "permalink_url": "https://soundcloud.com/accia",
+            "verified": True,
+            "track_count": 4,
+        }
+        assert soundcloud._user(row).verified is True
+        row["verified"] = False
+        assert soundcloud._user(row).verified is False

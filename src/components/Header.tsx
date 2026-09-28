@@ -5,10 +5,11 @@ import PillNav from './PillNav'
 import QualityPicker from './QualityPicker'
 import SearchBar from './SearchBar'
 import type { Tab } from './TabBar'
-import { DotsIcon, HeadphonesIcon, LinkIcon, MicIcon, MoonIcon, PhoneIcon, SunIcon } from './icons'
+import { DotsIcon, LinkIcon, MicIcon, MoonIcon, PhoneIcon, SunIcon } from './icons'
 import { isLocalServer, isNativeApp, serverBase } from '../lib/server'
 import { BatteryRow } from './NativeHealth'
 import { useSettings } from '../store/settings'
+import TopFadeBlur from './TopFadeBlur'
 
 interface Props {
   onHome: () => void
@@ -60,7 +61,7 @@ const menuItem =
  */
 function OverflowMenu({ onIdentify, onServer }: { onIdentify: () => void; onServer: () => void }) {
   const { t, lang, setLang } = useI18n()
-  const { theme, toggleTheme } = useSettings()
+  const { theme, toggleTheme, liquidGlass, setLiquidGlass } = useSettings()
   const [open, setOpen] = useState(false)
   const box = usePopover<HTMLDivElement>(open, () => setOpen(false))
 
@@ -163,6 +164,26 @@ function OverflowMenu({ onIdentify, onServer }: { onIdentify: () => void; onServ
             {theme === 'dark' ? t.themeLight : t.themeDark}
           </button>
 
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              setLiquidGlass(!liquidGlass)
+            }}
+            className={menuItem}
+          >
+            <span
+              aria-hidden
+              className={`size-3.5 shrink-0 rounded-full border transition ${
+                liquidGlass ? 'border-accent bg-accent' : 'border-muted-2 bg-transparent'
+              }`}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block">{t.liquidGlass}</span>
+              <span className="block text-[10px] text-muted-2">{liquidGlass ? 'فعال' : 'غیرفعال'}</span>
+            </span>
+          </button>
+
           {/* ردیفِ سلامتِ نصب (باتری) — روی وب هیچ رندر نمی‌شود */}
           <BatteryRow />
         </div>
@@ -202,9 +223,11 @@ export default function Header({
   )
 
   return (
-    // pt-safe: در حالت PWA روی آیفون نوار وضعیت روی محتوا می‌افتد، چون
-    // status-bar-style=black-translucent است
-    <header className="glass-bar pt-safe sticky top-0 z-30 border-b border-line-soft">
+    <>
+      <TopFadeBlur />
+      {/* pt-safe: در حالت PWA روی آیفون نوار وضعیت روی محتوا می‌افتد، چون
+          status-bar-style=black-translucent است */}
+      <header className="glass-bar pt-safe sticky top-0 z-30 border-b border-line-soft">
       <div className="px-safe mx-auto flex h-14 max-w-6xl items-center gap-2 sm:gap-3">
         {/*
           روی گوشی فقط نشانِ برند: مقصدها پایین در تب‌بارند و یک ردیفِ قرص کنارِ
@@ -215,15 +238,13 @@ export default function Header({
           aria-label={t.brand}
           className="flex shrink-0 items-center gap-2 rounded-lg py-1 text-[15px] font-bold transition hover:opacity-80 sm:hidden"
         >
-          <span className="grid size-7 place-items-center rounded-lg bg-accent text-accent-fg">
-            <HeadphonesIcon className="size-4" />
-          </span>
+          <img src="/logo.png" alt="" className="size-7 rounded-lg object-cover" />
         </button>
 
         {/* روی دسکتاپ همین نشان، سرِ همان ناوبری می‌نشیند */}
         <PillNav
           className="hidden shrink-0 sm:block"
-          logoNode={<HeadphonesIcon className="size-4" />}
+          logo="/logo.png"
           logoAlt={t.brand}
           logoHref={HOME_HREF}
           onLogoClick={onHome}
@@ -286,5 +307,6 @@ export default function Header({
         </div>
       </div>
     </header>
+    </>
   )
 }

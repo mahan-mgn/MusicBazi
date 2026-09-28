@@ -194,11 +194,13 @@ def _id3_album(tags: ID3, track: Track) -> None:
     for frame in ("TALB", "TPE2", "TDRC", "TRCK", "TPOS", "TCON"):
         tags.delall(frame)
 
-    if track.album:
-        tags.add(TALB(encoding=3, text=track.album))
+    album_name = track.album.strip() if track.album else None
+    if album_name:
+        tags.add(TALB(encoding=3, text=album_name))
         # هنرمندِ آلبوم، نه هنرمندِ ترک: پلیر آلبوم را با همین فریم گروه می‌کند و
         # اگر مهمانِ هر ترک تویش بنشیند، آلبوم به چند تکه‌ی هم‌نام می‌شکند
-        tags.add(TPE2(encoding=3, text=track.albumArtist or track.artist))
+        album_artist = (track.albumArtist or track.artist).strip()
+        tags.add(TPE2(encoding=3, text=album_artist))
     if track.trackNumber:
         tags.add(TRCK(encoding=3, text=str(track.trackNumber)))
     if track.discNumber:
@@ -206,7 +208,7 @@ def _id3_album(tags: ID3, track: Track) -> None:
     if track.year:
         tags.add(TDRC(encoding=3, text=str(track.year)))
     if track.genre:
-        tags.add(TCON(encoding=3, text=track.genre))
+        tags.add(TCON(encoding=3, text=track.genre.strip()))
 
 
 def _id3(tags: ID3, track: Track, cover, lyrics) -> None:
@@ -245,9 +247,10 @@ def _mp4_album(audio, track: Track) -> None:
     """اتم‌های هویتِ آلبوم — همتای `_id3_album` برای ظرفِ iTunes."""
     _drop(audio, "\xa9alb", "aART", "trkn", "disk", "\xa9day", "\xa9gen")
 
-    if track.album:
-        audio["\xa9alb"] = track.album
-        audio["aART"] = track.albumArtist or track.artist
+    album_name = track.album.strip() if track.album else None
+    if album_name:
+        audio["\xa9alb"] = album_name
+        audio["aART"] = (track.albumArtist or track.artist).strip()
     # trkn و disk جفتِ (شماره، کل) می‌خواهند؛ صفر یعنی «کل را نمی‌دانیم»
     if track.trackNumber:
         audio["trkn"] = [(track.trackNumber, 0)]
@@ -256,7 +259,7 @@ def _mp4_album(audio, track: Track) -> None:
     if track.year:
         audio["\xa9day"] = str(track.year)
     if track.genre:
-        audio["\xa9gen"] = track.genre
+        audio["\xa9gen"] = track.genre.strip()
 
 
 def _mp4(audio, track: Track, cover, lyrics) -> None:
@@ -282,9 +285,10 @@ def _vorbis_album(audio, track: Track) -> None:
     """فیلدهای هویتِ آلبوم در Vorbis comment — همتای `_id3_album`."""
     _drop(audio, "album", "albumartist", "tracknumber", "discnumber", "date", "genre")
 
-    if track.album:
-        audio["album"] = track.album
-        audio["albumartist"] = track.albumArtist or track.artist
+    album_name = track.album.strip() if track.album else None
+    if album_name:
+        audio["album"] = album_name
+        audio["albumartist"] = (track.albumArtist or track.artist).strip()
     if track.trackNumber:
         audio["tracknumber"] = str(track.trackNumber)
     if track.discNumber:
@@ -292,7 +296,7 @@ def _vorbis_album(audio, track: Track) -> None:
     if track.year:
         audio["date"] = str(track.year)
     if track.genre:
-        audio["genre"] = track.genre
+        audio["genre"] = track.genre.strip()
 
 
 def _vorbis(audio, track: Track, lyrics) -> None:
@@ -517,6 +521,73 @@ def retag_album(path: Path, track: Track) -> None:
         retagger(path, track)
     except Exception:
         pass  # فایل صوتی سالم است؛ تگش همان می‌ماند که بود
+
+
+def _retag_mp3_cover(path: Path, cover: tuple[bytes, str]) -> None:
+    audio = MP3(path, ID3=ID3)
+    if audio.tags is None:
+        audio.add_tags()
+    assert audio.tags is not None
+    audio.tags.delall("APIC")
+    data, mime = cover
+    audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
+    audio.save(v2_version=3)
+
+
+def _retag_mp4_cover(path: Path, cover: tuple[bytes, str]) -> None:
+    audio = MP4(path)
+    data, mime = cover
+    fmt = MP4Cover.FORMAT_PNG if "png" in mime else MP4Cover.FORMAT_JPEG
+    audio["covr"] = [MP4Cover(data, imageformat=fmt)]
+    audio.save()
+
+
+def _retag_flac_cover(path: Path, cover: tuple[bytes, str]) -> None:
+    audio = FLAC(path)
+    audio.clear_pictures()
+    audio.add_picture(_picture(cover))
+    audio.save()
+
+
+def _retag_opus_cover(path: Path, cover: tuple[bytes, str]) -> None:
+    audio = OggOpus(path)
+    pic = _picture(cover)
+    audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
+    audio.save()
+
+
+_COVER_RETAGGERS = {
+    ".mp3": _retag_mp3_cover,
+    ".m4a": _retag_mp4_cover,
+    ".mp4": _retag_mp4_cover,
+    ".flac": _retag_flac_cover,
+    ".opus": _retag_opus_cover,
+}
+
+
+def retag_cover(path: Path, cover: tuple[bytes, str]) -> bool:
+    retagger = _COVER_RETAGGERS.get(path.suffix.lower())
+    if retagger is None:
+        return False
+    try:
+        retagger(path, cover)
+        return True
+    except Exception:
+        log.warning("به‌روزرسانی کاورِ %s شکست خورد", path.name, exc_info=True)
+        return False
+
+
+def retag_artwork(path: Path, artwork_url: str | None) -> bool:
+    """
+    کاورِ فایلِ از قبل دانلودشده را با کاورِ جدید به‌روز می‌کند، بدون دست زدن به بقیه‌ی تگ‌ها و لیریک.
+    """
+    if not artwork_url:
+        return False
+    cover = _fetch_artwork(artwork_url)
+    if not cover:
+        return False
+    artcache.remember_bytes(artwork_url, cover[0], cover[1])
+    return retag_cover(path, cover)
 
 
 def _lyrics_mp3(path: Path, lyrics) -> None:

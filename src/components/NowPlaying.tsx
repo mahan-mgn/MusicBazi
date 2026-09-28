@@ -1,56 +1,66 @@
-import { useEffect, useRef, useState } from 'react'
-import { dominantColor } from '../lib/artColor'
+import { useEffect, useMemo, useState } from 'react'
+import { api } from '../lib/api'
+import { dominantColor, tidalBgColor } from '../lib/artColor'
 import { engine } from '../lib/audioEngine'
-import { duration as fmtDuration } from '../lib/format'
+import { digits } from '../lib/format'
 import { useDialog } from '../lib/useDialog'
+import { usePopover } from '../lib/usePopover'
 import { useSheetDrag } from '../lib/useSheetDrag'
 import { useCoverSwipe, type SwipeDir } from '../lib/useCoverSwipe'
-import { useIdle } from '../lib/useIdle'
-import { COVER_VT, withViewTransition } from '../lib/viewTransition'
+import { COVER_VT } from '../lib/viewTransition'
 import { useI18n } from '../lib/i18n'
 import { parseLrc, type LyricLine } from '../lib/lrc'
-import { haptic } from '../lib/native'
+import { haptic, share } from '../lib/native'
 import { useFavorites } from '../store/favorites'
 import { jobIdOf, usePlayer, type PlayItem } from '../store/player'
+import { useRecent } from '../store/recent'
+import { useSettings } from '../store/settings'
+import { PlaylistPicker } from './AddToPlaylist'
 import AudioSettings from './AudioSettings'
-import Artwork, { artBlurUrl } from './Artwork'
+import Artwork from './Artwork'
 import LikeHeart from './LikeHeart'
 import LyricsPanel from './LyricsPanel'
 import PlayPauseIcon from './PlayPauseIcon'
-import Range from './Range'
-import SeekBar from './SeekBar'
-import SourceBadge from './SourceBadge'
+import QualitySelector from './QualitySelector'
+import ThinSlider from './ThinSlider'
 import {
   ChevronIcon,
   CloseIcon,
-  LyricsIcon,
-  MuteIcon,
+  DotsIcon,
+  EqWaveIcon,
+  LyricsQuoteIcon,
+  MaximizeIcon,
+  MenuLinesIcon,
+  MinimizeIcon,
   NextIcon,
+  PlusIcon,
   PrevIcon,
-  QueueIcon,
-  RadioIcon,
   RepeatIcon,
+  ShareIcon,
   ShuffleIcon,
-  SparkleIcon,
   Spinner,
-  VolumeIcon,
   WarnIcon,
 } from './icons'
 
 type PanelView = 'cover' | 'lyrics' | 'queue'
 
-/**
- * سه حالت متن آهنگ: هنوز نیامده، هیچی پیدا نشده، هم‌زمان‌شده (خط‌به‌خط دنبال
- * می‌شود)، یا ساده — مثلاً از Genius که هیچ‌وقت تایم‌استمپ نمی‌دهد، فقط یک
- * بلوک متن که کامل نشان داده می‌شود.
- */
 type LyricsState =
   | { kind: 'loading' }
   | { kind: 'none' }
   | { kind: 'synced'; lines: LyricLine[] }
   | { kind: 'plain'; text: string }
 
-/** یک ردیف از صف پخش داخل نمای بزرگ — کلیک می‌برد رویش، دکمه‌ی کنار حذفش می‌کند */
+/** تشخیص عنصر تمام‌صفحه به صورت Cross-Browser */
+function getFullscreenElement(): Element | null {
+  if (typeof document === 'undefined') return null
+  const doc = document as unknown as {
+    fullscreenElement?: Element | null
+    webkitFullscreenElement?: Element | null
+  }
+  return doc.fullscreenElement || doc.webkitFullscreenElement || null
+}
+
+/** یک ردیف از صف پخش داخل نمای بزرگ */
 function QueueRow({
   item,
   active,
@@ -65,74 +75,169 @@ function QueueRow({
   const { t } = useI18n()
   return (
     <div
-      className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 transition ${
-        active ? 'bg-accent-dim' : 'hover:bg-panel'
+      className={`group flex items-center gap-3 rounded-2xl px-3 py-2.5 transition duration-200 ${
+        active
+          ? 'bg-white/20 text-white shadow-sm ring-1 ring-white/25'
+          : 'hover:bg-white/10 text-white/90'
       }`}
     >
-      <button onClick={onPlay} className="flex min-w-0 flex-1 items-center gap-2.5 text-start">
+      <button onClick={onPlay} className="flex min-w-0 flex-1 items-center gap-3.5 text-start cursor-pointer">
         <div className="relative shrink-0">
           <Artwork
             src={item.track.artworkUrl}
             alt={item.track.album ?? item.track.title}
             seed={item.track.albumId ?? item.track.id}
-            className={`size-9 ${active ? 'opacity-40' : ''}`}
+            className={`size-11 rounded-xl shadow-md ${active ? 'opacity-40' : ''}`}
           />
-          {/*
-           * ترکِ فعال به‌جای رنگی‌شدنِ ساده، میله‌های اکولایزرِ متحرک دارد —
-           * همان نشانه‌ی «این یکی الان پخش است» که اسپاتیفای می‌زند. کاور زیرش
-           * کم‌نور می‌شود تا میله‌ها روی هر رنگی خوانا بمانند.
-           */}
           {active && (
-            <span
-              aria-hidden
-              className="absolute inset-0 grid place-items-center"
-            >
-              <span className="flex h-3.5 items-end gap-[2px]">
-                <span className="eq-bar w-[3px] rounded-sm bg-accent" style={{ height: '100%' }} />
-                <span className="eq-bar w-[3px] rounded-sm bg-accent" style={{ height: '100%' }} />
-                <span className="eq-bar w-[3px] rounded-sm bg-accent" style={{ height: '100%' }} />
-              </span>
+            <span aria-hidden className="absolute inset-0 grid place-items-center text-white">
+              <EqWaveIcon className="size-4" />
             </span>
           )}
         </div>
-        <div className="min-w-0 flex-1">
-          <p className={`bidi truncate text-xs ${active ? 'font-semibold text-accent' : ''}`}>
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p
+            className={`bidi truncate text-sm sm:text-base ${
+              active ? 'font-bold text-white' : 'font-semibold text-white/95'
+            }`}
+          >
             {item.track.title}
           </p>
-          <p className="bidi truncate text-[11px] text-muted">
+          <p className="bidi truncate text-xs text-white/60">
             <bdi>{item.track.artist}</bdi>
           </p>
         </div>
       </button>
       <button
-        onClick={onRemove}
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove()
+        }}
         aria-label={t.removeFromQueue}
         title={t.removeFromQueue}
-        className="hover-reveal grid size-7 shrink-0 place-items-center rounded-md text-muted-2 opacity-0 transition hover:text-fg group-hover:opacity-100"
+        className="grid size-9 shrink-0 place-items-center rounded-full text-white/50 opacity-70 transition hover:bg-white/15 hover:text-white sm:opacity-0 sm:group-hover:opacity-100 cursor-pointer"
       >
-        <CloseIcon className="size-3" />
+        <CloseIcon className="size-4" />
       </button>
     </div>
   )
 }
 
+/** فرمت دقیق زمان به سبک TIDAL: همیشه حداقل دو رقم دقیقه (00:13 و 02:30) */
+function fmtTidalDuration(seconds: number, lang: string): string {
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0
+  const h = Math.floor(total / 3600)
+  const m = Math.floor(total / 60) % 60
+  const s = total % 60
+  const text = h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return digits(text, lang)
+}
+
+/** اسکرابر پیشرفت مویی با تامب کپسولی و نشان کیفیت صدا به سبک تایدال */
+function NowPlayingSeekBar({
+  total,
+  seek,
+}: {
+  total: number
+  seek: (val: number) => void
+}) {
+  const position = usePlayer((s) => s.position)
+  const { quality } = useSettings()
+  const { t, lang } = useI18n()
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false)
+  const [scrubPosition, setScrubPosition] = useState<number | null>(null)
+
+  const currentPos = scrubPosition !== null ? scrubPosition : Math.min(position, total)
+  const progressPct = total > 0 ? Math.min(100, Math.max(0, (currentPos / total) * 100)) : 0
+
+  const qualityLabel = useMemo(() => {
+    if (quality === 'flac' || quality === 'original') return '24-BIT 44.1KHZ FLAC'
+    if (quality === '320') return '320 KBPS AAC'
+    if (quality === '192') return 'HIGH • 192 KBPS'
+    if (quality === '128') return 'NORMAL • 128 KBPS'
+    return `${String(quality).toUpperCase()} QUALITY`
+  }, [quality])
+
+  return (
+    <div className="w-full space-y-2 select-none" dir="ltr">
+      <div className="relative w-full">
+        <ThinSlider
+          value={currentPos}
+          max={total || 1}
+          onChange={setScrubPosition}
+          onChangeFinished={(val) => {
+            setScrubPosition(null)
+            seek(val)
+          }}
+          enableHapticTick
+          trackHeight="h-[3px]"
+          label={t.seekBar}
+          className="w-full"
+        />
+        {/* تامب کپسولی عمودی سفید مشخصه TIDAL با مهار لبه‌ها */}
+        <div
+          className="pointer-events-none absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-4 rounded-full bg-white shadow-md transition-transform"
+          style={{ left: `clamp(4px, ${progressPct}%, calc(100% - 4px))` }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between text-xs font-mono font-medium tabular-nums text-white/60 px-0.5">
+        <span>{fmtTidalDuration(currentPos, lang)}</span>
+
+        <div className="relative inline-flex items-center">
+          <button
+            onClick={() => setQualityMenuOpen((v) => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={qualityMenuOpen}
+            aria-label={t.qualityMenu}
+            title={t.qualityMenu}
+            className="group/q inline-flex items-center text-[11px] font-bold font-mono tracking-widest uppercase text-white/55 hover:text-white transition cursor-pointer"
+          >
+            <span>{qualityLabel}</span>
+          </button>
+
+          <QualitySelector
+            open={qualityMenuOpen}
+            onClose={() => setQualityMenuOpen(false)}
+          />
+        </div>
+
+        <span>{fmtTidalDuration(total, lang)}</span>
+      </div>
+    </div>
+  )
+}
+
 /**
- * نمای بزرگِ «در حال پخش» — همان استیت پلیر بار را نشان می‌دهد، فقط با
- * آرت‌ورک درشت و کنترل‌های راحت‌تر برای گوش‌دادن، نه صرفاً کنترل سریع.
- * دو پنل جایگزین هم دارد: متن هم‌زمان‌شده و صف پخش، هردو پشت دکمه‌های سربرگ.
+ * صفحه Now Playing بازطراحی‌شده دقیقاً مطابق پلتفرم TIDAL
+ * ویژگی‌ها:
+ *  - پس‌زمینه یکپارچه و عمیق همرنگ کاور موزیک (TIDAL Immersive Tint)
+ *  - نشان‌های حروف اول نام هنرمندان در هدر (Artist Initials Badges)
+ *  - نشان محتوای صریح ([E] Explicit Badge) کنار عنوان ترک
+ *  - دکمه بزرگ (+) برای افزودن سریع به پلی‌لیست
+ *  - نشان کیفیت صوتی تایدال در مرکز اسکرابر (24-BIT 44.1KHZ FLAC)
+ *  - دکمه‌های ترانسپورت ۵گانه با آیکون پخش/توقف توپر و بدون کادر گرد
+ *  - فوتر ۳ دکمه‌ای دایره‌ای (صف پخش، اشتراک‌گذاری، منوی بیشتر) و عنوان «Playing from»
  */
-export default function NowPlaying({ onClose }: { onClose: () => void }) {
+// کش عکس پروفایل هنرمندان در سطح ماژول برای جلوگیری از درخواست‌های تکراری
+const artistAvatarCache = new Map<string, string | null>()
+
+export default function NowPlaying({
+  onClose,
+  initialTint,
+}: {
+  onClose: () => void
+  initialTint?: [number, number, number] | null
+}) {
   const {
     queue,
     index,
     playing,
-    position,
     duration,
-    volume,
-    muted,
     repeat,
     shuffle,
-    smartShuffle,
     failed,
     radio,
     radioLoading,
@@ -140,135 +245,161 @@ export default function NowPlaying({ onClose }: { onClose: () => void }) {
     next,
     prev,
     seek,
-    setVolume,
-    toggleMute,
     cycleRepeat,
     toggleShuffle,
-    toggleSmartShuffle,
-    toggleRadio,
     play,
     drop,
   } = usePlayer()
   const { t, lang } = useI18n()
+  const [closing, setClosing] = useState(false)
   const [panel, setPanel] = useState<PanelView>('cover')
   const [lyrics, setLyrics] = useState<LyricsState>({ kind: 'loading' })
+  const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
 
-  /** همان بازخوردِ لمسیِ نوارِ پخش — دلیلش آنجا توضیح داده شده */
+  const playlistPickerBox = usePopover<HTMLDivElement>(playlistPickerOpen, () =>
+    setPlaylistPickerOpen(false),
+  )
+  const moreMenuBox = usePopover<HTMLDivElement>(moreMenuOpen, () =>
+    setMoreMenuOpen(false),
+  )
+
+  // تشخیص اندازه‌ی دسکتاپ به صورت واکنشی
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : false,
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(min-width: 1024px)')
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) => setIsDesktop(e.matches)
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onChange)
+      return () => mq.removeEventListener('change', onChange)
+    } else {
+      mq.addListener(onChange)
+      return () => mq.removeListener(onChange)
+    }
+  }, [])
+
+  // وضعیت تمام‌صفحه مرورگر
+  const [isFullscreen, setIsFullscreen] = useState(() => Boolean(getFullscreenElement()))
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(getFullscreenElement()))
+    document.addEventListener('fullscreenchange', onFsChange)
+    document.addEventListener('webkitfullscreenchange', onFsChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
+      document.removeEventListener('webkitfullscreenchange', onFsChange)
+    }
+  }, [])
+
+  const toggleFullscreen = () => {
+    const doc = document as unknown as {
+      exitFullscreen?: () => Promise<void>
+      webkitExitFullscreen?: () => Promise<void>
+    }
+    const docEl = document.documentElement as unknown as {
+      requestFullscreen?: () => Promise<void>
+      webkitRequestFullscreen?: () => Promise<void>
+    }
+    if (!getFullscreenElement()) {
+      const requestFs = docEl.requestFullscreen || docEl.webkitRequestFullscreen
+      void requestFs?.call(docEl)?.catch(() => {})
+    } else {
+      const exitFs = doc.exitFullscreen || doc.webkitExitFullscreen
+      void exitFs?.call(doc)?.catch(() => {})
+    }
+  }
+
   const withTap = (run: () => void) => () => {
     haptic.tap()
     run()
   }
 
-  /*
-   * بستن با دکمه یا پس‌زمینه، گذارِ معکوسِ همان بازشدن است: کاور به جای
-   * مینی‌پلیر برمی‌گردد. کشیدنِ شیت با انگشت اما از این مسیر نمی‌رود —
-   * آن‌جا خودِ شیت با انگشت پایین رفته و یک گذارِ دومِ هم‌زمان فقط دو حرکتِ
-   * ناهماهنگ می‌شود.
-   */
-  const dismiss = () => withViewTransition(onClose)
+  const dismiss = () => {
+    if (closing) return
+    if (getFullscreenElement()) {
+      const doc = document as unknown as {
+        exitFullscreen?: () => Promise<void>
+        webkitExitFullscreen?: () => Promise<void>
+      }
+      const exitFs = doc.exitFullscreen || doc.webkitExitFullscreen
+      void exitFs?.call(doc)?.catch(() => {})
+    }
+    const reduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (reduced) {
+      onClose()
+      return
+    }
+    setClosing(true)
+    window.setTimeout(onClose, 290)
+  }
 
-  // روی دسکتاپ شیت وسطِ صفحه است و کشیدنش به پایین هیچ معنایی ندارد
   const onPhone = typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches
   const drag = useSheetDrag({ onClose, enabled: onPhone })
-
-  /*
-   * قفلِ اسکرول + تله‌ی فوکوس + برگرداندنِ فوکوس + Escape + دکمه‌ی برگشت.
-   * قبلاً فقط دوتای اولش این‌جا دستی نوشته شده بود.
-   */
   const dialog = useDialog<HTMLDivElement>(true, dismiss)
 
   const item = queue[index]
 
-  /*
-   * کشیدنِ کاور به چپ/راست = ترک بعدی/قبلی — امضای رفتاریِ اسپاتیفای.
-   *
-   * جهتِ پیش‌نمایش از همین‌جا حساب می‌شود نه از منطقِ `next()` داخل استور:
-   * آن‌جا شافل و رادیو ایندکسِ بعدی را نامعلوم می‌کنند، و ما فقط می‌خواهیم
-   * «چه چیزی دارد می‌آید» را زیرِ انگشت نشان بدهیم. در حالتِ شافل، کاورِ
-   * پیش‌نمایش ممکن است با تحویلِ واقعی فرق کند — قیمتِ ساده‌نگه‌داشتنِ کد است
-   * و کاربر هیچ‌وقت متوجه‌اش نمی‌شود چون بینِ دو حرکت یک پروازِ ۲۴۰ms فاصله
-   * هست.
-   */
+  // ناوبری به صفحه خواننده و آلبوم
+  const handleArtistClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    dismiss()
+    const ref = item?.track.artistId || item?.track.artist
+    if (ref) {
+      window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+    }
+  }
+
+  const handleAlbumClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    dismiss()
+    const ref = item?.track.albumId || item?.track.album
+    if (ref) {
+      window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+    }
+  }
+
   const swipeEnabled = panel === 'cover' && queue.length > 1
   const swipe = useCoverSwipe({
     enabled: swipeEnabled,
-    /*
-     * `prev()` عمداً اینجا نیست: وسطِ ترک یعنی «از اول همین» و کشیدنِ راست
-     * روی همان ترکِ در‌حال‌پخش فرار می‌کند — کاربر انتظارِ «قبلی» دارد نه
-     * «از نو». پس ایندکسِ قبلی مستقیم پخش می‌شود (با چرخش به آخرِ صف).
-     */
     onSwipe: (dir: SwipeDir) => {
       if (dir === 'next') next()
       else play(queue, (index - 1 + queue.length) % queue.length)
     },
   })
+
   const peekItem = item
     ? swipe.dir === 'prev'
-      ? queue[index - 1] ?? queue[queue.length - 1]
-      : queue[index + 1] ?? queue[0]
+      ? queue[index - 1] ?? (repeat === 'all' ? queue[queue.length - 1] : null)
+      : queue[index + 1] ?? (repeat === 'all' || radio ? queue[0] : null)
     : null
 
-  /*
-   * حالتِ محیط: بعد از شش ثانیه بی‌کاری، کنترل‌ها محو می‌شوند و فقط کاور و
-   * رنگش می‌ماند. فقط روی نمای کاور معنا دارد — توی متن یا صف که کاربر دارد
-   * می‌خواند/انتخاب می‌کند، محو‌کردنِ کنترل‌ها مزاحمت است نه زیبایی.
-   */
-  const idle = useIdle(6000, panel === 'cover')
-
-  /*
-   * هاله‌ی هم‌رhythm با صدا.
-   *
-   * یک لایه‌ی پشتِ کاور که با انرژیِ بمِ لحظه بزرگ و پرنورتر می‌شود. زمانِ
-   * واقعیِ صوت از `engine.bassLevel()` خوانده می‌شود و فقط دو متغیرِ CSS روی
-   * همان یک نود نوشته می‌شود — دقیقاً همان الگویی که در `LyricsPanel` برای
-   * رنگِ کارائوکه رفت: شصت فریم بدونِ شصت رندرِ ری‌اکت.
-   *
-   * وقتی پخش متوقف است حلقه دو فریمِ آخر را به صفر می‌رساند و می‌خوابد؛
-   * نگه‌داشتنِ rAF روی صفحه‌ی ساکت، باتریِ گوشی را بی‌دلیل می‌خورد.
-   */
-  const glowRef = useRef<HTMLSpanElement>(null)
+  // خروج از تمام‌صفحه در unmount
   useEffect(() => {
-    // هاله فقط در نمای کاور روی صفحه است؛ در پنل متن/صف حلقه را نگردان
-    if (!playing || panel !== 'cover') {
-      const node = glowRef.current
-      if (node) {
-        node.style.setProperty('--glow', '0')
+    return () => {
+      if (getFullscreenElement()) {
+        const doc = document as unknown as {
+          exitFullscreen?: () => Promise<void>
+          webkitExitFullscreen?: () => Promise<void>
+        }
+        const exitFs = doc.exitFullscreen || doc.webkitExitFullscreen
+        void exitFs?.call(doc)?.catch(() => {})
       }
-      return
     }
-    let raf = 0
-    let level = 0
-    const tick = () => {
-      // میانگین‌گیریِ ساده روی خروجیِ analyser که خودش هم smoothing دارد،
-      // تا هاله «لرزشِ» فرکانسی نگیرد و ضرب را نرم برساند
-      level += (engine.bassLevel() - level) * 0.35
-      const node = glowRef.current
-      if (node) node.style.setProperty('--glow', level.toFixed(3))
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-    }, [playing, panel])
+  }, [])
 
-  // قلبِ علاقه‌مندی — فقط برای ترک‌هایی که jobId واقعیِ سرور دارند (رادیو
-  // بیرون از کتابخانه است و لایک‌کردنش معنایی ندارد)
+  // قلب لایک
   const jobId = item ? jobIdOf(item) : null
   const favorite = useFavorites((s) => (jobId ? Boolean(s.items[jobId]) : false))
   const toggleFavorite = useFavorites((s) => s.toggle)
 
-  /*
-   * تینتِ پس‌زمینه از رنگِ غالبِ کاور.
-   *
-   * با هر تغییرِ ترک دوباره گرفته می‌شود؛ `dominantColor` خودش کش دارد پس
-   * برگشتن به یک ترکِ قبلی هزینه‌ی دوباره ندارد. null یعنی کاور نبود یا
-   * tainted شد — در آن صورت هاله‌های پیش‌فرضِ accent سرِ جایشان می‌مانند.
-   */
-  const [tint, setTint] = useState<[number, number, number] | null>(null)
+  // رنگ‌های استخراج‌شده از کاور به سبک TIDAL — دریافت رنگ اولیه از PlayerBar برای حذف پرش رنگ
+  const [tint, setTint] = useState<[number, number, number] | null>(initialTint ?? null)
   useEffect(() => {
     let cancelled = false
-    // رنگِ قبلی می‌ماند تا رنگِ تازه (معمولاً کش‌شده، در یک میکروتسک) برسد —
-    // `setTint(null)` یک فریم هاله را به accent برمی‌گرداند و چشمک می‌زند.
-    // همان قاعده‌ی PlayerBar/GroupHero.
     void dominantColor(item?.track.artworkUrl ?? null).then((c) => {
       if (!cancelled) setTint(c)
     })
@@ -277,19 +408,20 @@ export default function NowPlaying({ onClose }: { onClose: () => void }) {
     }
   }, [item?.track.artworkUrl])
 
-  // متن آهنگ فقط وقتی fetch می‌شود که کاربر واقعاً پنل را باز کند — نه هر بار
-  // که ترک عوض می‌شود، چون اکثر آهنگ‌ها هیچ‌وقت این پنل را نمی‌بینند
+  // واکشی متن ترانه
   useEffect(() => {
+    if (panel !== 'lyrics') return
+    if (!item?.lyricsUrl) {
+      setLyrics({ kind: 'none' })
+      return
+    }
     setLyrics({ kind: 'loading' })
-    if (panel !== 'lyrics' || !item?.lyricsUrl) return
     let cancelled = false
     fetch(item.lyricsUrl)
       .then((r) => (r.ok ? r.text() : Promise.reject()))
       .then((raw) => {
         if (cancelled) return
         const lines = parseLrc(raw)
-        // بدون تایم‌استمپ (مثلاً متنِ Genius) یعنی هیچ خطی استخراج نشد — ولی
-        // خودِ متن که هست، پس به‌جای «پیدا نشد» به‌صورت یک بلوک ساده نشانش بده
         if (lines.length > 0) setLyrics({ kind: 'synced', lines })
         else if (raw.trim()) setLyrics({ kind: 'plain', text: raw.trim() })
         else setLyrics({ kind: 'none' })
@@ -300,16 +432,8 @@ export default function NowPlaying({ onClose }: { onClose: () => void }) {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panel, item?.lyricsUrl])
 
-  // اگر صف به یک ترک برسد (یا کمتر) دیگر «صف»ی برای نشان‌دادن نیست
-  useEffect(() => {
-    if (panel === 'queue' && queue.length <= 1) setPanel('cover')
-  }, [panel, queue.length])
-
-  // صف ممکن است حین باز بودن نما خالی شود (مثلاً از کتابخانه پاک شد) — بستنِ
-  // نما یعنی setState روی والد، پس باید در افکت باشد نه حین رندر
   useEffect(() => {
     if (!item) onClose()
   }, [item, onClose])
@@ -318,34 +442,491 @@ export default function NowPlaying({ onClose }: { onClose: () => void }) {
 
   const { track } = item
   const total = duration || track.durationMs / 1000
-  // پس‌زمینه‌ی تمام‌صفحه از نسخه‌ی بلورشده‌ی سمتِ سرور — نه blur زنده‌ی CSS روی
-  // یک لایه‌ی به‌بزرگیِ ویوپورت (که هم هر فریم گران است هم موقع عکسِ گذارِ
-  // ورود دوباره رَستِر می‌شود). کاورِ غیرمحلی (CDN) به همان CSS blur برمی‌گردد.
-  const bgBlur = artBlurUrl(track.artworkUrl)
-  /*
-   * اگر مسیرِ بلورِ سرور ۴۰۴ داد (کاور آینه نشده، ساختِ ffmpeg شکست خورد) پس‌زمینه
-   * نباید سیاهِ خالی بماند — به خودِ کاور برمی‌گردیم و بلور را با CSS می‌زنیم،
-   * یعنی دقیقاً رفتارِ پیش از این بهینه‌سازی. پرچم به آدرسِ کاور گره خورده تا با
-   * تعویضِ ترک دوباره شانسِ بلورِ سرور را داشته باشد.
-   */
-  const [bgBlurFailed, setBgBlurFailed] = useState<string | null>(null)
-  const bgSrc = bgBlur && bgBlurFailed !== track.artworkUrl ? bgBlur : track.artworkUrl
-  const bgNeedsCssBlur = bgSrc === track.artworkUrl
+
   const repeatLabel =
     repeat === 'one' ? t.repeatOne : repeat === 'all' ? t.repeatAll : t.repeatOff
-  const headerLabel =
-    panel === 'lyrics' ? t.lyrics : panel === 'queue' ? t.upNext : t.nowPlayingView
+
+  // عنوان مبدأ پخش
+  const originCaption = radio
+    ? t.radio
+    : track.album
+      ? track.album
+      : t.nowPlayingView
+
+  // رنگ پس‌زمینه اختصاصی TIDAL
+  const tidalBg = tidalBgColor(tint)
+
+  // توکن‌های هنرمندان برای نمایش دکمه‌های پروفایل هنرمندان
+  const artistTokens = useMemo(
+    () =>
+      (track.artist || '')
+        .split(/\s*[,&/]\s*|\s+\b(?:feat\.?|ft\.?)\b\s+/i)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [track.artist],
+  )
+
+  // عکس‌های پروفایل پلتفرم هنرمندان
+  const [artistAvatars, setArtistAvatars] = useState<Record<string, string | null>>({})
+
+  useEffect(() => {
+    let cancelled = false
+
+    artistTokens.slice(0, 3).forEach((art, idx) => {
+      const ref = idx === 0 && track.artistId ? track.artistId : art
+
+      // ۱. اگر ترک خودش عکس پروفایل دارد
+      if (idx === 0 && track.artistArtworkUrl) {
+        artistAvatarCache.set(ref, track.artistArtworkUrl)
+        setArtistAvatars((prev) =>
+          prev[ref] === track.artistArtworkUrl ? prev : { ...prev, [ref]: track.artistArtworkUrl! },
+        )
+        return
+      }
+
+      // ۲. اگر قبلاً در کش موجود است
+      if (artistAvatarCache.has(ref)) {
+        const cached = artistAvatarCache.get(ref) ?? null
+        setArtistAvatars((prev) => (prev[ref] === cached ? prev : { ...prev, [ref]: cached }))
+        return
+      }
+
+      // ۳. بررسی سوابق اخیر
+      const recent = useRecent
+        .getState()
+        .items.find(
+          (it) =>
+            it.kind === 'artist' &&
+            (it.ref === ref || it.title.trim().toLowerCase() === art.trim().toLowerCase()) &&
+            it.artworkUrl,
+        )
+      if (recent?.artworkUrl) {
+        artistAvatarCache.set(ref, recent.artworkUrl)
+        setArtistAvatars((prev) => ({ ...prev, [ref]: recent.artworkUrl }))
+        return
+      }
+
+      // ۴. واکشی آنلاین از سرور
+      if (idx === 0 && track.artistId) {
+        api.getArtist(track.artistId)
+          .then((detail) => {
+            if (cancelled) return
+            const url = detail.artworkUrl ?? null
+            artistAvatarCache.set(ref, url)
+            setArtistAvatars((prev) => ({ ...prev, [ref]: url }))
+          })
+          .catch(() => {
+            if (cancelled) return
+            artistAvatarCache.set(ref, null)
+          })
+      } else {
+        api.search(art)
+          .then((res) => {
+            if (cancelled) return
+            const hit =
+              res.artists.find((a) => a.name.trim().toLowerCase() === art.trim().toLowerCase()) ??
+              res.artists[0]
+            const url = hit?.artworkUrl ?? null
+            artistAvatarCache.set(ref, url)
+            setArtistAvatars((prev) => ({ ...prev, [ref]: url }))
+          })
+          .catch(() => {
+            if (cancelled) return
+            artistAvatarCache.set(ref, null)
+          })
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [track.id, track.artist, track.artistId, track.artistArtworkUrl, artistTokens])
+
+  // اشتراک‌گذاری
+  const handleShare = () => {
+    void share({
+      title: track.title,
+      text: `${track.title} - ${track.artist}`,
+      url: track.sourceUrl || (typeof window !== 'undefined' ? window.location.href : ''),
+    })
+  }
+
+  // ۱. کاور آلبوم به سبک TIDAL
+  const renderCover = (sizeClass: string) => {
+    return (
+      <div
+        ref={swipe.cover}
+        className={`relative aspect-square select-none max-h-full ${sizeClass} ${
+          swipeEnabled ? 'cursor-grab touch-pan-y active:cursor-grabbing' : ''
+        }`}
+      >
+        {/* کاور پیش‌نمایش موقع سوایپ */}
+        {swipe.dir && peekItem && (
+          <div ref={swipe.peek} aria-hidden className="absolute inset-0 scale-90 opacity-0 z-20">
+            <Artwork
+              src={peekItem.track.artworkUrl}
+              alt=""
+              seed={peekItem.track.albumId ?? peekItem.track.id}
+              rounded="rounded-xl sm:rounded-2xl"
+              className="size-full shadow-2xl shadow-black/80 ring-1 ring-white/10"
+            />
+          </div>
+        )}
+
+        {/* کاور اصلی تایدال با گوشه‌های گرد نرم و سایه عمیق ۶۰ پیکسلی */}
+        <div className="relative z-10 size-full">
+          <Artwork
+            src={track.artworkUrl}
+            alt={track.album ?? track.title}
+            seed={track.albumId ?? track.id}
+            transitionName={COVER_VT}
+            rounded="rounded-xl sm:rounded-2xl"
+            className="size-full shadow-[0_24px_60px_-10px_rgba(0,0,0,0.85)] object-cover"
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ۲. مشخصات و متادیتای ترک به سبک TIDAL همراه با نشان [E] و دکمه (+)
+  const renderTrackInfo = () => (
+    <div className="flex items-center justify-between w-full gap-3 pt-2">
+      <div className="min-w-0 flex-1 space-y-1 text-start">
+        <div className="flex items-center gap-2">
+          <p
+            className="bidi truncate text-2xl sm:text-3xl font-extrabold tracking-tight text-white"
+            title={track.title}
+          >
+            {track.title}
+          </p>
+          {track.explicit && (
+            <span
+              title="Explicit"
+              className="inline-grid size-5 shrink-0 place-items-center rounded bg-white text-black text-[11px] font-black leading-none uppercase shadow-sm"
+            >
+              E
+            </span>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-2 text-sm sm:text-base text-white/70">
+          {failed ? (
+            <p className="inline-flex items-center gap-1.5 text-danger font-medium">
+              <WarnIcon className="size-4" />
+              {t.playFailed}
+            </p>
+          ) : (
+            <button
+              onClick={handleArtistClick}
+              title={t.goToArtist(track.artist)}
+              className="bidi text-white/80 transition hover:text-white hover:underline underline-offset-4 font-semibold"
+            >
+              <bdi>{track.artist}</bdi>
+            </button>
+          )}
+        </div>
+
+        {radioLoading && (
+          <p className="inline-flex items-center gap-1.5 text-xs text-white/60">
+            <Spinner className="size-3 text-white" />
+            {t.radioFinding}
+          </p>
+        )}
+      </div>
+
+      {/* دکمه بزرگ (+) برای افزودن به پلی‌لیست در سمت راست عنوان */}
+      <div ref={playlistPickerBox} className="relative shrink-0">
+        <button
+          onClick={() => setPlaylistPickerOpen((v) => !v)}
+          aria-label={t.playlistAdd}
+          title={t.playlistAdd}
+          className="grid size-11 place-items-center rounded-full text-white/90 hover:text-white hover:bg-white/10 active:scale-95 transition cursor-pointer"
+        >
+          <PlusIcon className="size-7" />
+        </button>
+        {playlistPickerOpen && (
+          <div
+            role="menu"
+            className="absolute end-0 bottom-full mb-2 z-50 w-60 rounded-2xl bg-black/90 p-2.5 shadow-2xl backdrop-blur-xl border border-white/15"
+          >
+            <PlaylistPicker
+              jobIds={jobId ? [jobId] : []}
+              onDone={() => setPlaylistPickerOpen(false)}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  // ۳. کنترل‌های ترانسپورت پنج‌گانه به سبک TIDAL با دکمه پخش بدون کادر دایره‌ای
+  const renderTransportRow = () => (
+    <div className="flex items-center justify-between w-full max-w-sm mx-auto px-2 py-1">
+      {/* شافل */}
+      <button
+        onClick={toggleShuffle}
+        aria-label={t.shuffle}
+        aria-pressed={shuffle}
+        title={t.shuffle}
+        className={`grid size-11 place-items-center transition active:scale-90 cursor-pointer ${
+          shuffle ? 'text-white' : 'text-white/40 hover:text-white'
+        }`}
+      >
+        <ShuffleIcon className="size-5 sm:size-6" />
+      </button>
+
+      {/* قبلی */}
+      <button
+        onClick={withTap(prev)}
+        aria-label={t.prevTrack}
+        title={t.prevTrack}
+        className="grid size-12 place-items-center text-white hover:text-white/80 active:scale-90 transition cursor-pointer"
+      >
+        <PrevIcon className="size-7 sm:size-8" />
+      </button>
+
+      {/* دکمه مرکزی پخش / مکث بدون پس‌زمینه دایره‌ای سفید (آیکون خالص تایدال) */}
+      <button
+        onClick={withTap(toggle)}
+        aria-label={playing ? t.pause : t.play}
+        title={playing ? t.pause : t.play}
+        className="grid size-16 place-items-center text-white hover:scale-105 active:scale-95 transition cursor-pointer"
+      >
+        {radioLoading ? (
+          <Spinner className="size-10 sm:size-12 text-white" />
+        ) : (
+          <PlayPauseIcon playing={playing} className="size-10 sm:size-12 text-white" />
+        )}
+      </button>
+
+      {/* بعدی */}
+      <button
+        onClick={withTap(next)}
+        aria-label={t.nextTrack}
+        title={t.nextTrack}
+        className="grid size-12 place-items-center text-white hover:text-white/80 active:scale-90 transition cursor-pointer"
+      >
+        <NextIcon className="size-7 sm:size-8" />
+      </button>
+
+      {/* تکرار */}
+      <button
+        onClick={cycleRepeat}
+        aria-label={repeatLabel}
+        title={repeatLabel}
+        className={`grid size-11 place-items-center transition active:scale-90 cursor-pointer ${
+          repeat === 'off' ? 'text-white/40 hover:text-white' : 'text-white'
+        }`}
+      >
+        <RepeatIcon className="size-5 sm:size-6" one={repeat === 'one'} />
+      </button>
+    </div>
+  )
+
+  // ۴. فوتر پایینی شامل دکمه‌های دایره‌ای صف، مبدأ پخش، اشتراک‌گذاری و منوی بیشتر
+  const renderFooterRow = () => (
+    <div className="flex items-center justify-between w-full pt-1">
+      {/* دکمه دایره‌ای صف پخش (Queue / Hamburger) */}
+      <button
+        onClick={() => setPanel((v) => (v === 'queue' ? 'cover' : 'queue'))}
+        aria-label={t.upNext}
+        aria-pressed={panel === 'queue'}
+        title={t.upNext}
+        className={`grid size-12 place-items-center rounded-full transition active:scale-95 cursor-pointer ${
+          panel === 'queue'
+            ? 'bg-white/30 text-white'
+            : 'bg-white/10 text-white/80 hover:bg-white/20 hover:text-white'
+        }`}
+      >
+        <MenuLinesIcon className="size-5" />
+      </button>
+
+      {/* مرکز: متن «Playing from» و نام آلبوم یا پلی‌لیست */}
+      <div className="flex flex-col items-center justify-center text-center px-2 min-w-0 flex-1">
+        <span className="text-[11px] font-medium text-white/50 tracking-wide">
+          {lang === 'fa' ? 'در حال پخش از' : 'Playing from'}
+        </span>
+        <button
+          onClick={handleAlbumClick}
+          title={originCaption}
+          className="bidi truncate text-xs sm:text-sm font-bold text-white hover:underline transition max-w-[160px] sm:max-w-[240px]"
+        >
+          <bdi>{originCaption}</bdi>
+        </button>
+      </div>
+
+      {/* دکمه‌های دایره‌ای سمت راست: اشتراک‌گذاری و منوی بیشتر */}
+      <div className="flex items-center gap-2 sm:gap-2.5">
+        <button
+          onClick={handleShare}
+          aria-label={lang === 'fa' ? 'اشتراک‌گذاری' : 'Share'}
+          title={lang === 'fa' ? 'اشتراک‌گذاری' : 'Share'}
+          className="grid size-12 place-items-center rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
+        >
+          <ShareIcon className="size-5" />
+        </button>
+
+        <div ref={moreMenuBox} className="relative">
+          <button
+            onClick={() => setMoreMenuOpen((v) => !v)}
+            aria-label={t.moreMenu}
+            aria-expanded={moreMenuOpen}
+            title={t.moreMenu}
+            className="grid size-12 place-items-center rounded-full bg-white/10 text-white/80 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
+          >
+            <DotsIcon className="size-5" />
+          </button>
+
+          {moreMenuOpen && (
+            <div
+              role="menu"
+              className="absolute end-0 bottom-full mb-2 z-50 w-52 rounded-2xl bg-black/90 p-2 shadow-2xl backdrop-blur-xl border border-white/15 space-y-1"
+            >
+              {jobId && (
+                <button
+                  onClick={() => {
+                    void toggleFavorite(jobId)
+                    setMoreMenuOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold text-white/90 hover:bg-white/15 transition cursor-pointer"
+                >
+                  <LikeHeart
+                    liked={favorite}
+                    onToggle={() => void toggleFavorite(jobId)}
+                    ariaLabel={favorite ? t.favoriteRemove : t.favoriteAdd}
+                    iconClassName="size-4"
+                  />
+                  <span>{favorite ? t.favoriteRemove : t.favoriteAdd}</span>
+                </button>
+              )}
+
+              {item.lyricsUrl && (
+                <button
+                  onClick={() => {
+                    setPanel((v) => (v === 'lyrics' ? 'cover' : 'lyrics'))
+                    setMoreMenuOpen(false)
+                  }}
+                  aria-label={t.lyrics}
+                  aria-pressed={panel === 'lyrics'}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold text-white/90 hover:bg-white/15 transition cursor-pointer"
+                >
+                  <LyricsQuoteIcon className="size-4 text-white/70" />
+                  <span>{t.lyrics}</span>
+                </button>
+              )}
+
+              <div className="px-3 py-1 border-t border-white/10">
+                <AudioSettings />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  // ۵. محتوای لیریکس
+  const renderLyricsContent = () =>
+    lyrics.kind === 'synced' ? (
+      <LyricsPanel lines={lyrics.lines} position={engine.currentTime()} trackEnd={total} onSeek={seek} />
+    ) : (
+      <div className="scroll-pane no-scrollbar h-full w-full overflow-y-auto px-4 sm:px-8 py-10">
+        {lyrics.kind === 'loading' ? (
+          <div className="grid h-full place-items-center text-white/70">
+            <Spinner className="size-8 text-white" />
+          </div>
+        ) : lyrics.kind === 'none' ? (
+          <div className="grid h-full place-items-center px-4 text-center text-lg font-bold text-white/50">
+            {t.lyricsUnavailable}
+          </div>
+        ) : (
+          <p className="bidi whitespace-pre-line text-2xl sm:text-3xl lg:text-4xl leading-snug sm:leading-tight font-extrabold text-white/90">
+            {lyrics.text}
+          </p>
+        )}
+      </div>
+    )
+
+  // ۶. محتوای صف پخش
+  const renderQueueContent = () => {
+    const clearText = lang === 'fa' ? 'پاک کردن صف' : 'Clear queue'
+    const tracksCountText = lang === 'fa' ? `${queue.length} آهنگ در صف` : `${queue.length} tracks in queue`
+    const upcomingCount = queue.length - 1
+
+    return (
+      <div className="h-full w-full flex flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between pb-3 px-2 border-b border-white/10">
+          <div>
+            <h3 className="text-base font-bold text-white">{t.upNext}</h3>
+            <p className="text-xs text-white/50 font-medium">{tracksCountText}</p>
+          </div>
+          {upcomingCount > 0 && (
+            <button
+              onClick={() => {
+                const toRemove = queue.filter((_, i) => i !== index)
+                for (const qItem of toRemove) {
+                  drop(qItem.id)
+                }
+              }}
+              className="rounded-full bg-white/10 px-3.5 py-1 text-xs font-semibold text-white/80 hover:text-white hover:bg-white/20 transition cursor-pointer"
+            >
+              {clearText}
+            </button>
+          )}
+        </div>
+
+        <div className="scroll-pane no-scrollbar flex-1 overflow-y-auto space-y-3 py-3 px-1">
+          <div className="space-y-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-white/40 px-2">
+              {t.nowPlayingView}
+            </span>
+            <QueueRow
+              key={queue[index].id}
+              item={queue[index]}
+              active={true}
+              onPlay={() => play(queue, index)}
+              onRemove={() => drop(queue[index].id)}
+            />
+          </div>
+
+          {upcomingCount > 0 ? (
+            <div className="space-y-1 pt-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-white/40 px-2">
+                {t.upNext} ({upcomingCount})
+              </span>
+              <div className="space-y-1.5">
+                {queue.map((qItem, i) => {
+                  if (i === index) return null
+                  return (
+                    <QueueRow
+                      key={qItem.id}
+                      item={qItem}
+                      active={false}
+                      onPlay={() => play(queue, i)}
+                      onRemove={() => drop(qItem.id)}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="py-8 text-center text-xs text-white/40 font-medium">
+              {lang === 'fa' ? 'ترک دیگری در صف نیست' : 'No upcoming tracks'}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-50">
-      {/* لایه‌ی زیرِ شیت: دیگر دیده نمی‌شود (شیت تمام‌صفحه است) ولی ژستِ کشیدن
-          محو‌شدنش را می‌نویسد، پس نودش می‌ماند. بلورِ پس‌زمینه حذف شد — لایه‌ی
-          تمام‌صفحه‌ای است که حینِ درگ هر فریم باید نمونه بگیرد و اصلاً دیده
-          نمی‌شود؛ `bg-black/70` به‌تنهایی تیرگی لازم را می‌دهد. */}
+      {/* لایه پشت شیت با پس‌زمینه تیره */}
       <div
         aria-hidden
         ref={drag.backdrop}
-        className="backdrop-in absolute inset-0 bg-black/70"
+        onClick={dismiss}
+        className={`absolute inset-0 bg-black/85 cursor-pointer ${closing ? 'np-backdrop-out' : 'np-backdrop-in'}`}
       />
 
       <div
@@ -353,432 +934,190 @@ export default function NowPlaying({ onClose }: { onClose: () => void }) {
         aria-modal="true"
         aria-label={t.nowPlayingView}
         tabIndex={-1}
-        // دو مصرف‌کننده برای یک نود: ژستِ کشیدن و منطقِ مودال. تابعِ ref
-        // هر دو ref را با هم پر می‌کند
         ref={(node) => {
           drag.sheet.current = node
           dialog.current = node
         }}
         onClick={(e) => e.stopPropagation()}
-        // تمام‌صفحه: هیچ پس‌زمینه‌ای بیرون نمی‌ماند. ارتفاعِ قطعی همیشه لازم است
-        // تا ناحیه‌ی میانیِ flex-1/min-h-0 (کاور، متن، صف) معین بماند و هرچه جا
-        // کم آمد از همان صحنه کم شود، نه از کنترل‌ها.
-        //
-        // دیگر `.glass` نیست: شیت تمام‌صفحه است و پس‌زمینه‌ی ماتِ خودش را دارد،
-        // پس بلورِ شیشه چیزی برای نشان‌دادن نداشت — فقط یک `backdrop-filter`ِ
-        // به‌اندازه‌ی ویوپورت بود که در انیمیشنِ ورود و حینِ درگ، هر فریم کلِ
-        // صفحه را دوباره نمونه می‌گرفت. `bg-bg` کفِ مات است تا پیش از نشستنِ
-        // تصویرِ پس‌زمینه هیچ چیزی از صفحه‌ی پشت دیده نشود.
-        className="np-in absolute inset-0 flex flex-col overflow-hidden bg-bg p-5 pb-[calc(1.25rem+var(--safe-b))] pt-[calc(1.25rem+var(--safe-t))]"
+        onAnimationEnd={(e) => {
+          if (closing && e.target === e.currentTarget) onClose()
+        }}
+        style={{
+          backgroundColor: tidalBg,
+          transition: 'background-color 0.8s ease',
+        }}
+        className={`absolute inset-0 flex flex-col overflow-hidden text-white p-4 sm:p-6 pb-[calc(1.25rem+var(--safe-b))] pt-[calc(0.75rem+var(--safe-t))] ${
+          closing ? 'np-sheet-out' : 'np-sheet-in'
+        }`}
       >
-        {/*
-          هاله‌ها داخل یک لایه‌ی برش‌خورده می‌نشینند، نه مستقیم روی خودِ شیت.
-          شیت حالا اسکرول دارد و این دوتا از لبه‌اش بیرون می‌زنند؛ بدون این
-          پوشش، همان بیرون‌زدگی به ارتفاعِ اسکرول اضافه می‌شد و ته شیت یک
-          نوارِ خالیِ ۶۴ پیکسلی می‌ماند که هیچی توش نیست ولی اسکرول می‌خورد.
-        */}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-0 overflow-hidden"
-        >
-          {/*
-            پس‌زمینه‌ی تمام‌صفحه از خودِ کاور — همان امضای بصریِ اپل‌موزیک.
-            بلورِ سنگین (۷۲px) به‌علاوه‌ی تیره‌کردن: متن و کنترل‌ها رویش خوانا
-            می‌مانند و فقط «رنگ و حال‌وهوای» کاور می‌ماند. مقیاس ۱.۱۵ لبه‌های
-            بلورشده را بیرون می‌برد تا هاله‌ی روشن دورِ تصویر نیفتد.
-            `key` روی آدرس است تا با تعویض ترک، crossfade ساده با transition
-            رخ دهد — نه پرش.
-          */}
-          {track.artworkUrl ? (
-            <img
-              key={bgSrc ?? undefined}
-              src={bgSrc ?? undefined}
-              alt=""
-              aria-hidden
-              onError={() => setBgBlurFailed(track.artworkUrl)}
-              className={`absolute inset-0 size-full scale-[1.15] object-cover opacity-60 saturate-150 transition-opacity duration-700 ${
-                bgNeedsCssBlur ? 'blur-[72px]' : ''
-              }`}
-            />
-          ) : null}
-          {/* لایه‌ی تیره‌کننده — خواناییِ متن روی هر کاوری، روشن یا تیره */}
-          <span className="absolute inset-0 bg-black/55" />
-          {/* گرادیانِ پایین تا کنترل‌ها جایی که چشم می‌رود تمیزتر بنشینند */}
-          <span className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/50 to-transparent" />
-          {/*
-            اگر کاوری نبود، همان هاله‌های accent قبلی جایگزین می‌شوند تا شیت
-            خالی و بی‌روح نماند.
-          */}
-          {!track.artworkUrl && (
-            <>
-              <span
-                className={`absolute -start-16 -top-16 size-56 rounded-full blur-[80px] transition-colors duration-700 ${
-                  tint ? '' : 'bg-accent/25'
-                }`}
-                style={
-                  tint ? { background: `rgba(${tint[0]}, ${tint[1]}, ${tint[2]}, 0.35)` } : undefined
-                }
-              />
-              <span
-                className={`absolute -end-16 -bottom-16 size-56 rounded-full blur-[80px] transition-colors duration-700 ${
-                  tint ? '' : 'bg-accent-2/25'
-                }`}
-                style={
-                  tint ? { background: `rgba(${tint[0]}, ${tint[1]}, ${tint[2]}, 0.22)` } : undefined
-                }
-              />
-            </>
-          )}
-        </span>
-
-        {/*
-          دستگیره‌ی کشیدن.
-          ناحیه‌ی لمسی‌اش عمداً از خودِ میله خیلی بزرگ‌تر است (کلِ نوارِ بالای
-          شیت): میله‌ی چهارپیکسلی نشانه است، نه هدفِ انگشت. `touch-none` هم
-          لازم است وگرنه مرورگر هم‌زمان با کشیدن، محتوای شیت را اسکرول می‌کند.
-        */}
+        {/* ============================================================== */}
+        {/* نوار بالای پلیر به سبک TIDAL                                    */}
+        {/* ============================================================== */}
         <div
           ref={drag.handle}
-          aria-hidden
-          className="-mt-2 mb-1 flex shrink-0 touch-none cursor-grab justify-center py-2 active:cursor-grabbing sm:hidden"
+          className="relative flex shrink-0 items-center justify-between z-20 h-12 mb-1 sm:mb-2 select-none touch-none"
         >
-          <span className="h-1 w-10 rounded-full bg-muted-2/50" />
-        </div>
-
-        <div className="relative flex shrink-0 items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-2">
-            {headerLabel}
-          </span>
-
-          <div className="flex items-center gap-1">
-            {jobId && (
-              <LikeHeart
-                liked={favorite}
-                onToggle={() => void toggleFavorite(jobId)}
-                ariaLabel={favorite ? t.favoriteRemove : t.favoriteAdd}
-                title={favorite ? t.favoriteRemove : t.favoriteAdd}
-                className={`size-9 rounded-md transition hover:bg-panel-2 sm:size-7 ${
-                  favorite ? '' : 'text-muted-2 hover:text-fg'
-                }`}
-                iconClassName="size-4"
-              />
+          {/* سمت چپ: در نمای کاور عکس پروفایل پلتفرم هنرمندان؛ در نمای لیریکس یا صف تامبنیل آلبوم */}
+          <div className="flex items-center gap-2">
+            {panel === 'cover' ? (
+              <div className="flex items-center -space-x-1.5 rtl:space-x-reverse">
+                {artistTokens.slice(0, 3).map((art, idx) => {
+                  const ref = idx === 0 && track.artistId ? track.artistId : art
+                  const avatarUrl =
+                    artistAvatars[ref] ?? (idx === 0 ? track.artistArtworkUrl ?? null : null)
+                  return (
+                    <button
+                      key={idx}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        dismiss()
+                        window.dispatchEvent(
+                          new CustomEvent('unstream:open-artist', { detail: { ref } }),
+                        )
+                      }}
+                      title={art}
+                      style={{ zIndex: 10 - idx }}
+                      className="relative grid size-9 sm:size-10 place-items-center rounded-full bg-white/10 text-xs font-bold text-white ring-2 ring-black/30 hover:bg-white/20 transition cursor-pointer overflow-hidden shadow-sm"
+                    >
+                      <Artwork
+                        src={avatarUrl}
+                        alt={art}
+                        seed={ref}
+                        rounded="rounded-full"
+                        className="size-full object-cover"
+                      />
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <button
+                onClick={() => setPanel('cover')}
+                aria-label={track.title}
+                title="بازگشت به کاور"
+                className="shrink-0 size-10 sm:size-11 rounded-lg overflow-hidden shadow-md ring-1 ring-white/15 transition hover:scale-105 active:scale-95 cursor-pointer"
+              >
+                <Artwork
+                  src={track.artworkUrl}
+                  alt={track.title}
+                  seed={track.albumId ?? track.id}
+                  rounded="rounded-lg"
+                  className="size-full object-cover"
+                />
+              </button>
             )}
+          </div>
 
-            <button
-              onClick={toggleRadio}
-              aria-label={t.radio}
-              aria-pressed={radio}
-              title={t.radio}
-              className={`grid size-9 place-items-center rounded-md transition hover:bg-panel-2 sm:size-7 ${
-                radio ? 'text-accent' : 'text-muted-2 hover:text-fg'
-              }`}
-            >
-              <RadioIcon className="size-4" />
-            </button>
-
+          {/* سمت راست: دکمه کپسولی لیریکس در بالا راست به سبک TIDAL + دکمه‌های بستن و تمام‌صفحه */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
             {item.lyricsUrl && (
               <button
                 onClick={() => setPanel((v) => (v === 'lyrics' ? 'cover' : 'lyrics'))}
                 aria-label={t.lyrics}
                 aria-pressed={panel === 'lyrics'}
                 title={t.lyrics}
-                className={`grid size-9 place-items-center rounded-md transition hover:bg-panel-2 sm:size-7 ${
-                  panel === 'lyrics' ? 'text-accent' : 'text-muted-2 hover:text-fg'
+                className={`rounded-full px-5 py-1.5 text-sm transition active:scale-95 cursor-pointer shadow-sm ${
+                  panel === 'lyrics'
+                    ? 'bg-white text-black font-extrabold shadow-md'
+                    : 'bg-white/15 hover:bg-white/25 text-white font-bold'
                 }`}
               >
-                <LyricsIcon className="size-4" />
-              </button>
-            )}
-
-            {queue.length > 1 && (
-              <button
-                onClick={() => setPanel((v) => (v === 'queue' ? 'cover' : 'queue'))}
-                aria-label={t.upNext}
-                aria-pressed={panel === 'queue'}
-                title={t.upNext}
-                className={`grid size-9 place-items-center rounded-md transition hover:bg-panel-2 sm:size-7 ${
-                  panel === 'queue' ? 'text-accent' : 'text-muted-2 hover:text-fg'
-                }`}
-              >
-                <QueueIcon className="size-4" />
+                Lyrics
               </button>
             )}
 
             <button
-              onClick={dismiss}
+              onClick={withTap(dismiss)}
               aria-label={t.minimizePlayer}
               title={t.minimizePlayer}
-              className="grid size-9 place-items-center rounded-md text-muted-2 transition hover:bg-panel-2 hover:text-fg sm:size-7"
+              className="grid size-10 place-items-center rounded-2xl bg-white/10 text-white/80 transition-all duration-150 hover:bg-white/20 hover:text-white active:scale-90 active:bg-white/25 cursor-pointer"
             >
-              <ChevronIcon className="size-4 -rotate-90" flip={false} />
+              <ChevronIcon className="size-5 -rotate-90 transition-transform duration-150" flip={false} />
+            </button>
+
+            {/* دکمه تمام‌صفحه (دسکتاپ) */}
+            <button
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? t.exitFullscreen : t.fullscreen}
+              title={isFullscreen ? t.exitFullscreen : t.fullscreen}
+              className="hidden sm:grid size-10 place-items-center rounded-2xl bg-white/10 text-white/80 hover:bg-white/20 hover:text-white transition cursor-pointer"
+            >
+              {isFullscreen ? <MinimizeIcon className="size-4" /> : <MaximizeIcon className="size-4" />}
             </button>
           </div>
         </div>
 
-        <div className="relative mt-4 flex min-h-0 flex-1 items-center justify-center sm:mt-6">
-          {panel === 'cover' && (
-            /*
-             * صحنه‌ی کاور: یک قابِ نسبت‌مربع که داخلش دو کاور روی هم نشسته‌اند.
-             * لایه‌ی زیری «ترکِ بعدی» است که حین کشیدن از پشت بیرون می‌آید،
-             * لایه‌ی رویی کاورِ فعلی که با انگشت جابه‌جا می‌شود.
-             *
-             * `touch-action: pan-y` کلیدِ ماجراست: اسکرولِ عمودی را به مرورگر
-             * می‌دهد و افقی را به ژستِ ما — بدون preventDefault، بدون دعوا با
-             * کشیدنِ شیت.
-             *
-             * فیزیکِ پخش/توقف (امضای اپل‌موزیک): کاور وقتی پخش متوقف است کمی
-             * کوچک‌تر و کم‌نورتر می‌نشیند و با ادامه‌ی پخش فنروار برمی‌گردد.
-             * فقط با transition روی transform انجام می‌شود — هیچ حلقه‌ی JS
-             * لازم نیست. حالتِ کشیده‌شده (`swipe.dir`) این مقیاس را بی‌اثر
-             * می‌کند تا دستِ کاربر روی کاور، کاور زیرِ انگشت بماند.
-             */
-            <div
-              ref={swipe.cover}
-              /*
-               * `max-h-full` مهم است: کاور با `aspect-square w-full` از عرض
-               * اندازه می‌گیرد، و روی صفحه‌ی کوتاه (گوشی افقی) آن ارتفاع از
-               * صحنه بیشتر می‌شد. سقفِ ارتفاع، aspect-ratio را وادار می‌کند
-               * عرض را هم کم کند — کاور کوچک می‌شود، شیت اسکرول نمی‌کند.
-               */
-              className={`relative aspect-square max-h-full w-full max-w-64 select-none sm:max-w-72 ${
-                swipeEnabled ? 'cursor-grab touch-pan-y active:cursor-grabbing' : ''
-              }`}
-            >
-              {/*
-               * هاله‌ی هم‌رhythm با صدا — پشتِ کاور، با رنگِ غالبِ همان کاور.
-               * `--glow` را حلقه‌ی rAF از انرژیِ بمِ صوت می‌نویسد؛ اینجا فقط
-               * مقدارِ اولیه‌ی صفر است تا قبلِ اولین فریم هاله‌ای نباشد.
-               * مقیاس و شفافیت از همین متغیر حساب می‌شوند (CSS `.audio-glow`).
-               */}
-              <span
-                ref={glowRef}
-                aria-hidden
-                className="audio-glow pointer-events-none absolute inset-0 rounded-2xl bg-accent/40 blur-2xl"
-                style={
-                  tint
-                    ? ({ '--glow': 0, background: `rgb(${tint[0]}, ${tint[1]}, ${tint[2]})` } as React.CSSProperties)
-                    : ({ '--glow': 0 } as React.CSSProperties)
-                }
-              />
-
-              {/* کاورِ پیش‌نمایش — پشت، کوچک‌تر، محو. فقط وقتی ژست فعال است */}
-              {swipe.dir && peekItem && (
-                <div
-                  ref={swipe.peek}
-                  aria-hidden
-                  className="absolute inset-0 scale-90 opacity-0"
-                >
-                  <Artwork
-                    src={peekItem.track.artworkUrl}
-                    alt=""
-                    seed={peekItem.track.albumId ?? peekItem.track.id}
-                    rounded="rounded-2xl"
-                    className="size-full shadow-2xl shadow-black/50 ring-1 ring-white/10"
-                  />
+        {/* ============================================================== */}
+        {/* ۱. نمای دسکتاپ و نمایشگرهای عریض (Landscape & Desktop Layout)   */}
+        {/* ============================================================== */}
+        {isDesktop ? (
+          <div className="relative min-h-0 flex-1 flex flex-col justify-center z-10 py-2">
+            <div className="w-full max-w-6xl xl:max-w-7xl mx-auto flex-1 min-h-0 grid grid-cols-12 gap-8 xl:gap-14 items-center px-4 sm:px-8">
+              {/* ستون چپ: استیج کاور آلبوم */}
+              <div className="col-span-5 flex flex-col items-center justify-center space-y-4">
+                <div className="flex items-center justify-center w-full">
+                  {renderCover('w-full max-w-[340px] sm:max-w-[390px] xl:max-w-[430px]')}
                 </div>
-              )}
+              </div>
 
-              <Artwork
-                src={track.artworkUrl}
-                alt={track.album ?? track.title}
-                seed={track.albumId ?? track.id}
-                // جفتِ همان نامی که مینی‌پلیر دارد — فقط وقتی پنلِ کاور باز
-                // است، چون در پنلِ متن/صف اصلاً کاوری روی صفحه نیست
-                transitionName={COVER_VT}
-                rounded="rounded-2xl"
-                // اندازه‌ی ثابتِ ۲۵۶ پیکسلی روی گوشیِ ۳۲۰ پیکسلی از قاب می‌زد بیرون
-                className={`size-full shadow-2xl shadow-black/50 ring-1 ring-white/10 transition-[transform,opacity] duration-500 ${
-                  playing || swipe.dir || swipe.flying
-                    ? 'scale-100 opacity-100'
-                    : 'scale-[0.92] opacity-90'
-                }`}
-              />
-            </div>
-          )}
-
-          {panel === 'lyrics' &&
-            (lyrics.kind === 'synced' ? (
-              // نمای کارائوکه ظرفیتِ اسکرولِ خودش را دارد — پس اینجا دیگر
-              // قابِ بیرونی نمی‌خواهد وگرنه دو اسکرولِ تودرتو روی هم می‌افتد
-              <LyricsPanel
-                lines={lyrics.lines}
-                position={position}
-                trackEnd={total}
-                onSeek={seek}
-              />
-            ) : (
-              <div className="scroll-pane no-scrollbar h-full w-full overflow-y-auto rounded-2xl border border-line-soft bg-panel-2/50 px-4 py-3">
-                {lyrics.kind === 'loading' ? (
-                  <div className="grid h-full place-items-center text-xs text-muted-2">…</div>
-                ) : lyrics.kind === 'none' ? (
-                  <div className="grid h-full place-items-center px-4 text-center text-sm text-muted">
-                    {t.lyricsUnavailable}
+              {/* ستون راست: کنترل‌ها در حالت کاور، یا پنل کامل لیریکس/صف */}
+              <div className="col-span-7 flex flex-col h-full max-h-[82vh] justify-center">
+                {panel === 'cover' ? (
+                  <div className="w-full max-w-xl mx-auto space-y-6">
+                    {renderTrackInfo()}
+                    <NowPlayingSeekBar total={total} seek={seek} />
+                    {renderTransportRow()}
+                    {renderFooterRow()}
                   </div>
                 ) : (
-                  // بدون تایم‌استمپ چیزی برای دنبال‌کردن نیست — کل متن یک‌جا،
-                  // بدون هایلایتِ خط‌به‌خط
-                  <p className="bidi whitespace-pre-line text-sm leading-7 text-muted">
-                    {lyrics.text}
-                  </p>
+                  <div className="flex flex-col h-full overflow-hidden w-full">
+                    <div className="relative flex-1 min-h-0 w-full overflow-hidden">
+                      {panel === 'lyrics' ? renderLyricsContent() : renderQueueContent()}
+                    </div>
+                    <div className="shrink-0 pt-4 border-t border-white/10">
+                      {renderFooterRow()}
+                    </div>
+                  </div>
                 )}
               </div>
-            ))}
-
-          {panel === 'queue' && (
-            <div className="scroll-pane no-scrollbar h-full w-full overflow-y-auto rounded-2xl border border-line-soft bg-panel-2/50 p-1.5">
-              {queue.map((qItem, i) => (
-                <QueueRow
-                  key={qItem.id}
-                  item={qItem}
-                  active={i === index}
-                  onPlay={() => play(queue, i)}
-                  onRemove={() => drop(qItem.id)}
-                />
-              ))}
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          /* ============================================================== */
+          /* ۲. نمای موبایل (<lg) دقیقاً مطابق TIDAL                        */
+          /* ============================================================== */
+          <div className="relative min-h-0 flex-1 flex flex-col z-10 justify-between">
+            {panel === 'cover' ? (
+              <>
+                {/* استیج مرکزی: کاور آلبوم */}
+                <div className="relative flex min-h-0 flex-1 items-center justify-center py-1 sm:py-2 my-auto overflow-hidden">
+                  <div className="flex items-center justify-center w-full max-h-full">
+                    {renderCover('w-full max-h-[35vh] sm:max-h-[40vh] max-w-[min(35vh,320px)] sm:max-w-[min(40vh,380px)]')}
+                  </div>
+                </div>
 
-        {/*
-         * همه‌ی کنترل‌ها زیرِ یک والد تا در حالتِ محیط یک‌جا محو شوند.
-         * `inert` عمداً کنارِ opacity می‌آید: دکمه‌ی شفاف ولی «زنده» هم
-         * کلیک می‌گیرد هم با کیبورد قابل‌دسترس است؛ بی‌inert بودنش یعنی
-         * کاربرِ نابینا روی دکمه‌ای می‌افتد که نمی‌بیند.
-         */}
-        <div className={`relative shrink-0 ${idle ? 'idle-fade' : 'idle-fade-in'}`} inert={idle}>
-          <div className="mt-4 space-y-1 text-center sm:mt-6">
-            <div className="flex items-center justify-center gap-2">
-              <p className="bidi-center truncate text-lg font-bold" title={track.title}>
-                {track.title}
-              </p>
-              <SourceBadge source={track.source} />
-            </div>
-            {failed ? (
-              <p className="inline-flex items-center gap-1 text-sm text-danger">
-                <WarnIcon className="size-3.5" />
-                {t.playFailed}
-              </p>
+                {/* کنترل‌های پایین تایدال */}
+                <div className="relative shrink-0 space-y-4 max-w-md mx-auto w-full pt-2 pb-1">
+                  {renderTrackInfo()}
+                  <NowPlayingSeekBar total={total} seek={seek} />
+                  {renderTransportRow()}
+                  {renderFooterRow()}
+                </div>
+              </>
             ) : (
-              <p className="bidi-center truncate text-sm text-muted">
-                <bdi>{track.artist}</bdi>
-              </p>
+              /* در نمای لیریکس یا صف: تمام‌صفحه و فراگیر با فوتر در پایین (Images 4 & 5) */
+              <>
+                <div className="relative flex min-h-0 flex-1 overflow-hidden w-full max-w-2xl mx-auto py-2">
+                  {panel === 'lyrics' ? renderLyricsContent() : renderQueueContent()}
+                </div>
+
+                <div className="relative shrink-0 max-w-md mx-auto w-full pt-2 pb-1">
+                  {renderFooterRow()}
+                </div>
+              </>
             )}
-            {radioLoading && (
-              <p className="inline-flex items-center gap-1.5 text-xs text-muted-2">
-                <Spinner className="size-3" />
-                {t.radioFinding}
-              </p>
-            )}
           </div>
-
-          <div className="mt-4 sm:mt-6" dir="ltr">
-            <SeekBar value={Math.min(position, total)} max={total} onSeek={seek} className="w-full" />
-            <div className="mt-1 flex justify-between text-[11px] tabular-nums text-muted-2">
-              <span>{fmtDuration(position * 1000, lang)}</span>
-              <span>{fmtDuration(total * 1000, lang)}</span>
-            </div>
-          </div>
-
-          {/*
-           * ردیفِ پخش — شافل و شافلِ هوشمند یک گروه‌اند (دومی بدونِ اولی
-           * معنا ندارد و تا شافل روشن نشده غیرفعال می‌ماند)، تکرار سرِ دیگر،
-           * سه کنترلِ هسته‌ای وسط. همه همیشه دیده می‌شوند.
-           *
-           * عرضِ کل روی گوشیِ ۳۲۰ پیکسلی: ۴۰+۴۰+۴۸+۶۴+۴۸+۴۰ = ۲۸۰ پیکسل
-           * دکمه + فاصله‌ها — جا می‌شود، ولی فاصله‌ها عمداً کوچک‌اند.
-           */}
-          <div className="mt-5 flex items-center justify-between gap-1 sm:mt-6">
-            <div className="flex items-center">
-              <button
-                onClick={toggleShuffle}
-                aria-label={t.shuffle}
-                aria-pressed={shuffle}
-                title={t.shuffle}
-                className={`grid size-10 place-items-center rounded-full transition hover:bg-panel-2 ${
-                  shuffle ? 'text-accent' : 'text-muted-2 hover:text-fg'
-                }`}
-              >
-                <ShuffleIcon className="size-5" />
-              </button>
-
-              <button
-                onClick={toggleSmartShuffle}
-                disabled={!shuffle}
-                aria-label={t.smartShuffle}
-                aria-pressed={smartShuffle}
-                title={shuffle ? t.smartShuffle : t.smartShuffleHint}
-                className={`grid size-10 place-items-center rounded-full transition ${
-                  !shuffle
-                    ? 'cursor-not-allowed text-muted-2/40'
-                    : smartShuffle
-                      ? 'text-accent hover:bg-panel-2'
-                      : 'text-muted-2 hover:bg-panel-2 hover:text-fg'
-                }`}
-              >
-                <SparkleIcon className="size-5" />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-3 sm:gap-6">
-              <button
-                onClick={withTap(prev)}
-                aria-label={t.prevTrack}
-                title={t.prevTrack}
-                className="grid size-12 place-items-center rounded-full text-fg transition hover:bg-panel-2 active:scale-90"
-              >
-                <PrevIcon className="size-7" />
-              </button>
-
-              <button
-                onClick={withTap(toggle)}
-                aria-label={playing ? t.pause : t.play}
-                title={playing ? t.pause : t.play}
-                className="grid size-16 place-items-center rounded-full bg-accent text-accent-fg shadow-xl shadow-accent/30 transition hover:brightness-110 active:scale-95"
-              >
-                <PlayPauseIcon playing={playing} className="size-7" />
-              </button>
-
-              <button
-                onClick={withTap(next)}
-                aria-label={t.nextTrack}
-                title={t.nextTrack}
-                className="grid size-12 place-items-center rounded-full text-fg transition hover:bg-panel-2 active:scale-90"
-              >
-                <NextIcon className="size-7" />
-              </button>
-            </div>
-
-            <button
-              onClick={cycleRepeat}
-              aria-label={repeatLabel}
-              title={repeatLabel}
-              className={`grid size-10 place-items-center rounded-full transition hover:bg-panel-2 ${
-                repeat === 'off' ? 'text-muted-2 hover:text-fg' : 'text-accent'
-              }`}
-            >
-              <RepeatIcon className="size-5" one={repeat === 'one'} />
-            </button>
-          </div>
-
-          <div className="mt-5 flex items-center gap-2 sm:mt-6" dir="ltr">
-            <button
-              onClick={toggleMute}
-              aria-label={muted ? t.unmute : t.mute}
-              title={muted ? t.unmute : t.mute}
-              className="grid size-7 shrink-0 place-items-center rounded-md text-muted-2 transition hover:text-fg"
-            >
-              {muted || volume === 0 ? (
-                <MuteIcon className="size-4" />
-              ) : (
-                <VolumeIcon className="size-4" />
-              )}
-            </button>
-            <Range value={muted ? 0 : volume} max={1} onChange={setVolume} label={t.volume} />
-            {/* روی موبایل نوارِ کوچکِ پایین این دکمه را جا نمی‌دهد، و پخش‌کننده‌ی
-                باز تنها جایی است که همه‌ی کنترل‌ها را دارد */}
-            <AudioSettings />
-          </div>
-        </div>
+        )}
       </div>
     </div>
   )

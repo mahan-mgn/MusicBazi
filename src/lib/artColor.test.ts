@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { tintVars } from './artColor'
+import { tidalBgColor, tintVars } from './artColor'
 
 /** luminance معکوس‌شده از خروجیِ color-mixِ --pb-strong */
 function strongLum(strong: string): number {
@@ -32,3 +32,23 @@ describe('tintVars', () => {
     expect(strongLum(strong)).toBeCloseTo(0.55, 1)
   })
 })
+
+describe('tidalBgColor', () => {
+  it('returns fallback dark color for null', () => {
+    expect(tidalBgColor(null)).toBe('#121214')
+  })
+
+  it('returns deep dark color for red locker cover', () => {
+    const bg = tidalBgColor([180, 20, 50])
+    expect(bg).toMatch(/^rgb\(\d+, \d+, \d+\)$/)
+    const [r, g, b] = bg.replace(/[^\d,]/g, '').split(',').map(Number)
+    expect(r).toBeGreaterThan(b)
+    expect(r).toBeGreaterThan(g)
+    expect(r).toBeLessThan(120)
+  })
+
+  it('returns dark charcoal for black and white cover', () => {
+    expect(tidalBgColor([128, 128, 128])).toBe('#141416')
+  })
+})
+

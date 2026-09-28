@@ -114,3 +114,116 @@ export function tintVars(
     strong: `color-mix(in srgb, rgb(${triad}) ${100 - w}%, white)`,
   }
 }
+
+export interface ColorPalette {
+  dominant: [number, number, number]
+  secondary: [number, number, number]
+  accent: [number, number, number]
+  muted: [number, number, number]
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  r /= 255
+  g /= 255
+  b /= 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  let h = 0
+  let s = 0
+  const l = (max + min) / 2
+
+  if (max !== min) {
+    const d = max - min
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0)
+        break
+      case g:
+        h = (b - r) / d + 2
+        break
+      case b:
+        h = (r - g) / d + 4
+        break
+    }
+    h /= 6
+  }
+  return [h * 360, s, l]
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  h = (h % 360 + 360) % 360
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = l - c / 2
+  let r = 0
+  let g = 0
+  let b = 0
+
+  if (0 <= h && h < 60) {
+    r = c; g = x; b = 0
+  } else if (60 <= h && h < 120) {
+    r = x; g = c; b = 0
+  } else if (120 <= h && h < 180) {
+    r = 0; g = c; b = x
+  } else if (180 <= h && h < 240) {
+    r = 0; g = x; b = c
+  } else if (240 <= h && h < 300) {
+    r = x; g = 0; b = c
+  } else if (300 <= h && h < 360) {
+    r = c; g = 0; b = x
+  }
+
+  return [
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255),
+  ]
+}
+
+/**
+ * تولید پالت ۴ رنگی متوازن جهت ساخت اتمسفر نوری زنده (Living Mesh Aurora).
+ */
+export function deriveHarmonics(dominant: [number, number, number] | null): ColorPalette {
+  if (!dominant) {
+    return {
+      dominant: [99, 102, 241],   // indigo
+      secondary: [168, 85, 247],  // purple
+      accent: [236, 72, 153],     // pink
+      muted: [30, 27, 75],        // dark slate
+    }
+  }
+
+  const [h, s, l] = rgbToHsl(...dominant)
+  const clampedS = Math.max(0.4, Math.min(0.85, s))
+  const clampedL = Math.max(0.35, Math.min(0.65, l))
+
+  const secondary = hslToRgb((h + 38) % 360, clampedS, Math.min(0.7, clampedL + 0.05))
+  const accent = hslToRgb((h + 165) % 360, Math.min(0.9, clampedS + 0.15), Math.max(0.45, clampedL))
+  const muted = hslToRgb(h, clampedS * 0.7, Math.max(0.12, clampedL * 0.35))
+
+  return {
+    dominant,
+    secondary,
+    accent,
+    muted,
+  }
+}
+
+/**
+ * رنگ پس‌زمینه عمیق و غنی به سبک پلتفرم TIDAL.
+ * از رنگ غالب کاور استخراج می‌شود و اشباع را زنده نگه می‌دارد، اما روشنایی
+ * را کنترل می‌کند تا متون و کنترل‌های سفید کنتراست کامل داشته باشند.
+ */
+export function tidalBgColor(rgb: [number, number, number] | null): string {
+  if (!rgb) return '#121214'
+  const [h, s, l] = rgbToHsl(...rgb)
+  if (s < 0.08) {
+    return '#141416'
+  }
+  const targetS = Math.max(0.45, Math.min(0.85, s))
+  const targetL = Math.max(0.12, Math.min(0.20, l * 0.42))
+  const [r, g, b] = hslToRgb(h, targetS, targetL)
+  return `rgb(${r}, ${g}, ${b})`
+}
+

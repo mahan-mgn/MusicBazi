@@ -81,8 +81,13 @@ services:
     environment:
       UNSTREAM_TELEGRAM_BOT_TOKEN: ${UNSTREAM_TELEGRAM_BOT_TOKEN:-}
       UNSTREAM_API_BASE_URL: http://server:8000
+      UNSTREAM_PROXY: ${UNSTREAM_PROXY:-}
+      UNSTREAM_TELEGRAM_PROXY: ${UNSTREAM_TELEGRAM_PROXY:-}
       UNSTREAM_FOLLOW_POLL_INTERVAL: ${UNSTREAM_FOLLOW_POLL_INTERVAL:-1800}
       UNSTREAM_TELEGRAM_CACHE_CHAT_ID: ${UNSTREAM_TELEGRAM_CACHE_CHAT_ID:-}
+      UNSTREAM_TELEGRAM_WEBAPP_URL: ${UNSTREAM_TELEGRAM_WEBAPP_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # فقط برای دیتابیسِ محلیِ بات (follow ها) — کتابخانه و دانلودها همچنان
       # فقط سمتِ سرورند؛ همین یک والیوم مشترک است ولی فایل‌ها جدا می‌مانند

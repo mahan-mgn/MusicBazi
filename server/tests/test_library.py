@@ -146,6 +146,39 @@ class TestReuseBackfill:
 
         assert job.track.albumArtist == "Various Artists"
 
+    def test_single_reused_in_album_gets_album_artwork(self, library_db, tmp_path, track, monkeypatch):
+        """ترکی که به عنوان سینگل ذخیره شده بود وقتی در قالب آلبوم خواسته می‌شود کاور آلبوم را می‌گیرد."""
+        retagged = []
+        monkeypatch.setattr(jobs.downloader, "retag_artwork", lambda path, url: retagged.append((path, url)))
+        monkeypatch.setattr(jobs.downloader, "retag_album", lambda *_: None)
+
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"x" * 100)
+        single = track.model_copy(
+            update={"album": track.title, "artworkUrl": "https://cdn.example.com/single.jpg"}
+        )
+        _ready(library_db, single, "j1", audio)
+
+        album_track = track.model_copy(
+            update={
+                "album": "New Album",
+                "albumId": "sc:playlist:999",
+                "trackNumber": 3,
+                "artworkUrl": "https://cdn.example.com/album.jpg",
+            }
+        )
+
+        job, reused = self._reuse(album_track)
+
+        assert reused is True
+        assert job.track.album == "New Album"
+        assert job.track.trackNumber == 3
+        assert job.track.artworkUrl == "https://cdn.example.com/album.jpg"
+        assert retagged == [(audio, "https://cdn.example.com/album.jpg")]
+        stored = json.loads(library_db.get_job("j1")["track_json"])
+        assert stored["artworkUrl"] == "https://cdn.example.com/album.jpg"
+        assert stored["album"] == "New Album"
+
 
 class TestReuseLyrics:
     """

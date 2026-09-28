@@ -213,3 +213,32 @@ class TestLateLyrics:
         odd.write_bytes(b"x")
 
         attach_lyrics(odd, Lyrics(plain="متن", synced=None))  # باید بی‌صدا رد شود
+
+
+class TestRetagArtwork:
+    def test_retag_mp3_cover_preserves_other_tags(self, tmp_path, tagged):
+        """به‌روزرسانیِ کاور نباید فریم‌های عنوان، هنرمند یا لیریک را پاک کند."""
+        from mutagen.mp3 import MP3
+        from app.downloader import _id3, _retag_mp3_cover, retag_artwork
+
+        # ساخت تگ‌های اولیه با کاور قدیمی و لیریک
+        tags = ID3()
+        _id3(tags, tagged, (b"old-cover", "image/jpeg"), Lyrics(plain="متن آهنگ", synced=None))
+
+        # شبیه‌سازی روی شیء تگ‌ها
+        tags.delall("APIC")
+        tags.add(
+            from_import_apic := __import__("mutagen.id3", fromlist=["APIC"]).APIC(
+                encoding=3, mime="image/jpeg", type=3, desc="Cover", data=b"new-cover"
+            )
+        )
+
+        assert str(tags["TIT2"]) == tagged.title
+        assert str(tags["TPE1"]) == tagged.artist
+        assert tags.getall("USLT")[0].text == "متن آهنگ"
+        assert tags.getall("APIC")[0].data == b"new-cover"
+
+    def test_retag_artwork_returns_false_for_none(self, tmp_path):
+        from app.downloader import retag_artwork
+
+        assert retag_artwork(tmp_path / "test.mp3", None) is False

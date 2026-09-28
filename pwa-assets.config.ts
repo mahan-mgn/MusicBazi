@@ -1,6 +1,6 @@
 import { defineConfig, minimal2023Preset } from '@vite-pwa/assets-generator/config'
 
-// از یک SVG منبع (public/icon.svg) خروجی‌های لازم برای manifest/apple-touch-icon
+// از لوگوی اصلی خروجی‌های لازم برای manifest/apple-touch-icon
 // می‌سازد: favicon.ico، 192/512 معمولی، 512 maskable، و 180 اپلی.
 export default defineConfig({
   preset: {
@@ -12,5 +12,5 @@ export default defineConfig({
       resizeOptions: { background: '#070707', fit: 'contain', padding: 0.3 },
     },
   },
-  images: ['public/icon.svg'],
+  images: ['public/logo.png'],
 })

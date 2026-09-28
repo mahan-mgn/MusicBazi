@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useI18n } from '../lib/i18n'
 import { isLocalServer, localBase, normalizeBase, serverBase, setServerBase } from '../lib/server'
-import { CheckIcon, CloseIcon, HeadphonesIcon, PhoneIcon, Spinner, WarnIcon } from './icons'
+import { CheckIcon, CloseIcon, HeadphonesIcon, PerformanceGaugeIcon, PhoneIcon, Spinner, WarnIcon } from './icons'
 
 type Probe = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok' } | { kind: 'fail' }
 
@@ -155,7 +155,12 @@ export default function ServerSetup({ onDone }: { onDone?: () => void }) {
 
         {/* ---------- یا یک کامپیوتر دیگر ---------- */}
         <section className="mt-6">
-          <h2 className="text-sm font-bold">{t.serverTitle}</h2>
+          <div className="flex items-center gap-2">
+            <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-panel-2 text-accent">
+              <PerformanceGaugeIcon className="size-4" />
+            </span>
+            <h2 className="text-sm font-bold">{t.serverTitle}</h2>
+          </div>
           <p className="mt-1 text-xs leading-6 text-muted">{t.serverBody}</p>
 
           <label className="mt-4 block">

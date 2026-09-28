@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import BottomFadeScrim from './components/BottomFadeScrim'
 import DownloadQueue from './components/DownloadQueue'
 import Footer from './components/Footer'
 import Header from './components/Header'
@@ -12,11 +13,14 @@ import ServerSetup from './components/ServerSetup'
 import SetupWizard from './components/SetupWizard'
 import Shortcuts from './components/Shortcuts'
 import TabBar, { type Tab } from './components/TabBar'
-import { AlbumSkeleton, ResultsSkeleton } from './components/Skeletons'
+import { AlbumSkeleton, ArtistSkeleton, ResultsSkeleton } from './components/Skeletons'
+import EmptyState from './components/EmptyState'
+import { RetryIcon, WarnIcon } from './components/icons'
 import TelegramLink from './components/TelegramLink'
 import Toaster from './components/Toaster'
 import { api, API_MODE } from './lib/api'
 import { closeTopLayer } from './lib/back'
+import { mountLiquidGlass, unmountLiquidGlass } from './lib/liquidGlass'
 import { isArtistUrl, isUrl } from './lib/format'
 import { onBackButton, onSharedText, onShortcut, takeShortcutRoute, type ShortcutRoute } from './lib/native'
 import { useI18n } from './lib/i18n'
@@ -31,10 +35,15 @@ import type {
   ArtistDetail,
   Playlist,
   SearchResults as Results,
+  Track,
 } from './lib/types'
+import { findBestJob, toPlayItem } from './lib/stream'
+import { isDone, useDownloads } from './store/downloads'
+import { usePlayer } from './store/player'
 import { usePreview } from './lib/usePreview'
 import { useRecent } from './store/recent'
 import { useSearchHistory } from './store/searchHistory'
+import { useSettings } from './store/settings'
 import { useTelegram } from './store/telegram'
 import { useToasts } from './store/toasts'
 
@@ -94,6 +103,43 @@ function pushView(view: View, replace = false) {
   else history.pushState(null, '', url)
 }
 
+/**
+ * شکستِ بارگذاریِ صفحه‌ی جزئیات (آلبوم/هنرمند/نتایج) — قبلاً همان حالت به
+ * اسکلتونِ ابدی ختم می‌شد چون شرطِ رندر فقط «داده نیست» را می‌دید. این،
+ * خطا را با «تلاش دوباره» و راهِ فرار به خانه نشان می‌دهد.
+ */
+export function LoadFailed({
+  text,
+  onRetry,
+  onHome,
+}: {
+  text: string
+  onRetry: () => void
+  onHome: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="mx-auto w-full max-w-md">
+      <EmptyState icon={<WarnIcon className="size-5 text-warn" />} text={text} />
+      <div className="mt-4 flex justify-center gap-3">
+        <button
+          onClick={onRetry}
+          className="flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-accent-fg"
+        >
+          <RetryIcon className="size-4" />
+          {t.retry}
+        </button>
+        <button
+          onClick={onHome}
+          className="rounded-full border border-line px-4 py-2 text-sm text-muted hover:text-fg"
+        >
+          {t.home}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   // در اپ نیتیو تا وقتی ندانیم سرور کجاست، هیچ‌کدام از صفحه‌ها معنا ندارند —
   // همه‌شان یک لیستِ خالی و یک toast خطا نشان می‌دادند
@@ -111,7 +157,28 @@ export default function App() {
   const [results, setResults] = useState<Results | null>(null)
   const [album, setAlbum] = useState<AlbumDetail | null>(null)
   const [artist, setArtist] = useState<ArtistDetail | null>(null)
+
+  const enrichedAlbum = useMemo(() => {
+    if (!album) return null
+    return {
+      ...album,
+      tracks: album.tracks.map((t) => ({
+        ...t,
+        album: t.album || album.title,
+        albumId: t.albumId || album.id,
+        artworkUrl: t.artworkUrl || album.artworkUrl,
+        artistId: t.artistId || (t.artist === album.artist ? album.artistId : undefined),
+        artistArtworkUrl: t.artistArtworkUrl || (t.artist === album.artist ? album.artistArtworkUrl : undefined),
+      })),
+    }
+  }, [album])
   const [loading, setLoading] = useState(false)
+  // «اسکلت ابدی» — لینکِ آلبومِ حذف‌شده (دیزر ۵۰۲ می‌دهد) یا قطعیِ شبکه،
+  // داده را null می‌گذاشت و شرطِ رندر `loading || !data` تا ابد اسکلتون
+  // نشان می‌داد: نه خطایی، نه راهِ برگشت. این، پیامِ خطا را نگه می‌دارد تا
+  // ویوِ بدون‌داده بتواند EmptyStateِ «تلاش دوباره»دار نشان بدهد
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   // مودالِ شناسایی اینجا زندگی می‌کند نه در هدر، چون نتیجه‌اش همان ردیف‌های
   // ترک است و آن‌ها به پیش‌نمایشِ مشترکِ همین صفحه نیاز دارند
   const [identifying, setIdentifying] = useState(() =>
@@ -121,6 +188,30 @@ export default function App() {
   const preview = usePreview()
   const pushToast = useToasts((s) => s.push)
   const { t } = useI18n()
+
+  const currentTrackId = usePlayer((s) => s.queue[s.index]?.track?.id)
+  const isPlaying = usePlayer((s) => s.playing)
+  const playingTrackId = isPlaying ? currentTrackId ?? null : null
+
+  const handlePlayTrack = useCallback(
+    (track: Track, contextTracks?: Track[]) => {
+      preview.stop()
+      if (currentTrackId === track.id) {
+        usePlayer.getState().toggle()
+        return
+      }
+      const tracks = contextTracks && contextTracks.length > 0 ? contextTracks : [track]
+      const startIndex = Math.max(0, tracks.findIndex((t) => t.id === track.id))
+      const quality = useSettings.getState().quality
+      const readyJobs = useDownloads.getState().jobs.filter((j) => isDone(j.status))
+      const items = tracks.map((t) => {
+        const job = findBestJob(readyJobs, t.id, quality)
+        return toPlayItem(t, job, quality)
+      })
+      usePlayer.getState().play(items, startIndex)
+    },
+    [currentTrackId, preview],
+  )
 
   const navigate = useCallback(
     (next: View, { push = true, replace = false }: { push?: boolean; replace?: boolean } = {}) => {
@@ -144,6 +235,14 @@ export default function App() {
   const goLibrary = useCallback(() => navigate({ kind: 'library' }), [navigate])
   const goLiked = useCallback(() => navigate({ kind: 'library', tab: 'liked' }), [navigate])
   const goStats = useCallback(() => navigate({ kind: 'stats' }), [navigate])
+  // هویتِ پایدار: تب‌بار memo است؛ با تابعِ inline هر رندرِ اپ prop عوض
+  // می‌شد و memo بی‌اثر. منطق همان: سرچ‌بار در هدر است، با فوکوس باز می‌شود.
+  const goSearch = useCallback(() => {
+    // سرچ‌بار در هدر است و با فوکوس‌شدن خودش تاریخچه و پیشنهادها را باز می‌کند؛
+    // بالا بردنِ صفحه لازم است چون هدر چسبان است ولی زیرش محتوا
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    document.querySelector<HTMLInputElement>('[data-search-input]')?.focus()
+  }, [])
 
   /*
    * شناسایی هم مثلِ صفحه‌ها در آدرس می‌نشیند (`?identify=1`): قابلِ بوکمارک،
@@ -174,6 +273,19 @@ export default function App() {
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  /*
+   * انکسارِ WebGL روی ناوبریِ شناور. ریشه = `.app-shell`؛ نوارِ ناوبری بچه‌ی
+   * مستقیم آن است، همان‌طور که رندررِ شیشه لازم دارد. تا قبل از init یا در
+   * هر شکستی، همان شیشه‌ی CSS روی صفحه است.
+   *
+   * refِ callback نه useEffect: ویوِ ویزارد/ستاپ زودهنگام return می‌کند و
+   * شل بعداً متولد می‌شود؛ این‌جا mount دقیقاً لحظه‌ی ظاهرشدنِ شل اجرا می‌شود.
+   */
+  const shellRef = useCallback((el: HTMLDivElement | null) => {
+    if (el) void mountLiquidGlass(el)
+    else unmountLiquidGlass()
   }, [])
 
   /*
@@ -285,6 +397,7 @@ export default function App() {
     const ctrl = new AbortController()
     inflight.current = ctrl
     setLoading(true)
+    setDetailError(null)
 
     // صفحه‌ای که واقعاً باز شده و داده‌اش آمده، ارزشِ «ادامه بده» دارد — نه
     // ref‌ای که کاربر تایپ کرده و ۴۰۴ گرفته
@@ -317,9 +430,12 @@ export default function App() {
         if (err instanceof IntranetError) {
           useNet.getState().noteIntranet()
           pushToast(t.intranetPageMissing, 'info')
+          setDetailError(t.intranetPageMissing)
           return
         }
-        pushToast(err instanceof Error ? err.message : t.fetchError, 'error')
+        const message = err instanceof Error ? err.message : t.fetchError
+        pushToast(message, 'error')
+        setDetailError(message)
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setLoading(false)
@@ -327,7 +443,7 @@ export default function App() {
 
     return () => ctrl.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view])
+  }, [view, reloadKey])
 
   /**
    * live=true یعنی حین تایپ (debounce شده از SearchBar): نباید تاریخچه ثبت
@@ -378,6 +494,38 @@ export default function App() {
       history.back()
     }
   }
+
+  // شنونده‌های ناوبری از نمای NowPlaying و مینی‌پلیر
+  useEffect(() => {
+    const onOpenArtist = (e: Event) => {
+      const custom = e as CustomEvent<{ ref?: string }>
+      const ref = custom.detail?.ref
+      if (!ref) return
+      if (ref.startsWith('http') || ref.includes(':artist:') || ref.includes(':user:')) {
+        navigate({ kind: 'artist', ref, from: searchOrigin() })
+      } else {
+        submit(ref)
+      }
+    }
+
+    const onOpenAlbum = (e: Event) => {
+      const custom = e as CustomEvent<{ ref?: string }>
+      const ref = custom.detail?.ref
+      if (!ref) return
+      if (ref.startsWith('http') || ref.includes(':album:') || ref.includes(':playlist:')) {
+        navigate({ kind: 'album', ref, from: searchOrigin() })
+      } else {
+        submit(ref)
+      }
+    }
+
+    window.addEventListener('unstream:open-artist', onOpenArtist)
+    window.addEventListener('unstream:open-album', onOpenAlbum)
+    return () => {
+      window.removeEventListener('unstream:open-artist', onOpenArtist)
+      window.removeEventListener('unstream:open-album', onOpenAlbum)
+    }
+  }, [navigate])
 
   /*
    * دکمه‌ی برگشتِ سخت‌افزاری.
@@ -477,7 +625,7 @@ export default function App() {
     )
 
   return (
-    <div className="app-shell flex flex-col">
+    <div ref={shellRef} className="app-shell flex flex-col">
       <Header
         onServer={() => setSetup(true)}
         onHome={goHome}
@@ -500,63 +648,101 @@ export default function App() {
           هنرمند خلاِ مرده می‌ساخت؛ ۱۰۲۴ تراکمِ سالمی به ردیف‌ها می‌دهد */}
       <main className="px-safe mx-auto w-full max-w-5xl flex-1 pb-12">
         {view.kind === 'home' && (
-          <Home onOpenRef={(kind, ref) => navigate({ kind, ref })} onOpenLibrary={goLibrary} />
+          <Home
+            onOpenRef={(kind, ref) => navigate({ kind, ref })}
+            onOpenLibrary={goLibrary}
+            onFocusSearch={goSearch}
+            onSearch={(query) => submit(query)}
+            onIdentify={openIdentify}
+          />
         )}
 
         {/* خانه خودش سکشن‌های خودش را دارد؛ این جعبه فقط برای بقیه‌ی ویوهاست */}
-        <section className={view.kind === 'library' ? 'pt-8' : view.kind === 'home' ? '' : 'mt-10'}>
-          {/*
-            یک Suspense برای هر سه ویو، نه سه‌تا: هر لحظه فقط یکی‌شان روی صفحه
-            است. فالبکش همان اسکلتونی است که موقعِ آمدنِ داده هم نشان داده
-            می‌شود، پس گذارِ «تکه‌ی کد» و «داده» به چشم یکی می‌آیند.
-          */}
-          <Suspense fallback={<ResultsSkeleton />}>
-          {view.kind === 'library' && <LibraryView initialTab={view.tab} />}
+        {view.kind !== 'home' && (
+          <section
+            key={
+              view.kind === 'album'
+                ? `album:${view.ref}`
+                : view.kind === 'artist'
+                  ? `artist:${view.ref}`
+                  : view.kind === 'results'
+                    ? `results:${view.query}`
+                    : view.kind
+            }
+            className={`page-drill-in ${view.kind === 'library' ? 'pt-8' : 'mt-10'}`}
+          >
+            {/*
+              یک Suspense برای هر سه ویو، نه سه‌تا: هر لحظه فقط یکی‌شان روی صفحه
+              است. فالبکش همان اسکلتونی است که موقعِ آمدنِ داده هم نشان داده
+              می‌شود، پس گذارِ «تکه‌ی کد» و «داده» به چشم یکی می‌آیند.
+            */}
+            <Suspense fallback={<ResultsSkeleton />}>
+            {view.kind === 'library' && <LibraryView initialTab={view.tab} />}
 
-          {view.kind === 'stats' && <StatsView />}
+            {view.kind === 'stats' && <StatsView />}
 
-          {view.kind === 'results' &&
-            (loading || !results ? (
-              <ResultsSkeleton />
-            ) : (
-              <SearchResults
-                results={results}
-                playingId={preview.playingId}
-                onTogglePlay={preview.toggle}
-                onOpenAlbum={openAlbum}
-                onOpenArtist={openArtist}
-                onOpenPlaylist={openPlaylist}
-              />
-            ))}
+            {view.kind === 'results' &&
+              (loading || !results ? (
+                detailError ? (
+                  <LoadFailed text={detailError} onRetry={() => setReloadKey((k) => k + 1)} onHome={goHome} />
+                ) : (
+                  <ResultsSkeleton />
+                )
+              ) : (
+                <SearchResults
+                  results={results}
+                  playingId={playingTrackId}
+                  onTogglePlay={(t) => handlePlayTrack(t, results.tracks)}
+                  onOpenAlbum={openAlbum}
+                  onOpenArtist={openArtist}
+                  onOpenPlaylist={openPlaylist}
+                />
+              ))}
 
-          {view.kind === 'album' &&
-            (loading || !album ? (
-              <AlbumSkeleton />
-            ) : (
-              <AlbumView
-                album={album}
-                playingId={preview.playingId}
-                onTogglePlay={preview.toggle}
-                onOpenArtist={openArtistRef}
-                onBack={back}
-              />
-            ))}
+            {view.kind === 'album' &&
+              (loading || !enrichedAlbum ? (
+                detailError ? (
+                  <LoadFailed text={detailError} onRetry={() => setReloadKey((k) => k + 1)} onHome={goHome} />
+                ) : (
+                  <AlbumSkeleton />
+                )
+              ) : (
+                <AlbumView
+                  album={enrichedAlbum}
+                  playingId={playingTrackId}
+                  onTogglePlay={(t) => handlePlayTrack(t, enrichedAlbum.tracks)}
+                  onOpenAlbum={openAlbum}
+                  onOpenArtist={openArtistRef}
+                  onBack={back}
+                />
+              ))}
 
-          {view.kind === 'artist' &&
-            (loading || !artist ? (
-              <AlbumSkeleton />
-            ) : (
-              <ArtistView
-                artist={artist}
-                playingId={preview.playingId}
-                onTogglePlay={preview.toggle}
-                onOpenAlbum={openAlbum}
-                onOpenPlaylist={openPlaylist}
-                onBack={back}
-              />
-            ))}
-          </Suspense>
-        </section>
+            {view.kind === 'artist' &&
+              (loading || !artist ? (
+                detailError ? (
+                  <LoadFailed text={detailError} onRetry={() => setReloadKey((k) => k + 1)} onHome={goHome} />
+                ) : (
+                  <ArtistSkeleton />
+                )
+              ) : (
+                <ArtistView
+                  artist={artist}
+                  playingId={playingTrackId}
+                  onTogglePlay={(t) =>
+                    handlePlayTrack(
+                      t.artistArtworkUrl ? t : { ...t, artistArtworkUrl: artist.artworkUrl },
+                      artist.topTracks.map((tr) => (tr.artistArtworkUrl ? tr : { ...tr, artistArtworkUrl: artist.artworkUrl })),
+                    )
+                  }
+                  onOpenAlbum={openAlbum}
+                  onOpenPlaylist={openPlaylist}
+                  onOpenArtist={openArtist}
+                  onBack={back}
+                />
+              ))}
+            </Suspense>
+          </section>
+        )}
       </main>
 
       {identifying && (
@@ -565,25 +751,23 @@ export default function App() {
         <Suspense fallback={null}>
           <Identify
             onClose={closeIdentify}
-            playingId={preview.playingId}
-            onTogglePlay={preview.toggle}
+            playingId={playingTrackId}
+            onTogglePlay={(t) => handlePlayTrack(t)}
           />
         </Suspense>
       )}
 
       <Footer />
 
+      {/* شیدِ محوِ کف صفحه مطابق BottomFadeScrim در BitChord */}
+      <BottomFadeScrim />
+
       <TabBar
         active={tab}
         onHome={goHome}
         onLibrary={goLibrary}
         onStats={goStats}
-        onSearch={() => {
-          // سرچ‌بار در هدر است و با فوکوس‌شدن خودش تاریخچه را باز می‌کند؛
-          // بالا بردنِ صفحه لازم است چون هدر چسبان است ولی زیرش محتوا
-          window.scrollTo({ top: 0, behavior: 'smooth' })
-          document.querySelector<HTMLInputElement>('[data-search-input]')?.focus()
-        }}
+        onSearch={goSearch}
       />
 
       <TelegramLink />

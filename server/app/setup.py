@@ -61,6 +61,7 @@ ALLOWED_KEYS = frozenset(
         "UNSTREAM_AUDD_TOKEN",
         "UNSTREAM_GEMINI_API_KEY",
         "UNSTREAM_TELEGRAM_BOT_TOKEN",
+        "UNSTREAM_SOUNDCLOUD_CLIENT_ID",
         "UNSTREAM_PROXY",
         "UNSTREAM_YTDLP_PROXY",
         "UNSTREAM_COOKIES_FILE",
@@ -507,6 +508,12 @@ async def setup_save(req: SaveRequest) -> dict:
     unknown = set(req.values) - ALLOWED_KEYS
     if unknown:
         raise HTTPException(400, "کلیدِ مجاز نیست")
+    # مقدارِ چندخطی یعنی تزریق: `UNSTREAM_PROXY=a\nUNSTREAM_DB=/evil` یک خط
+    # مجاز می‌نویسد و خطِ دومِ دلخواه را کنارش، بیرونِ allowlist. این اندپوینت
+    # احراز هویت ندارد، پس تنها دفاع همین است.
+    for k, v in req.values.items():
+        if any(c in v for c in ("\n", "\r", "\x00")):
+            raise HTTPException(400, f"مقدارِ {k} نباید چند خط باشد")
     values = {k: v.strip() for k, v in req.values.items()}
     if req.done:
         values["UNSTREAM_SETUP_DONE"] = "1"
@@ -517,7 +524,11 @@ async def setup_save(req: SaveRequest) -> dict:
     for k, v in values.items():
         os.environ[k] = v
     restarting = False
-    if changed and req.restart:
+    # driftِ اجرایِ قبلی (بنر «ری‌استارت لازم است») هم دلیلِ ری‌استارت است، نه
+    # فقط تغییرِ تازه: بی‌این، کاربر «ادامه» را می‌زند، سرور `changed=[]`
+    # برمی‌گرداند و ری‌استارتی نمی‌کند — بنر هیچ‌وقت برطرف نمی‌شد
+    needs_restart = bool(changed) or _restart_needed()
+    if needs_restart and req.restart:
         # اول نگهبان را می‌سازیم، بعد قول می‌دهیم — اگر ساختنش نشد، سرورِ فعلی
         # باید زنده بماند و پیامِ «دستی ری‌استارت کن» برود
         if spawn_relauncher():
@@ -527,7 +538,7 @@ async def setup_save(req: SaveRequest) -> dict:
         "ok": True,
         "changed": changed,
         "restarting": restarting,
-        "manualRestart": bool(changed) and req.restart and not restarting,
+        "manualRestart": needs_restart and req.restart and not restarting,
     }
 
 

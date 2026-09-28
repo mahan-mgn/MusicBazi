@@ -18,6 +18,8 @@ from . import soundcloud
 YOUTUBE_URL = re.compile(r"(youtube\.com|youtu\.be)", re.I)
 SOUNDCLOUD_URL = re.compile(r"soundcloud\.com", re.I)
 SPOTIFY_URL = re.compile(r"open\.spotify\.com/(album|playlist|track)/([A-Za-z0-9]+)", re.I)
+INSTAGRAM_URL = re.compile(r"(instagram\.com|instagr\.am)/(?:reel|p|tv)/", re.I)
+TIKTOK_URL = re.compile(r"(tiktok\.com/|vm\.tiktok\.com/)", re.I)
 
 # صفحه‌ی یک کانال، با هر چهار شکلی که یوتیوب برای آدرسش دارد. تبِ انتهایی
 # (`/videos`، `/playlists`، …) عمداً بیرون گروه می‌ماند: لینکی که کاربر
@@ -62,6 +64,12 @@ def _title_from_url(url: str) -> str:
     return slug.replace("-", " ").replace("_", " ").strip()
 
 
+def _track_year(entry: dict[str, Any]) -> int | None:
+    """سالِ انتشار ترک — صفر یعنی نمی‌دانیم و نباید روی Track بنشیند."""
+    year = _year(entry.get("release_year") or entry.get("release_date") or entry.get("upload_date"))
+    return year or None
+
+
 def _entry_to_track(entry: dict[str, Any], source: Source, album: str | None) -> Track:
     # extract_flat عنوان را خام می‌دهد؛ «Artist - Title» را جدا می‌کنیم
     raw = entry.get("title") or ""
@@ -69,26 +77,51 @@ def _entry_to_track(entry: dict[str, Any], source: Source, album: str | None) ->
     artist = entry.get("artist") or ""
     title = entry.get("track") or raw
 
+    track_num = None
+    if m := re.match(r"^(\d{1,3})\s*[-–—.]\s*(.+)$", raw):
+        track_num = int(m.group(1))
+        clean_raw = m.group(2).strip()
+    else:
+        clean_raw = raw
+
     if not artist:
-        if " - " in raw:
-            artist, title = (p.strip() for p in raw.split(" - ", 1))
+        if " - " in clean_raw:
+            artist, title = (p.strip() for p in clean_raw.split(" - ", 1))
         else:
             artist = re.sub(r"\s*-\s*Topic$", "", uploader).strip()
+            if not entry.get("track"):
+                title = clean_raw
 
     art = _best_thumb(entry)
 
     vid = entry.get("id") or ""
     source_url = entry.get("webpage_url") or entry.get("url") or ""
+
+    uploader_id = entry.get("uploader_id") or entry.get("user_id")
+    if source == "soundcloud" and uploader_id:
+        artist_id = f"sc:artist:{uploader_id}"
+    elif source == "youtube" and entry.get("channel_id"):
+        artist_id = f"yt:artist:{entry.get('channel_id')}"
+    else:
+        artist_id = None
+
+    set_id = entry.get("set_id")
+    album_id = f"sc:playlist:{set_id}" if (source == "soundcloud" and set_id) else None
+
     return Track(
         id=f"{'sc' if source == 'soundcloud' else 'yt'}:track:{vid}",
         title=title or raw or _title_from_url(source_url),
         artist=artist or uploader or "ناشناس",
-        album=album,
+        album=album or entry.get("album"),
+        albumId=album_id,
         durationMs=int(float(entry.get("duration") or 0) * 1000),
         artworkUrl=art,
         source=source,
         sourceUrl=source_url,
         previewUrl=None,
+        year=_track_year(entry),
+        artistId=artist_id,
+        trackNumber=track_num or entry.get("track_number"),
     )
 
 
@@ -114,11 +147,21 @@ def soundcloud_artist(user_id: str) -> ArtistDetail | None:
 
     # هیچ‌کدام حیاتی نیست: صفحه‌ی یک کاربرِ بی‌آلبوم هم باید باز شود
     try:
-        entries = soundcloud.user_tracks(user_id)
+        uploads = soundcloud.user_tracks(user_id)
     except Exception:
-        entries = []
+        uploads = []
     try:
-        albums = soundcloud.user_albums(user_id)
+        entries = soundcloud.user_top_tracks(user_id)
+        if not entries and uploads:
+            raise RuntimeError("SoundCloud returned no Top Tracks")
+    except Exception:
+        entries = sorted(
+            uploads,
+            key=lambda e: int(e.get("playback_count") or 0),
+            reverse=True,
+        )
+    try:
+        albums = soundcloud.user_discography(user_id, uploads, head)
     except Exception:
         albums = []
     try:
@@ -134,9 +177,18 @@ def soundcloud_artist(user_id: str) -> ArtistDetail | None:
     except Exception:
         reposted = []
 
+    def _owned(e: dict[str, Any]) -> Track:
+        track = _entry_to_track(e, "soundcloud", None)
+        track.artistId = head.id
+        return track
+
+    # تبِ Tracks ساندکلاد تازه‌به‌قدیم است؛ محبوب‌ترین‌های صفحه‌ی هنرمند
+    # همان‌ها را با تعداد پخش می‌چیند — مثل خودِ پلتفرم.
+    entries.sort(key=lambda e: int(e.get("playback_count") or 0), reverse=True)
+
     return ArtistDetail(
         **head.model_dump(),
-        topTracks=[_entry_to_track(e, "soundcloud", None) for e in entries],
+        topTracks=[_owned(e) for e in entries],
         albums=albums,
         playlists=playlists,
         likedTracks=[_entry_to_track(e, "soundcloud", None) for e in liked],
@@ -320,6 +372,30 @@ def extract(url: str) -> AlbumDetail | None:
         except Exception:
             head = None
         avatar = head.artworkUrl if head else None
+    raw_type = (info.get("album_type") or info.get("set_type") or "").lower()
+    uploader_name = (info.get("uploader") or "").strip().casefold()
+    if source == "soundcloud" and is_playlist:
+        if raw_type in ("album", "ep", "single", "compilation"):
+            release_type = raw_type
+        else:
+            # ست ساندکلاد: اگر متعلق به خود هنرمند است (نام آپلودکننده در آرتیست ترک‌ها هست
+            # یا ترک‌ها آرتیست یکسان دارند) یک انتشار آلبومی/EP است نه پلی‌لیست کاربر
+            matching_tracks = [
+                t for t in tracks
+                if uploader_name and (uploader_name in t.artist.casefold() or t.artist.casefold() in uploader_name)
+            ]
+            same_artist = len(set(t.artist.casefold() for t in tracks)) == 1 if tracks else False
+            if (matching_tracks and len(matching_tracks) >= len(tracks) / 2) or same_artist:
+                release_type = soundcloud._release_type(len(tracks))
+            else:
+                release_type = None
+    elif raw_type in ("album", "ep", "single", "compilation"):
+        release_type = raw_type
+    elif is_playlist:
+        release_type = None
+    else:
+        release_type = "single"
+
     return AlbumDetail(
         id=f"{'sc' if source == 'soundcloud' else 'yt'}:{kind}:{info.get('id') or ''}",
         title=title,
@@ -339,6 +415,7 @@ def extract(url: str) -> AlbumDetail | None:
         artistArtworkUrl=avatar,
         durationMs=sum(t.durationMs for t in tracks),
         tracks=tracks,
+        releaseType=release_type,
     )
 
 

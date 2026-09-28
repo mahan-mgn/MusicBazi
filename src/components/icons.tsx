@@ -62,18 +62,17 @@ export const MuteIcon = ({ className = base }: P) => (
 )
 
 export const ShuffleIcon = ({ className = base }: P) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
-    <path d="M4 7h3.5l9 10H20M4 17h3.5l9-10H20" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" strokeLinecap="round" strokeLinejoin="round" />
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M3.4 7.4H7l9.6 9.2h4M18.1 14.1l2.5 2.5-2.5 2.5" />
+    <path d="M3.4 16.6H7l2.8-2.7M13.9 10.1l2.7-2.7h4M18.1 4.9l2.5 2.5-2.5 2.5" />
   </svg>
 )
 
 export const RepeatIcon = ({ className = base, one = false }: P & { one?: boolean }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
-    <path d="M7 5h10a3 3 0 0 1 3 3v3M17 19H7a3 3 0 0 1-3-3v-3" strokeLinecap="round" />
-    <path d="m6.5 2.5-2.5 2.5 2.5 2.5M17.5 21.5 20 19l-2.5-2.5" strokeLinecap="round" strokeLinejoin="round" />
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M8.6 7.6h6.8a4.4 4.4 0 0 1 0 8.8H8.6a4.4 4.4 0 0 1 0-8.8ZM13.5 5.7l1.9 1.9-1.9 1.9M10.5 14.5 8.6 16.4l1.9 1.9" />
     {one && (
-      <text x="12" y="15" textAnchor="middle" fontSize="9" fill="currentColor" stroke="none">
+      <text x="12" y="14.5" textAnchor="middle" fontSize="8" fontWeight="bold" fill="currentColor" stroke="none">
         1
       </text>
     )}
@@ -174,6 +173,13 @@ export const ArrowIcon = ({ className = base }: P) => (
   </svg>
 )
 
+/** فلش عمودی با قابلیت چرخش ۱۸۰ درجه برای تغییر جهت سورت (BitChord Arrow Flip) */
+export const ArrowUpIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+    <path d="M12 19V5m0 0-5 5m5-5 5 5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
 export const LinkIcon = ({ className = base }: P) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
     <path d="M10 13.5a3.5 3.5 0 0 0 5 0l3-3a3.54 3.54 0 0 0-5-5l-1.2 1.2" strokeLinecap="round" />
@@ -197,10 +203,8 @@ export const HomeIcon = ({ className = base }: P) => (
 )
 
 export const LibraryIcon = ({ className = base }: P) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
-    <path d="M4 4v16M8.5 4v16" strokeLinecap="round" />
-    <path d="m13 5.2 5 15.2" strokeLinecap="round" />
-    <path d="M11.5 9.5h9M11.5 15h9" strokeLinecap="round" opacity="0.45" />
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M4.6 4.8v14.4M9.2 4.8v14.4M13.8 4.8v14.4M17.2 5.6l3.4 13.3" />
   </svg>
 )
 
@@ -454,20 +458,19 @@ export const StatsIcon = ({ className = base }: P) => (
   </svg>
 )
 
-/** قلبِ علاقه‌مندی — `filled` یعنی لایک‌شده (توپُر)، وگرنه فقط خط */
+/** قلبِ علاقه‌مندی — تناسبات ارگانیک بیت‌کورد و اپل موزیک */
 export const HeartIcon = ({ className = base, filled = false }: P & { filled?: boolean }) => (
   <svg
     viewBox="0 0 24 24"
     fill={filled ? 'currentColor' : 'none'}
     stroke="currentColor"
-    strokeWidth="1.7"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
     className={className}
+    aria-hidden="true"
   >
-    <path
-      d="M12 20.5s-7.5-4.7-9.3-9.2C1.4 8 3.4 4.9 6.6 4.9c2 0 3.6 1.1 4.4 2.7.8-1.6 2.4-2.7 4.4-2.7 3.2 0 5.2 3.1 3.9 6.4-1.8 4.5-9.3 9.2-9.3 9.2z"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
+    <path d="M12 20C12 20 3.2 14.6 3.2 8.9A4.5 4.5 0 0 1 12 7.4a4.5 4.5 0 0 1 8.8 1.5C20.8 14.6 12 20 12 20Z" />
   </svg>
 )
 
@@ -479,3 +482,224 @@ export const BatteryIcon = ({ className = base }: P) => (
     <path d="M6 8.5v7" strokeLinecap="round" />
   </svg>
 )
+
+/** تمام‌صفحه (ورود به حالت سینمایی/کامل) */
+export const MaximizeIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+/** خروج از تمام‌صفحه */
+export const MinimizeIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
+    <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+/** نشان تأیید هنرمند — ستاره‌ی دندانه‌دار با تیک در مرکز */
+export const VerifiedBadgeIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+    <path d="m8.6 22.5-1.9-3.2-3.6-.8.4-3.7-2.5-2.8 2.5-2.8-.4-3.7 3.6-.8 1.9-3.2 3.4 1.5 3.4-1.5 1.9 3.2 3.6.8-.4 3.7 2.5 2.8-2.5 2.8.4 3.7-3.6.8-1.9 3.2-3.4-1.5-3.4 1.5zm2.1-7.2 6-6-1.4-1.4-4.6 4.6-2.2-2.2-1.4 1.4 3.6 3.6z" />
+  </svg>
+)
+
+/** آیکون اطلاعات / درباره */
+export const InfoIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 8h.01M12 12v4" strokeLinecap="round" />
+  </svg>
+)
+
+/** دیسک گرامافون وینیل */
+export const VinylIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className} aria-hidden="true">
+    <circle cx="12" cy="12" r="9.5" />
+    <circle cx="12" cy="12" r="6.5" strokeDasharray="3 3" opacity="0.6" />
+    <circle cx="12" cy="12" r="3.5" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" />
+  </svg>
+)
+
+/** کاور ساده آلبوم */
+export const CoverIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className} aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="3.5" />
+    <circle cx="12" cy="12" r="3.5" opacity="0.7" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" />
+  </svg>
+)
+
+/** موج فرکانسی صوتی / ویژوالایزر */
+export const WaveformIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className={className} aria-hidden="true">
+    <path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 11v2" />
+  </svg>
+)
+
+/** الماس نشان کیفیت استودیویی / لاس‌لس (Lossless Audio Diamond) */
+export const QualityDiamondIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M6 3h12l4 7-10 11L2 10l4-7z" />
+    <path d="M2 10h20M12 21 8 10 12 3l4 7-4 11" opacity="0.7" />
+  </svg>
+)
+
+/** حباب نقل‌قول متن ترانه به سبک اپل موزیک و بیت‌کورد */
+export const LyricsQuoteIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M6 3.5h12q3 0 3 3V15q0 3-3 3h-8l-4 3v-3q-3 0-3-3V6.5q0-3 3-3Z" />
+    <path
+      fill="currentColor"
+      stroke="none"
+      d="M7.6 8h3v3.1q0 2.1-2.5 2.6l-.6-1.4q1.2-.3 1.2-1.3h-1.1V8Zm5.2 0h3v3.1q0 2.1-2.5 2.6l-.6-1.4q1.2-.3 1.2-1.3h-1.1V8Z"
+    />
+  </svg>
+)
+
+/** بلندگوی کم‌صدا (Volume Down) */
+export const VolumeDownIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className} aria-hidden="true">
+    <path d="M4 9.5h3L11.5 6v12L7 14.5H4v-5Z" strokeLinejoin="round" />
+    <path d="M15 10a3 3 0 0 1 0 4" strokeLinecap="round" />
+  </svg>
+)
+
+/** بلندگوی پرصدا (Volume Up) */
+export const VolumeUpIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className} aria-hidden="true">
+    <path d="M4 9.5h3L11.5 6v12L7 14.5H4v-5Z" strokeLinejoin="round" />
+    <path d="M15 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" strokeLinecap="round" />
+  </svg>
+)
+
+/** اینفینیتی / اتوپلی (Infinity / Autoplay) با انحنای متقارن بیت‌کورد */
+export const InfinityIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M12 12C10.1 9.1 8.7 8 7.1 8a4 4 0 0 0 0 8c1.6 0 3-1.1 4.9-4 1.9-2.9 3.3-4 4.9-4a4 4 0 0 1 0 8c-1.6 0-3-1.1-4.9-4Z" />
+  </svg>
+)
+
+/** میله‌های اکولایزر برای ترک در حال پخش در صف */
+export const EqWaveIcon = ({ className = '' }: P) => (
+  <span aria-hidden className={`inline-flex items-end gap-[2px] h-3.5 ${className}`}>
+    <span className="eq-bar w-[2.5px] rounded-full bg-current" style={{ height: '60%' }} />
+    <span className="eq-bar w-[2.5px] rounded-full bg-current" style={{ height: '100%' }} />
+    <span className="eq-bar w-[2.5px] rounded-full bg-current" style={{ height: '40%' }} />
+  </span>
+)
+
+/** سنجاق / پونز پین کردن (BitChord Pin) */
+export const PinIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <circle cx="13" cy="8.4" r="3.4" />
+    <path d="m10.8 10.8-5.2 8.8" />
+  </svg>
+)
+
+/** بج دالبی اتموس (Dolby Atmos) برای صدای فراگیر و کیفیت استودیویی */
+export const DolbyAtmosBadge = ({ className = 'w-5 h-3' }: P) => (
+  <svg viewBox="0 0 109 77" fill="currentColor" className={className} aria-label="Dolby Atmos">
+    <path
+      fillRule="evenodd"
+      d="M0 0v76.6h109V0H0zm12.9 10h12.4c12.9 0 23.6 12.9 23.6 28.2 0 15.7-10.7 28.4-23.6 28.4H12.9V10zm70.8 0h12.5v56.6H83.7C70.8 66.6 60 53.9 60 38.2c0-15.3 10.8-28.2 23.7-28.2z"
+    />
+  </svg>
+)
+
+/** نشان امواج صوتی بیت‌کورد (BitChord Audio Waves Mark) */
+export const BitChordWaveLogo = ({ className = 'w-6 h-4' }: P) => (
+  <svg viewBox="0 0 730 484" fill="currentColor" className={className} aria-hidden="true">
+    <path d="M6.7 317C20.2 294.2 49.7 286.6 72.4 300.2c165.2 98.1 437.7 107.1 595.4 59.2 25.3-7.7 52.1 6.6 59.8 32 7.7 25.3-6.6 52.1-32 59.8-181 55-482 44.3-672.1-68.5C0.7 369.1-6.8 339.7 6.7 317Zm71.1-162.1c11.6-18.8 36.2-24.8 55-13.2 137.8 84.7 347.7 109.2 510.7 59.8 21.1-6.4 43.4 5.5 49.9 26.6 6.4 21.1-5.5 43.4-26.6 49.8-186.1 56.5-417.5 29.1-575.7-68.1-18.8-11.6-24.7-36.2-13.3-54.9Zm62.7-139.6c9.2-15 28.9-19.8 43.9-10.6 120.3 73.5 271.8 90.1 450.2 49.4 17.2-3.9 34.3 6.9 38.2 24.1 3.9 17.2-6.8 34.3-24 38.2-195.2 44.6-362.7 25.4-497.8-57.1-15-9.2-19.8-28.9-10.5-44Z" />
+  </svg>
+)
+
+/** نماد اشتراک‌گذاری (TIDAL Share) */
+export const ShareIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <circle cx="18" cy="5" r="3" />
+    <circle cx="6" cy="12" r="3" />
+    <circle cx="18" cy="19" r="3" />
+    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+  </svg>
+)
+
+/** نماد سه خط افقی صف پخش (TIDAL Queue Menu) */
+export const MenuLinesIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={className} aria-hidden="true">
+    <line x1="4" y1="7" x2="20" y2="7" />
+    <line x1="4" y1="12" x2="20" y2="12" />
+    <line x1="4" y1="17" x2="20" y2="17" />
+  </svg>
+)
+
+/** نماد دوربین و لنز برای تغییر حالت و ویژوالایزر (TIDAL Camera/Visualizer) */
+export const CameraLensIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className} aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="6" />
+    <circle cx="12" cy="12" r="4.2" strokeWidth="1.8" />
+    <circle cx="16.5" cy="7.5" r="1.2" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+/** نماد دکمه شناور همگام‌سازی لیریکس (TIDAL Lyrics Sync / Auto-scroll) */
+export const SyncLyricsIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+    <path d="M16 21h5v-5" />
+    <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+  </svg>
+)
+
+
+
+/**
+ * نت‌های چنگ به هم پیوسته (Instrumental)
+ * برگرفته از BitChordIcons.MusicNote برای بخش‌های بی‌کلام لیریکس
+ */
+export const InstrumentalIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path fill="currentColor" stroke="none" d="M4.2 17.7a2.9 2.5 0 1 1 5.8 0 2.9 2.5 0 0 1-5.8 0ZM14.2 15.9a2.9 2.5 0 1 1 5.8 0 2.9 2.5 0 0 1-5.8 0Z" />
+    <path d="M10 17.7V6.7M20 15.9V4.9M10 6.7l10-1.8" />
+  </svg>
+)
+
+/**
+ * قطب‌نمای کاوش (Explore Compass)
+ * برگرفته از BitChordIcons.Explore برای کشف موسیقی و پیشنهادها
+ */
+export const ExploreIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <circle cx="12" cy="12" r="8.6" />
+    <polygon points="15.4,8.6 13.6,13.6 8.6,15.4 10.4,10.4" fill="currentColor" fillOpacity="0.2" stroke="currentColor" />
+  </svg>
+)
+
+/**
+ * سرعت‌سنج / گیج عملکرد و پینگ سرور (Performance Gauge)
+ * برگرفته از BitChordIcons.Performance
+ */
+export const PerformanceGaugeIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <path d="M4.1 16.8a8.4 8.4 0 1 1 15.8 0" />
+    <path d="m12 15.8 4.7-6.5" />
+    <circle cx="12" cy="16.9" r="1.1" fill="currentColor" />
+    <path d="M5.4 19.5h13.2" />
+  </svg>
+)
+
+/**
+ * ساعت انتظار صف دانلود (Clock / Pending)
+ * برگرفته از BitChordIcons.Clock
+ */
+export const ClockPendingIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <circle cx="12" cy="12" r="8.6" />
+    <polyline points="12,7.4 12,12 15.4,13.8" />
+  </svg>
+)
+

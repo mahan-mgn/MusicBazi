@@ -32,6 +32,7 @@ from . import (
     resolver,
     setup,
     split,
+    stream_cache,
     telegram,
     verify,
     vibe,
@@ -50,6 +51,7 @@ from .config import (
     FFMPEG_LOCATION,
     FILE_RETENTION_SECONDS,
     GEMINI_API_KEY,
+    GEMINI_MODEL,
     HTTP_TIMEOUT,
     JS_RUNTIME,
     LOUDNESS_ENABLED,
@@ -226,6 +228,9 @@ async def health() -> dict:
             "fileRetentionDays": round(FILE_RETENTION_SECONDS / 86400, 1),
             # بدون این، چت‌بات وایب فقط با نگاشت کلیدواژه‌ای کار می‌کند
             "vibeLlm": bool(GEMINI_API_KEY),
+            # نامِ مدل فقط وقتی کلید هست معنا دارد؛ فرانت با آن می‌گوید
+            # «Gemini فعال است» یا «حالتِ ساده (کلیدواژه)»
+            "vibeModel": GEMINI_MODEL if GEMINI_API_KEY else None,
         },
     }
 
@@ -332,7 +337,9 @@ async def artwork_file(sha: str):
         raise HTTPException(404, "شناسه‌ی کاور نامعتبر است")
 
     if path := await asyncio.to_thread(artcache.stored, sha):
-        return FileResponse(path, headers={"cache-control": ART_CACHE_CONTROL})
+        return FileResponse(
+            path, media_type=artcache.sniff(path), headers={"cache-control": ART_CACHE_CONTROL}
+        )
 
     if not reach.online():
         # در حالتِ اینترانت گرفتنش فقط یک تایم‌اوت است؛ صفحه‌ای که سی کاورِ
@@ -340,7 +347,9 @@ async def artwork_file(sha: str):
         raise HTTPException(404, "این کاور هنوز ذخیره نشده")
 
     if path := await asyncio.to_thread(artcache.fetch, sha):
-        return FileResponse(path, headers={"cache-control": ART_CACHE_CONTROL})
+        return FileResponse(
+            path, media_type=artcache.sniff(path), headers={"cache-control": ART_CACHE_CONTROL}
+        )
 
     raise HTTPException(404, "کاور در دسترس نیست")
 
@@ -453,6 +462,10 @@ async def vibe_suggest(req: VibeRequest, request: Request) -> VibeSuggestion:
     """چت‌بات پیشنهاد پلی‌لیست: پیامِ آزاد یا کلیدِ یک چیپ، پلی‌لیستِ پیشنهادی برمی‌گردد."""
     if not (req.message or "").strip() and not req.vibe:
         raise HTTPException(400, "متن یا وایب باید مشخص باشد")
+    # سقفِ نگارشی: پیامِ چند ده‌هزار‌تایی هم هزینه‌ی Gemini است و هم بدنه‌ی
+    # درخواستِ هر درخواستِ بعدی (تاریخچه همین متن‌ها را دوباره می‌برند)
+    if req.message and len(req.message) > 500:
+        req.message = req.message[:500]
 
     return artcache.localize(await vibe.build_playlist(request.app.state.http, req))
 
@@ -485,31 +498,17 @@ async def album(ref: str, request: Request) -> AlbumDetail:
 
 @app.get("/api/artist", response_model=ArtistDetail)
 async def artist(ref: str, request: Request) -> ArtistDetail:
+    """
+    صفحه‌ی هنرمند — آنلاین همیشه از پلتفرم تازه می‌آید.
+
+    کش فقط برای قطعیِ بین‌الملل است (و فالبک وقتی واکشی تازه شکست بخورد).
+    بازگرداندنِ صفحه‌ی یک‌ساعته باعث می‌شد انتشارِ تازه تا رفرشِ دستی دیده نشود.
+    """
     if CATALOG_CACHE_ENABLED and not reach.online():
         if cached := await asyncio.to_thread(catcache.artist, ref):
             return artcache.localize(cached)
         if await _still_offline():
             raise _intranet()
-
-    # stale-while-revalidate: اگر صفحه از قبل در کش است، همان — بی‌درنگ —
-    # برگردانده می‌شود و فقط وقتی پیرتر از یک ساعت است، واکشیِ تازه در
-    # پسزمینه رخ میدهد. بازکردنِ دوبارهی یک هنرمند از ۸.۶ ثانیه به
-    # میلیثانیه میرسد؛ هزینه‌اش فقط «ممکن است تا یک ساعت قدیمی باشد» است.
-    if CATALOG_CACHE_ENABLED and (cached := await asyncio.to_thread(catcache.artist_with_age, ref)):
-        detail, age = cached
-        if age <= catcache.ARTIST_FRESH_SECONDS:
-            return artcache.localize(detail)
-
-        async def _revalidate() -> None:
-            try:
-                fresh = await catalog.resolve_artist(request.app.state.http, ref)
-            except Exception:
-                return  # قطعیِ شبکه با کشِ کهنه بهتر از هیچ — بی‌صدا رد شو
-            if fresh is not None:
-                await asyncio.to_thread(catcache.remember_ref, ref, "artist", fresh)
-
-        asyncio.create_task(_revalidate())
-        return artcache.localize(detail)
 
     try:
         detail = await catalog.resolve_artist(request.app.state.http, ref)
@@ -1001,6 +1000,96 @@ async def stream_file(job_id: str) -> FileResponse:
         job.path,
         media_type=AUDIO_MIME.get(job.path.suffix.lower(), "application/octet-stream"),
     )
+
+
+@app.get("/api/stream")
+async def stream_audio(
+    track_id: str,
+    title: str,
+    artist: str,
+    request: Request = None,  # type: ignore[assignment]
+    album: str | None = None,
+    duration_ms: int = 0,
+    source: str = "spotify",
+    source_url: str = "",
+    quality: str | None = None,
+) -> Response:
+    """
+    استریم آنلاین و بلادرنگ صوت بدون نیاز به دانلود دائمی در کتابخانه با بالاترین کیفیت ممکن.
+    """
+    valid_source = (
+        source
+        if source in ("apple", "deezer", "soundcloud", "spotify", "youtube")
+        else "spotify"
+    )
+    track = Track(
+        id=track_id,
+        title=title,
+        artist=artist,
+        album=album,
+        durationMs=duration_ms,
+        source=valid_source,  # type: ignore[arg-type]
+        sourceUrl=source_url or f"https://musicbazi.local/track/{track_id}",
+    )
+    try:
+        range_header = request.headers.get("range") if request is not None else None
+        return await stream_cache.get_stream_response(
+            track, range_header=range_header, quality=quality
+        )
+    except Exception as exc:
+        if not reach.online():
+            raise HTTPException(
+                503, "اینترنت بین‌الملل در دسترس نیست و این ترک در کش ذخیره نشده است"
+            ) from exc
+        raise HTTPException(502, f"خطا در استریم صوت: {exc}") from exc
+
+
+@app.get("/api/stream/lyrics")
+async def stream_lyrics(
+    track_id: str,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_ms: int = 0,
+) -> Response:
+    """متن ترانه همگام برای ترک استریم‌شده."""
+    track = Track(
+        id=track_id,
+        title=title,
+        artist=artist,
+        album=album,
+        durationMs=duration_ms,
+        source="spotify",
+        sourceUrl=f"https://musicbazi.local/track/{track_id}",
+    )
+    content = await stream_cache.get_or_fetch_lyrics(track)
+    if not content:
+        raise HTTPException(404, "متنی برای این آهنگ یافت نشد")
+    return Response(content=content, media_type="text/plain; charset=utf-8")
+
+
+@app.post("/api/stream/prefetch")
+async def stream_prefetch(req: TrackRef) -> dict:
+    """پری‌فچ ترک بعدی در پس‌زمینه برای حذف تأخیر در تعویض آهنگ."""
+    if not (req.title and req.artist):
+        return {"ok": False}
+
+    valid_source = (
+        req.source
+        if req.source in ("apple", "deezer", "soundcloud", "spotify", "youtube")
+        else "spotify"
+    )
+    track = Track(
+        id=req.trackId,
+        title=req.title,
+        artist=req.artist,
+        album=req.album,
+        durationMs=req.durationMs or 0,
+        source=valid_source,  # type: ignore[arg-type]
+        sourceUrl=req.sourceUrl or f"https://musicbazi.local/track/{req.trackId}",
+    )
+    asyncio.create_task(stream_cache.get_or_fetch(track, quality=req.quality))
+    return {"ok": True}
 
 
 @app.get("/api/downloads/{job_id}/thumb")

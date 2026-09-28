@@ -128,6 +128,7 @@ export function useSheetDrag({ onClose, enabled = true }: Options) {
       offset = 0
       dragging = null
       el.style.transition = 'none'
+      el.style.animation = 'none'
       if (backdrop.current) backdrop.current.style.transition = 'none'
     }
 

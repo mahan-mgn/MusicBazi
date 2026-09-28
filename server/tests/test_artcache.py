@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app import artcache
+from app import artcache, db
 from app.models import AlbumDetail, SearchResults, Track, UserPlaylist
 
 APPLE_500 = "https://is1-ssl.mzstatic.com/image/thumb/x/500x500bb.jpg"
@@ -183,4 +183,57 @@ def test_self_referential_row_is_dropped_not_fetched(mirror):
 
     assert artcache.fetch(sha) is None
     assert mirror.artwork_row(sha) is None
+
+
+class TestSniff:
+    """
+    هدرِ Content-Type سروِ کاور.
+
+    فایل‌های آینه بیِ پسوندند و `FileResponse` بیِ media_type آن‌ها را
+    octet-stream می‌فروشد — مرورگر sniffing می‌کند ولی curl/دیباگر نوعِ
+    غلط می‌بینند.
+    """
+
+    def test_jpeg_png_webp_are_recognized(self, tmp_path):
+        for name, blob, want in [
+            ("a", b"\xff\xd8\xff\xe0\x00\x10JFIF", "image/jpeg"),
+            ("b", b"\x89PNG\r\n\x1a\n" + b"\x00" * 4, "image/png"),
+            ("c", b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp"),
+        ]:
+            p = tmp_path / name
+            p.write_bytes(blob)
+            assert artcache.sniff(p) == want
+
+    def test_unknown_bytes_and_missing_file_return_none(self, tmp_path):
+        p = tmp_path / "junk"
+        p.write_bytes(b"not an image at all....")
+        assert artcache.sniff(p) is None
+        assert artcache.sniff(tmp_path / "ghost") is None
+
+
+class TestServe:
+    """مسیرِ `/api/art/{sha}` باید نوعِ واقعیِ تصویر را اعلام کند."""
+
+    JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 32
+
+    def test_stored_cover_is_served_as_image_jpeg(self, mirror, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from app import reach
+        from app.main import app
+
+        monkeypatch.setattr(reach, "REACH_PROBES", ())
+        sha = artcache.LOCAL.match(artcache.remember([APPLE_500])[APPLE_500]).group(1)
+        path = artcache.path_for(sha)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.JPEG)
+        db.artwork_stored(sha, "image/jpeg", len(self.JPEG), now=1.0)
+
+        with TestClient(app) as c:
+            res = c.get(f"/api/art/{sha}")
+
+        # پیش از sniff این octet-stream بود؛ مرورگر تحملش کرد، curl نه
+        assert res.status_code == 200
+        assert res.headers["content-type"] == "image/jpeg"
+        assert res.headers["cache-control"] == "public, max-age=31536000, immutable"
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from itertools import zip_longest
 from typing import TypeVar
@@ -13,8 +14,23 @@ from .config import AUDIO_SOURCES
 from .models import Album, AlbumDetail, Artist, ArtistDetail, Playlist, SearchResults, Track
 from .providers import deezer, itunes, soundcloud, spotify, ytdlp
 
+log = logging.getLogger(__name__)
+
 # شناسه‌های داخلی: provider:kind:id
 ID = re.compile(r"^(itunes|deezer|sp|yt|sc):(track|album|playlist|artist|user):(.+)$")
+
+
+def _canonical_ref(ref: str) -> str:
+    """شناسه‌های غیررسمی مانند apple: یا spotify: را به شناسه‌ی رسمی کاتالوگ تبدیل می‌کند."""
+    for prefix, canon in (
+        ("apple:", "itunes:"),
+        ("spotify:", "sp:"),
+        ("soundcloud:", "sc:"),
+        ("youtube:", "yt:"),
+    ):
+        if ref.startswith(prefix):
+            return f"{canon}{ref[len(prefix):]}"
+    return ref
 
 
 _Row = TypeVar("_Row", Track, Album, Artist, Playlist)
@@ -86,23 +102,35 @@ def _dedupe_artists(artists: list[Artist]) -> list[Artist]:
 async def _soundcloud_search(query: str) -> SearchResults:
     """
     ساندکلاد با httpx همگام نوشته شده (چون از مسیر yt-dlp هم صدا زده می‌شود)،
-    پس در thread می‌رود. ترک و آلبوم و هنرمند سه اندپوینت جدا هستند و پشت‌سرهم
-    زدنشان زمان هر جستجو را سه برابر می‌کرد.
+    پس در thread می‌رود. ترک، آلبوم، پلی‌لیست و هنرمند اندپوینت‌های جداگانه هستند.
     """
-    tracks, albums, users = await asyncio.gather(
+    tracks, albums, playlists, users = await asyncio.gather(
         asyncio.to_thread(ytdlp.soundcloud_search, query),
         asyncio.to_thread(soundcloud.search_albums, query),
+        asyncio.to_thread(soundcloud.search_playlists, query),
         asyncio.to_thread(soundcloud.search_users, query),
         return_exceptions=True,
     )
-    # هنرمند در این شرط نمی‌آید: خالی بودنش فقط چند کارت را کم می‌کند، ولی بالا
-    # رفتنِ خطایش می‌توانست جستجویی که ترک و آلبوم داشت را خراب کند
-    if isinstance(tracks, BaseException) and isinstance(albums, BaseException):
-        raise tracks  # هر دو افتاده‌اند؛ یکی باید بالا برود وگرنه بی‌صدا رد می‌شود
+    for name, outcome in (
+        ("tracks", tracks),
+        ("albums", albums),
+        ("playlists", playlists),
+        ("users", users),
+    ):
+        if isinstance(outcome, BaseException):
+            log.warning("SoundCloud %s search failed: %s", name, outcome)
+
+    if (
+        isinstance(tracks, BaseException)
+        and isinstance(albums, BaseException)
+        and isinstance(playlists, BaseException)
+    ):
+        raise tracks  # همه افتاده‌اند؛ یکی باید بالا برود وگرنه بی‌صدا رد می‌شود
     return SearchResults(
         query=query,
         tracks=tracks if isinstance(tracks, list) else [],
         albums=albums if isinstance(albums, list) else [],
+        playlists=playlists if isinstance(playlists, list) else [],
         artists=users if isinstance(users, list) else [],
     )
 
@@ -111,9 +139,8 @@ async def search(client: httpx.AsyncClient, query: str) -> SearchResults:
     """
     کاتالوگ‌ها را همزمان می‌زند. اگر یکی بیفتد، نتیجه‌ی بقیه همچنان برمی‌گردد.
 
-    دو تای آخر شرطی‌اند: اسپاتیفای بدون کلید حتی توکن هم نمی‌گیرد و هر جستجو یک
-    خطای بی‌فایده می‌شد، و ساندکلاد وقتی از AUDIO_SOURCES بیرون است یعنی کاربر
-    نمی‌خواهد از آنجا صدا بیاید — پس نتیجه‌اش هم فقط شلوغی است.
+    اسپاتیفای بدون کلید حتی توکن هم نمی‌گیرد و هر جستجو یک خطای بی‌فایده می‌شد.
+    ساندکلاد کاتالوگ باز است و پیش‌فرض در جستجو می‌آید.
     """
     optional = {
         "spotify": spotify.enabled(),
@@ -122,7 +149,7 @@ async def search(client: httpx.AsyncClient, query: str) -> SearchResults:
         # return_exceptions می‌آید تا اگر افتاد، بقیه‌ی جستجو را پایین نکشد؛
         # فقط بخشِ پلی‌لیست‌ها یک منبع کمتر می‌شود.
         "spotify_playlists": spotify.enabled(),
-        "soundcloud": "soundcloud" in AUDIO_SOURCES,
+        "soundcloud": "soundcloud" in AUDIO_SOURCES and soundcloud.enabled(),
     }
     apple, deez, *rest = await asyncio.gather(
         itunes.search(client, query),
@@ -161,6 +188,7 @@ async def search(client: httpx.AsyncClient, query: str) -> SearchResults:
     if isinstance(cloud := extra.get("soundcloud"), SearchResults):
         result.tracks += cloud.tracks
         result.albums += cloud.albums
+        result.playlists += cloud.playlists
         result.artists += cloud.artists
 
     if not result.tracks and not result.albums and not result.playlists:
@@ -203,12 +231,36 @@ async def _spotify_fallback(client: httpx.AsyncClient, ref: str) -> AlbumDetail 
     return None
 
 
+async def _spotify_artist_fallback(client: httpx.AsyncClient, ref: str) -> ArtistDetail | None:
+    """
+    صفحه‌ی هنرمندِ اسپاتیفای بدون کلید API.
+
+    oEmbed عنوان می‌دهد که اینجا همان نامِ هنرمند است، و با همان در
+    کاتالوگ‌های باز می‌گردیم — دقیقاً همان کاری که `_spotify_fallback` برای
+    آلبوم می‌کند. بدونِ این، لینکِ آلبومِ اسپاتیفای بی‌کلید باز می‌شد ولی لینکِ
+    *هنرمند*ش ۴۰۴ می‌داد، درحالی‌که کاربر از هم‌جا هر دو لینک را پیست می‌کند.
+
+    نتیجه با شناسه‌ی داخلی برگردانده می‌شود نه با لینک: مسیرِ اسپاتیفای دوباره
+    صدا زده نمی‌شود و حلقه‌ای در کار نیست.
+    """
+    name = await asyncio.to_thread(ytdlp.spotify_title, ref)
+    if not name:
+        return None
+    results = await search(client, name)
+    if not results.artists:
+        return None
+    wanted = name.strip().lower()
+    # هم‌نامِ دقیق مقدم است؛ وگرنه اولین کارت (جستجو خودش بر اساس ربط چیده)
+    hit = next((a for a in results.artists if a.name.strip().lower() == wanted), None)
+    return await resolve_artist(client, (hit or results.artists[0]).id)
+
+
 async def resolve_ref(client: httpx.AsyncClient, ref: str) -> AlbumDetail | None:
     """
     ref می‌تواند شناسه‌ی داخلی (itunes:album:123) یا لینک هر کدام از سرویس‌ها باشد.
     خروجی همیشه AlbumDetail است — پلی‌لیست و تک‌آهنگ هم در همین قالب.
     """
-    ref = ref.strip()
+    ref = _canonical_ref(ref.strip())
 
     if m := ID.match(ref):
         provider, kind, ident = m.groups()
@@ -218,8 +270,10 @@ async def resolve_ref(client: httpx.AsyncClient, ref: str) -> AlbumDetail | None
             return await deezer.album(client, ident)
         if provider == "deezer" and kind == "playlist":
             return await deezer.playlist(client, ident)
-        if provider == "sp" and spotify.enabled():
-            return await _spotify_ref(client, kind, ident)
+        if provider == "sp":
+            if spotify.enabled():
+                return await _spotify_ref(client, kind, ident)
+            return await _spotify_fallback(client, f"https://open.spotify.com/{kind}/{ident}")
         if provider == "yt":
             # پلی‌لیست شناسه‌ی list دارد نه v؛ ساختن watch?v= از آن، لینک مرده بود
             url = (
@@ -229,7 +283,23 @@ async def resolve_ref(client: httpx.AsyncClient, ref: str) -> AlbumDetail | None
             )
             return await asyncio.to_thread(ytdlp.extract, url)
         if provider == "sc":
-            # ساندکلاد از شناسه‌ی عددی لینک‌سازی نمی‌شود — فقط با لینک کامل می‌آید
+            if kind == "track":
+                try:
+                    res = await asyncio.to_thread(soundcloud.tracks, [ident])
+                    if row := res.get(ident):
+                        entry = soundcloud.as_entry(row)
+                        source_url = entry.get("webpage_url") or ""
+                        if source_url:
+                            return await asyncio.to_thread(ytdlp.extract, source_url)
+                except Exception:
+                    pass
+            elif kind == "playlist":
+                try:
+                    row = await asyncio.to_thread(soundcloud._api, f"/playlists/{ident}")
+                    if row and (source_url := row.get("permalink_url")):
+                        return await asyncio.to_thread(ytdlp.extract, source_url)
+                except Exception:
+                    pass
             return None
 
     if not ref.lower().startswith("http"):
@@ -258,7 +328,12 @@ async def resolve_ref(client: httpx.AsyncClient, ref: str) -> AlbumDetail | None
             return await _spotify_ref(client, kind, ident)
         return await _spotify_fallback(client, ref)
 
-    if ytdlp.YOUTUBE_URL.search(ref) or ytdlp.SOUNDCLOUD_URL.search(ref):
+    if (
+        ytdlp.YOUTUBE_URL.search(ref)
+        or ytdlp.SOUNDCLOUD_URL.search(ref)
+        or ytdlp.INSTAGRAM_URL.search(ref)
+        or ytdlp.TIKTOK_URL.search(ref)
+    ):
         return await asyncio.to_thread(ytdlp.extract, ref)
 
     return None
@@ -287,6 +362,11 @@ async def _fill_tracks(client: httpx.AsyncClient, detail: ArtistDetail) -> Artis
     اینجاست نه در providerها چون `resolve_ref` از قبل هر چهار پلتفرم را می‌شناسد؛
     یک پیاده‌سازی برای همه.
     """
+    # ساندکلاد محبوب‌ها را از روی تعداد پخش می‌چیند؛ پر کردن از آلبوم آن ترتیب
+    # را خراب می‌کند و ترکِ آلبوم را جایِ محبوب می‌نشاند.
+    if detail.source == "soundcloud":
+        return detail
+
     if len(detail.topTracks) >= MIN_TRACKS or not detail.albums:
         return detail
 
@@ -329,6 +409,7 @@ async def resolve_artist(client: httpx.AsyncClient, ref: str) -> ArtistDetail | 
 
 
 async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | None:
+    ref = _canonical_ref(ref.strip())
     if m := ID.match(ref):
         provider, kind, ident = m.groups()
         if kind == "artist":
@@ -336,8 +417,12 @@ async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | No
                 return await itunes.artist(client, ident)
             if provider == "deezer":
                 return await deezer.artist(client, ident)
-            if provider == "sp" and spotify.enabled():
-                return await spotify.artist(client, ident)
+            if provider == "sp":
+                if spotify.enabled():
+                    return await spotify.artist(client, ident)
+                return await _spotify_artist_fallback(
+                    client, f"https://open.spotify.com/artist/{ident}"
+                )
             if provider == "sc":
                 return await asyncio.to_thread(ytdlp.soundcloud_artist, ident)
             if provider == "yt":
@@ -357,13 +442,20 @@ async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | No
         if parsed[0] == "user":
             return await deezer.user(client, parsed[1])
     if parsed := spotify.parse_url(ref):
-        if parsed[0] == "artist" and spotify.enabled():
-            return await spotify.artist(client, parsed[1])
+        if parsed[0] == "artist":
+            if spotify.enabled():
+                return await spotify.artist(client, parsed[1])
+            # بی‌کلید، لینکِ هنرمند تا حالا ۴۰۴ می‌داد — همان فالبکِ oEmbed که
+            # مسیرِ آلبوم از قبل دارد، اینجا هم راه می‌رود
+            return await _spotify_artist_fallback(client, ref)
         # صفحه‌ی کاربر برخلاف بقیه‌ی اسپاتیفای کلید نمی‌خواهد
         if parsed[0] == "user":
             return await spotify.user(client, parsed[1])
-    if ytdlp.SOUNDCLOUD_PROFILE_URL.match(ref):
-        return await asyncio.to_thread(ytdlp.soundcloud_user, ref)
+    sc_clean = re.sub(
+        r"/(?:tracks|albums|sets|popular-tracks|reposts|likes)/?$", "", ref, flags=re.I
+    )
+    if ytdlp.SOUNDCLOUD_PROFILE_URL.match(sc_clean):
+        return await asyncio.to_thread(ytdlp.soundcloud_user, sc_clean)
     if ytdlp.CHANNEL_URL.search(ref):
         return await asyncio.to_thread(ytdlp.youtube_channel, ref)
     return None

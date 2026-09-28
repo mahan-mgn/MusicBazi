@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from 'react'
+import { memo, useRef, type ReactNode } from 'react'
 import { useI18n } from '../lib/i18n'
 import { SOURCE_LABEL, type LibraryItem } from '../lib/types'
 import { usePlayer, type PlayItem } from '../store/player'
@@ -15,16 +15,18 @@ export function SectionHead({
   title,
   hint,
   action,
+  icon,
 }: {
   title: string
   hint?: string
   action?: ReactNode
+  icon?: ReactNode
 }) {
   return (
     <div className="mb-3 flex items-end justify-between gap-3">
       <div className="min-w-0">
         <h2 className="flex items-center gap-2 text-base font-bold sm:text-lg">
-          <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />
+          {icon ?? <span aria-hidden className="h-4 w-1 shrink-0 rounded-full bg-accent" />}
           {title}
         </h2>
         {hint && <p className="mt-1 ps-3 text-[11px] text-muted-2">{hint}</p>}
@@ -83,7 +85,7 @@ export function Shelf({ children }: { children: ReactNode }) {
 }
 
 /** یک فایلِ آماده روی دیسک — کلیک یعنی «از همین‌جا تا آخرِ ردیف را پخش کن» */
-export function TrackTile({
+export const TrackTile = memo(function TrackTile({
   item,
   queue,
   index,
@@ -98,11 +100,14 @@ export function TrackTile({
   const { t } = useI18n()
   const play = usePlayer((s) => s.play)
   const toggle = usePlayer((s) => s.toggle)
-  const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null)
-  const playing = usePlayer((s) => s.playing)
-
-  const isCurrent = currentId === item.jobId
-  const isPlaying = isCurrent && playing
+  /*
+   * سلکتورِ primitive (مثل LibraryRow): با `playing` عمومی، هر play/pause
+   * کلِ قفسه و شبکه را از نو می‌راند؛ این‌طور فقط کاشتی که وضعیتش عوض شده
+   * رندر می‌کند.
+   */
+  const jobId = item.jobId
+  const isCurrent = usePlayer((s) => s.queue[s.index]?.id === jobId)
+  const isPlaying = usePlayer((s) => s.playing && s.queue[s.index]?.id === jobId)
   const { track } = item
 
   return (
@@ -143,4 +148,4 @@ export function TrackTile({
       <p className="bidi truncate text-[10px] text-muted-2">{track.artist}</p>
     </button>
   )
-}
+})

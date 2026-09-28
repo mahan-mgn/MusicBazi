@@ -58,15 +58,18 @@ export default function FollowButton({ artist }: { artist: ArtistDetail }) {
       } else {
         // seedِ آخرین انتشار از همین صفحه می‌آید؛ بدونش اولین چکِ بات
         // کلِ دیسکوگرافی را «تازه» حساب می‌کرد
-        const latest = artist.albums[0]
+        const latestAlbum = artist.albums[0]
+        const latestTrack = artist.topTracks[0]
+        const lastReleaseId = latestAlbum?.id ?? latestTrack?.id ?? null
+        const lastReleaseTitle = latestAlbum?.title ?? latestTrack?.title ?? null
         await api.follow(status.chatId, {
           artistId: artist.id,
           artistName: artist.name,
           artistSourceUrl: artist.sourceUrl,
           source: artist.source,
           artworkUrl: artist.artworkUrl,
-          lastReleaseId: latest?.id ?? null,
-          lastReleaseTitle: latest?.title ?? null,
+          lastReleaseId,
+          lastReleaseTitle,
         })
         setFollowed(true)
         pushToast(t.followStarted(artist.name), 'success')

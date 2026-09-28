@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { bytes as fmtBytes } from '../lib/format'
 import { dominantColor } from '../lib/artColor'
 import { useI18n } from '../lib/i18n'
 import type { LibraryGroup } from '../lib/library'
 import { SOURCE_LABEL } from '../lib/types'
+import { useOnline } from '../store/net'
 import { usePlayer } from '../store/player'
 import Artwork, { ArtBackdrop } from './Artwork'
 import { toPlayItem } from './LibraryRow'
 import SourceLogo from './logos'
-import { ArrowIcon, PlayIcon, ShuffleIcon } from './icons'
+import { AlbumIcon, ArtistIcon, ArrowIcon, PlayIcon, ShuffleIcon } from './icons'
 
 /**
  * آلبوم‌ها و هنرمندانِ کتابخانه.
@@ -70,20 +71,21 @@ function GroupSources({ group, size = 'size-3.5' }: { group: LibraryGroup; size?
 }
 
 /** کاشیِ یک آلبوم یا هنرمند — گرد بودنِ کاور تنها فرقشان است، مثل اسپاتیفای */
-export function GroupCard({
+export const GroupCard = memo(function GroupCard({
   group,
   round,
+  // شناسه می‌گیرد نه کلوزرِ آماده — مثل LibraryRow تا memo معنا داشته باشد
   onOpen,
 }: {
   group: LibraryGroup
   round: boolean
-  onOpen: () => void
+  onOpen: (key: string) => void
 }) {
   const { t } = useI18n()
 
   return (
     <button
-      onClick={onOpen}
+      onClick={() => onOpen(group.key)}
       aria-label={t.libraryOpenGroup(group.title)}
       className="group relative w-full overflow-hidden rounded-xl p-2 text-start transition hover:bg-panel-2 motion-safe:hover:-translate-y-0.5 motion-safe:active:scale-[0.98]"
     >
@@ -124,7 +126,7 @@ export function GroupCard({
       </p>
     </button>
   )
-}
+})
 
 /** سرصفحه‌ی یک آلبوم/هنرمندِ باز شده — همان زبانِ هیروی صفحه‌ی آلبوم */
 export function GroupHero({
@@ -137,6 +139,7 @@ export function GroupHero({
   onBack: () => void
 }) {
   const { t, lang } = useI18n()
+  const online = useOnline()
   const queue = group.items.map(toPlayItem)
 
   // رنگِ غالبِ کاورِ اول — همان لایه‌ای که پخش‌کننده و صفحه‌ی آلبوم استفاده
@@ -221,7 +224,7 @@ export function GroupHero({
           </p>
 
           {/* ردیفِ کنش: پخشِ گردِ بزرگ + شافلِ دایره‌ای — هم‌ترازِ صفحه‌ی آلبوم */}
-          <div className="mt-5 flex items-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
               onClick={() => usePlayer.getState().play(queue, 0)}
               disabled={!queue.length}
@@ -240,6 +243,26 @@ export function GroupHero({
             >
               <ShuffleIcon className="size-5" />
             </button>
+
+            {online && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (round) {
+                    const ref = group.items.find((x) => x.track.artistId)?.track.artistId || group.title
+                    window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+                  } else {
+                    const ref = group.items.find((x) => x.track.albumId)?.track.albumId || group.title
+                    window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+                  }
+                }}
+                title={round ? t.viewOnlineArtist : t.viewOnlineAlbum}
+                className="inline-flex h-11 items-center gap-2 rounded-full border border-line bg-panel-2/60 px-4 text-xs font-medium text-muted transition hover:border-accent/40 hover:bg-accent-dim hover:text-accent"
+              >
+                {round ? <ArtistIcon className="size-4" /> : <AlbumIcon className="size-4" />}
+                <span>{round ? t.viewOnlineArtist : t.viewOnlineAlbum}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

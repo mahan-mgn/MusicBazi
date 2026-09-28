@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { nextMuteState } from './player'
+import { describe, expect, it, vi } from 'vitest'
+import { nextMuteState, usePlayer, type PlayItem } from './player'
+
+window.HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined)
+window.HTMLMediaElement.prototype.pause = vi.fn()
 
 /**
  * دلیلِ وجودِ این تست: «بی‌صدا» دو چیزِ متفاوت بود که به هم چسبیده بودند —
@@ -37,5 +40,85 @@ describe('دکمه‌ی بی‌صدا', () => {
       expect(on.muted).toBe(false)
       expect(on.volume).toBeGreaterThan(0)
     }
+  })
+})
+
+const makePlayItem = (id: string): PlayItem => ({
+  id,
+  track: {
+    id: `track-${id}`,
+    title: `Title ${id}`,
+    artist: 'Artist',
+    durationMs: 180000,
+    artworkUrl: null,
+    source: 'spotify',
+    sourceUrl: 'https://spotify.com',
+    previewUrl: null,
+  },
+  streamUrl: `/stream/${id}`,
+})
+
+describe('playNext', () => {
+  it('اگر صف خالی باشد، ترک جدید را به عنوان ترک اول شروع می‌کند', () => {
+    usePlayer.setState({ queue: [], index: 0, playing: false })
+    const t1 = makePlayItem('1')
+    usePlayer.getState().playNext([t1])
+    expect(usePlayer.getState().queue).toEqual([t1])
+    expect(usePlayer.getState().index).toBe(0)
+  })
+
+  it('ترک جدید را بلافاصله بعد از ایندکس جاری درج می‌کند', () => {
+    const t1 = makePlayItem('1')
+    const t2 = makePlayItem('2')
+    const t3 = makePlayItem('3')
+    usePlayer.setState({ queue: [t1, t2, t3], index: 0, playing: true })
+    const nextItem = makePlayItem('next')
+    usePlayer.getState().playNext([nextItem])
+    const q = usePlayer.getState().queue
+    expect(q.map((x) => x.id)).toEqual(['1', 'next', '2', '3'])
+    expect(usePlayer.getState().index).toBe(0)
+  })
+
+  it('چند ترک را با حفظ ترتیب بعد از ایندکس جاری قرار می‌دهد', () => {
+    const t1 = makePlayItem('1')
+    const t2 = makePlayItem('2')
+    usePlayer.setState({ queue: [t1, t2], index: 1, playing: true })
+    const next1 = makePlayItem('n1')
+    const next2 = makePlayItem('n2')
+    usePlayer.getState().playNext([next1, next2])
+    const q = usePlayer.getState().queue
+    expect(q.map((x) => x.id)).toEqual(['1', '2', 'n1', 'n2'])
+    expect(usePlayer.getState().index).toBe(1)
+  })
+})
+
+describe('shuffle and history navigation in usePlayer', () => {
+  it('setShuffle controls shuffle mode directly', () => {
+    usePlayer.setState({ shuffle: false })
+    usePlayer.getState().setShuffle(true)
+    expect(usePlayer.getState().shuffle).toBe(true)
+
+    usePlayer.getState().setShuffle(false)
+    expect(usePlayer.getState().shuffle).toBe(false)
+  })
+
+  it('prev() in shuffle mode navigates back to previously played track from history', () => {
+    const items = [makePlayItem('0'), makePlayItem('1'), makePlayItem('2'), makePlayItem('3')]
+    usePlayer.getState().play(items, 0)
+    usePlayer.getState().setShuffle(true)
+    expect(usePlayer.getState().index).toBe(0)
+
+    // Simulate next() jumping to index 3
+    vi.spyOn(Math, 'random').mockReturnValue(0.99) // will pick candidate near end
+    usePlayer.getState().next()
+    const secondIndex = usePlayer.getState().index
+    expect(secondIndex).not.toBe(0)
+
+    // Calling prev() at position 0 should go back to 0 (the track in historyStack)
+    usePlayer.setState({ position: 0 })
+    usePlayer.getState().prev()
+    expect(usePlayer.getState().index).toBe(0)
+
+    vi.restoreAllMocks()
   })
 })

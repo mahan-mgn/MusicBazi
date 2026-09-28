@@ -246,5 +246,7 @@ export function artistDetail(artist: Artist): ArtistDetail {
     // فقط برای دموی ساندکلاد پر است؛ بقیه‌ی پلتفرم‌ها این تب‌ها را ندارند
     likedTracks: artist.source === 'soundcloud' ? TOP_TRACKS.slice(0, 3) : [],
     repostedTracks: artist.source === 'soundcloud' ? TOP_TRACKS.slice(3, 5) : [],
+    related: artist.source === 'deezer' ? ARTISTS.filter((a) => a.source === 'deezer' && a.id !== artist.id).slice(0, 4) : [],
+    radio: artist.source === 'deezer' ? TOP_TRACKS.slice(0, 5) : [],
   }
 }

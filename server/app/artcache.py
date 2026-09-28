@@ -203,6 +203,34 @@ def localize(payload: Any) -> Any:
     return payload
 
 
+def sniff(path: Path) -> str | None:
+    """
+    نوعِ رسانه از خودِ بایت‌ها — نه از نامِ فایل.
+
+    فایل‌های آینه پسوند ندارند (نامشان `sha` است) و `FileResponse` بیِ
+    `media_type` آن‌ها را `application/octet-stream` می‌فروشد؛ مرورگر با
+    sniffing رندرشان می‌کند ولی هر ابزارِ کنارِ مرورگر (curl، دانلودمنیجر،
+    دیباگر) نوعِ غلط می‌بیند. امضا recognizable است و یک readِ ۱۲ بایتی.
+    نشناختن = None تا ستونِ db دروغِ «jpeg» نگوییم و همان octet-stream بماند.
+    """
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(12)
+    except OSError:
+        return None
+    if head[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"avif", b"avis"):
+        return "image/avif"
+    return None
+
+
 def stored(sha: str) -> Path | None:
     """فایلِ روی دیسک، اگر واقعاً آنجا باشد."""
     from . import db

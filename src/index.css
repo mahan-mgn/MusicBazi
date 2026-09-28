@@ -218,9 +218,21 @@ body {
   unicode-bidi: plaintext;
   text-align: center;
 }
-/* ورودی سرچ باید هرچه تایپ می‌شود را با جهت خودش نشان دهد */
 .bidi-auto {
   unicode-bidi: plaintext;
+}
+/* عنوان‌های هیرو (آلبوم و هنرمند): در موبایل وسط‌چین، در دسکتاپ با جهت صفحه */
+.bidi-hero {
+  unicode-bidi: plaintext;
+  text-align: center;
+}
+@media (min-width: 640px) {
+  .bidi-hero {
+    text-align: left;
+  }
+  [dir='rtl'] .bidi-hero {
+    text-align: right;
+  }
 }
 
 /*
@@ -250,6 +262,20 @@ body {
   width: 10px;
   height: 10px;
 }
+/* صفحه روی گوشی/پنجره‌ی باریک عمودی اسکرول می‌شود؛ در RTL اسکرول‌بار سمت
+   *چپ* می‌نشیند و زیرِ کپسولِ شیشه تیرِ روشنِ ۱-۲px می‌ساخت (تازمانی که
+   خودِ شیشه‌ی WebGL آن را می‌شکند). شیشه‌ی معلق یعنی نیازی به میله‌ی همیشه
+   دیدنی نیست؛ اسکرول با ژست همان‌جا کار می‌کند.
+   عمداً فقط زیرِ same-sm (۶۴۰px): تب‌بار و این مشکلِ تیرِ زیرش مختصِ موبایل
+   است؛ روی دسکتاپ میله‌ی اسکرول نشانه‌ی مفیدِ ناحیه‌ی اسکرول‌شدنی است. */
+@media (max-width: 639px) {
+  html {
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar {
+    display: none;
+  }
+}
 ::-webkit-scrollbar-thumb {
   background: var(--line);
   border-radius: 99px;
@@ -276,6 +302,12 @@ body {
 /* روی موبایل نوار پخش فشرده‌تر است و ارتفاع کمتری می‌گیرد */
 body.has-player {
   --player-h: 4.25rem;
+}
+@media (max-width: 639px) {
+  /* وقتی نوار پخش در نوار ناوبری فشرده می‌شود، ارتفاع اضافه حذف می‌شود */
+  body.nav-inline {
+    --player-h: 0px !important;
+  }
 }
 @media (min-width: 640px) {
   body.has-player {
@@ -306,10 +338,24 @@ body.has-player {
 /* بالای نوار پخش و نوار خانه: جای دکمه‌های شناور */
 .bottom-safe {
   bottom: calc(var(--player-h) + max(var(--tab-h), var(--safe-b)) + 1rem);
+  transition: bottom 0.3s cubic-bezier(0.32, 0.72, 0, 1);
 }
 /* یک ردیف بالاتر از دکمه‌های شناور: جای پنل‌ها و توست‌ها */
 .bottom-safe-2 {
   bottom: calc(var(--player-h) + max(var(--tab-h), var(--safe-b)) + 4.75rem);
+  transition: bottom 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* شید محوِ گرادیانی کف صفحه (BottomFadeScrim در BitChord) */
+.bottom-fade-scrim {
+  height: calc(180px + var(--safe-b));
+  transition: height 0.22s ease-out;
+}
+body.has-player .bottom-fade-scrim {
+  height: calc(254px + var(--safe-b));
+}
+body.nav-inline .bottom-fade-scrim {
+  height: calc(180px + var(--safe-b)) !important;
 }
 
 /* ---------- شیشه‌ی مایع ----------
@@ -335,7 +381,7 @@ body.has-player {
  *  - box-shadowِ شیشه با `var(--tw-shadow)` ترکیب می‌شود، وگرنه shadow-2xlِ
  *    خودِ پنل‌ها (سایه‌ی بیرونی) زیرِ inset می‌مرد.
  *  - این قواعد بدونِ لایه‌اند و بر utilities تیلویند می‌چربند؛ پس کلاسِ
- *    bg-*/border-* روی عنصرِ هدف باید حذف شود، نه اینکه کنارِ .glass بماند.
+ *    bg یا border روی عنصرِ هدف باید حذف شود، نه اینکه کنارِ .glass بماند.
  *
  * تمِ روشن: سفیدِ specular روی پس‌زمینه‌ی روشن گم است — حلقه تیره می‌شود،
  * برقِ بالا سفیدِ پُر، و لعاب غلیظ‌تر تا کنتراستِ متن بماند.
@@ -344,7 +390,9 @@ body.has-player {
 /* fallbackِ مرورگرِ بدون backdrop-filter (و بدون color-mix): لعابِ تقریباً مات.
  * ظاهر ساده‌تر، ولی هرگز متنِ ناخوانا روی محتوای شلوغِ پشت. */
 .glass,
-.glass-bar {
+.glass-bar,
+.player-shell,
+.player-bar-desktop {
   background-color: var(--panel);
 }
 .glass-chip {
@@ -352,7 +400,9 @@ body.has-player {
 }
 @supports (color: color-mix(in srgb, red 50%, blue)) {
   .glass,
-  .glass-bar {
+  .glass-bar,
+  .player-shell,
+  .player-bar-desktop {
     background-color: color-mix(in srgb, var(--panel) 96%, transparent);
   }
   .glass-chip {
@@ -365,144 +415,365 @@ body.has-player {
   .glass-bar,
   .glass-chip,
   .glass-tint {
-    /* دوزِ پایین‌تر از نسخه‌ی اول: تلگرام شیشه را «هوا» می‌خواهد نه دوده —
-       tint سفید با alpha≈۰٫۱ روی بلور، یعنی محتوا از پشت زنده رد شود. */
-    --glass-dose: 55%;
-    /* حلقه‌ی نئونی: تلگرام نورِ پشت را با color-matrix ~۱٫۱۲ روشن می‌کند و به
-       لبه ماسک می‌زند؛ در CSS همان لبه‌ی سفیدِ پُررنگ‌تر است. */
-    --glass-ring: rgb(255 255 255 / 18%);
-    --glass-shine: rgb(255 255 255 / 14%);
-    /* برقِ عمودی — هم‌ارزِ CAGradientLayerِ تلگرام (سفیدِ بالا → شفافِ پایین):
-       همان «نور از بالا به شیشه» که حسِ عدسی می‌دهد. */
+    /* سطح شیشه‌ای هماهنگ با Haze در BitChord: بلور زنده، اشباع ملایم و
+       لایه‌ی رنگی از جنس سطح فعلی برنامه. */
+    --glass-dose: 40%;
+    --glass-ring: rgb(255 255 255 / 9%);
+    --glass-shine: rgb(255 255 255 / 18%);
+    --glass-bevel: rgb(0 0 0 / 35%);
+    /* بازتابِ ظریفِ نورِ بالا روی تحدبِ شیشه */
     --glass-sheen: linear-gradient(
-      to bottom,
-      rgb(255 255 255 / 10%),
-      rgb(255 255 255 / 0%) 46%
+      180deg,
+      rgb(255 255 255 / 10%) 0%,
+      rgb(255 255 255 / 2%) 40%,
+      transparent 80%
     );
-    /* لنز: ماتریسِ رنگِ تلگرام برایِ خودِ شیشه (LegacyGlassView.normal) قطرِ
-       ~۲٫۶۷ و اشباعِ منفیِ ~۱٫۱۱ دارد — یعنی lift روشنایی + اشباعِ قویِ رنگِ
-       پشت. نزدیک‌ترین هم‌ارزِ CSS: saturate ~۲٫۰ و brightness ~۱٫۰۹. */
-    -webkit-backdrop-filter: blur(18px) saturate(200%) brightness(1.09);
-    backdrop-filter: blur(18px) saturate(200%) brightness(1.09);
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
     background-image: var(--glass-sheen);
   }
-  /* نوارِ چسبان (هدر، تب‌های کتابخانه) = «پس‌زمینه‌ی ساکنِ» تلگرام
-     (LiquidLensView.RestingBackgroundView): ماتریسِ ملایم‌تر — قطرِ ~۱٫۰۸ و
-     بایاسِ +۰٫۱۳۵. اشباعِ کمتر تا نوار آرام بماند و فقط لنزِ انتخاب «زنده»
-     باشد؛ دقیقاً تفکیکِ دو ماتریس در سورسِ تلگرام. */
+
+  /* نوارِ چسبان (هدر، تب‌های کتابخانه، نوار دسکتاپ پلیر):
+     ماتریسِ آرام‌تر با بلورِ 8px و روشنایی متعادل برای پس‌زمینه‌ی ساکن */
   .glass-bar {
-    -webkit-backdrop-filter: blur(18px) saturate(135%) brightness(1.12);
-    backdrop-filter: blur(18px) saturate(135%) brightness(1.12);
+    --glass-dose: 40%;
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
   }
+
   @supports (color: color-mix(in srgb, red 50%, blue)) {
     .glass,
     .glass-bar,
-    .glass-chip {
+    .glass-chip,
+    .player-shell,
+    .player-bar-desktop {
       background-color: color-mix(in srgb, var(--panel) var(--glass-dose), transparent);
     }
   }
-  .glass,
-  .glass-chip {
-    /* سایه‌ی داخلیِ پایین = عمقِ عدسی؛ لبه‌ی پایینی کمی تیره‌تر تا شیشه «گنبد»
-       به‌نظر برسد نه ورقِ تخت. var(--tw-shadow) سایه‌ی بیرونیِ خودِ پنل را زنده
-       نگه می‌دارد (shadow-2xl و...). */
+
+  .glass {
+    /* لبه‌ی انکساری بالا (specular rim) + خط مویی دور کپسول + عمق عدسی + سایه‌ی معلق شناور */
     box-shadow:
       inset 0 1px 0 0 var(--glass-shine),
       inset 0 0 0 1px var(--glass-ring),
-      inset 0 -1px 1px 0 rgb(0 0 0 / 12%),
+      inset 0 -1px 2px 0 var(--glass-bevel),
+      0 14px 40px -4px rgb(0 0 0 / 55%),
+      0 4px 16px -2px rgb(0 0 0 / 35%),
       var(--tw-shadow, 0 0 #0000);
   }
+
   .glass-bar {
     box-shadow:
       inset 0 1px 0 0 var(--glass-shine),
-      inset 0 -1px 1px 0 rgb(0 0 0 / 12%);
+      inset 0 -1px 1px 0 rgb(0 0 0 / 25%);
   }
-  .glass-tint {
-    box-shadow: inset 0 0 0 1px var(--glass-ring);
-  }
-  /* چیپِ روی کاور: لعابِ کمتر، رنگِ زیرش بیشتر؛ برقِ عمودی روی دایره‌ی کوچک
-     مثلِ تیله‌ی شیشه‌ای می‌نشیند */
+
   .glass-chip {
-    --glass-dose: 38%;
+    --glass-dose: 40%;
+    box-shadow:
+      inset 0 1px 0 0 rgb(255 255 255 / 28%),
+      inset 0 0 0 1px rgb(255 255 255 / 12%),
+      inset 0 -1px 1px 0 rgb(0 0 0 / 25%),
+      0 4px 12px -2px rgb(0 0 0 / 40%),
+      var(--tw-shadow, 0 0 #0000);
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
   }
+
+  .glass-tint {
+    box-shadow:
+      inset 0 1px 0 0 rgb(255 255 255 / 16%),
+      inset 0 0 0 1px var(--glass-ring);
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
+  }
+
+  /* تم روشن: لایه‌ی سطح روشن با همان شفافیت و بلور */
   [data-theme='light'] .glass,
   [data-theme='light'] .glass-bar,
   [data-theme='light'] .glass-chip,
   [data-theme='light'] .glass-tint {
-    --glass-dose: 64%;
-    --glass-ring: rgb(19 19 19 / 12%);
-    --glass-shine: rgb(255 255 255 / 85%);
+    --glass-dose: 40%;
+    --glass-ring: rgb(0 0 0 / 8%);
+    --glass-shine: rgb(255 255 255 / 95%);
+    --glass-bevel: rgb(0 0 0 / 4%);
     --glass-sheen: linear-gradient(
-      to bottom,
-      rgb(255 255 255 / 55%),
-      rgb(255 255 255 / 0%) 50%
+      180deg,
+      rgb(255 255 255 / 85%) 0%,
+      rgb(255 255 255 / 25%) 50%,
+      transparent 80%
     );
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
   }
-  /* چیپِ روشن روی کاورِ رنگی: سفیدِ کم متنِ اکسنت را بی‌کنتراست می‌کرد */
+
+  [data-theme='light'] .glass {
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-shine),
+      inset 0 0 0 1px var(--glass-ring),
+      inset 0 -1px 1px 0 var(--glass-bevel),
+      0 12px 32px -4px rgb(0 0 0 / 14%),
+      0 4px 12px -2px rgb(0 0 0 / 7%),
+      var(--tw-shadow, 0 0 #0000);
+  }
+
+  [data-theme='light'] .glass-bar {
+    --glass-dose: 40%;
+    -webkit-backdrop-filter: blur(8px) saturate(150%);
+    backdrop-filter: blur(8px) saturate(150%);
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-shine),
+      inset 0 -1px 1px 0 rgb(0 0 0 / 6%);
+  }
+
   [data-theme='light'] .glass-chip {
-    --glass-dose: 58%;
+    --glass-dose: 40%;
+    box-shadow:
+      inset 0 1px 0 0 rgb(255 255 255 / 95%),
+      inset 0 0 0 1px rgb(0 0 0 / 8%),
+      0 3px 8px -2px rgb(0 0 0 / 12%);
   }
 }
 
-/* ---------- لنزِ تب‌بار (Liquid Lens) ----------
+/* ---------- لنز و کپسولِ تب‌بار و نوار ناوبری (BitChord Liquid Glass Architecture) ----------
  *
- * امضایِ تلگرام این است: کپسولِ پایین یک لایه‌ی شیشه‌یِ «ساکن» است و داخلش
- * یک *لنزِ* جداگانه — هایلایتِ نیمه‌شفافِ انتخاب — با فنر بینِ تب‌ها سُر می‌خورد
- * و موقعِ نشست کمی جمع/کش می‌آید (squash/stretch) و در پرشِ تند قوسِ سهمی می‌زند
- * (LiquidLensView.swift + سورسِ رسمیِ مسابقه‌ی تلگرام).
- *
- * سه نکته‌ی آبشاری:
- *  - لنز backdrop-filterِ خودش را ندارد: دو لایه‌ی بلور روی هم = گِل، نه شیشه.
- *    لنز فقط یک هایلایتِ رنگیِ سُر‌خور است، بلور از خودِ کپسول می‌آید.
- *  - سایه‌ی معلقِ کپسول = دو سیاهِ بسیار نرمِ تلگرام (blur 30 @α.045 +
- *    blur 20 @α.01، offset y=1). shadow-2xl تیلویند زیادی تیز و سنگین بود.
- *  - حلقه‌ی لنز 0.8pt و سفیدِ α0.3 (عددِ دقیقِ generateLegacyGlassImage) است.
+ * سطوح شیشه‌ای دقیقاً مطابق با متریال و توکن‌های BitChord:
+ * - بلور ۱۶ پیکسل و اشباع ۱۵۰٪ (VIBRANCY = 1f, saturation = 1.5)
+ * - لعاب سطحی ۴۰٪ (SURFACE_OPACITY = 0.4): #121212 در دارک، #FAFAFA در لایت
+ * - لبه‌ی مویی ۰٫۵ پیکسل سفید ۱۰٪ (GLASS_EDGE_WIDTH = 0.5dp, GLASS_EDGE_COLOR = White 10%)
+ * - هایلایت بازتابی با زاویه‌ی ۴۵ درجه (Highlight.Default, White 50% Plus)
+ * - سایه‌ی نرم ۲۴ پیکسلی با آفست ۴ پیکسل (Shadow.Default, radius 24dp, offset 4dp, Black 10%)
+ * - نشانگر لنز معکوس (Dark: Black 50%, Light: White 50%)
  */
-.tabbar-shell {
-  /* سایه‌ی معلقِ رسمیِ تلگرام؛ --tw-shadow تا shadow-2xlِ احتمالیِ والد نمیرد */
+.tabbar-shell,
+.player-shell,
+.glass-standalone {
+  --glass-dose: 40%;
+  background-color: color-mix(in srgb, var(--panel) 40%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+  backdrop-filter: blur(8px) saturate(150%);
+  background-image: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.01) 40%,
+    transparent 60%
+  );
   box-shadow:
-    0 1px 30px 0 rgb(0 0 0 / 4.5%),
-    0 1px 20px 0 rgb(0 0 0 / 1%),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.50),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.10),
+    0 4px 24px rgba(0, 0, 0, 0.10),
     var(--tw-shadow, 0 0 #0000);
 }
-.tabbar-shell {
-  /* دوزِ شیشه‌ی تب‌بار: تلگرام‌وار — پشتِ نوار باید *دیده شود*، نه فقط حدس
-     زده شود. سقفِ خوانایی: بدترین حالت (صفحه‌ی کاملاً سفید پشتِ نوار) =
-     ۷۰٪ از --panelِ #101010 روی سفید → سطحِ ~#4D4D4D؛ --muted (#a3a3a3)
-     رویش ~۳٫۵:1 — همان مرزی که تلگرام روی کاورِ سفید می‌پذیرد. روی محتوایِ
-     تیره‌ی همیشگی (~#0e0e0e) ~۶٫۵:1. قبلاً ۸۴٪ بود (کنتراستِ ۴٫۸ ولی پشت
-     تقریباً نامرئی)؛ با درخواستِ صریحِ کاربر به ۷۰٪ lowered — زیرِ ۶۵٪
-     برنگردد. بلور و لنز سرِ جایشان می‌مانند. */
-  --glass-dose: 70%;
+
+[data-theme='light'] .tabbar-shell,
+[data-theme='light'] .player-shell,
+[data-theme='light'] .glass-standalone {
+  --glass-dose: 40%;
+  background-color: color-mix(in srgb, #fafafa 40%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+  backdrop-filter: blur(8px) saturate(150%);
+  background-image: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.60) 0%,
+    rgba(255, 255, 255, 0.10) 45%,
+    transparent 70%
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.08),
+    0 4px 24px rgba(0, 0, 0, 0.10),
+    var(--tw-shadow, 0 0 #0000);
 }
-[data-theme='light'] .tabbar-shell {
-  /* تمِ روشن: همان شفافیتِ تمِ تیره؛ لعابِ سفید ۷۴٪ محتوایِ تیره را خفه
-     نمی‌کند ولی --mutedِ روشن (#595959) رویش خوانا می‌ماند */
-  --glass-dose: 74%;
+
+/* دکمه‌ی مستقل دایره‌ای سرچ (مطابق standaloneTab در BitChord) */
+.glass-standalone {
+  display: grid;
+  place-items: center;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+.glass-standalone:active {
+  transform: scale(0.94);
+}
+
+/* نشانگر لنزی با سایه‌ی معکوس (Inverted Scrim Indicator) مطابق BitChord */
 .tabbar-lens {
-  /* لنزِ تیره، نه سفیدِ α0.1ِ تلگرام-iOS: تلگرام انتخاب را با ۹٪ رنگِ اکسنت
-     می‌زند (اندروید) که روی هر پس‌زمینه‌ای دیده می‌شود؛ سفید روی کاورِ روشن
-     محو می‌شد. سیاهِ α22 روی شیشه‌یِ تیره زیرِ خودش می‌نشیند (ظریف) و روی
-     محتوایِ سفیدِ پشت، لنز خاکستریِ روشن می‌شود (~#d3) که هم دیده می‌شود
-     هم کنتراستِ آیکونِ اکسنت را خراب نمی‌کند. حلقه سفید α40 لبه‌اش را در
-     هر دو حالت جدا نگه می‌دارد. */
-  background: rgb(0 0 0 / 22%);
-  box-shadow: inset 0 0 0 0.8px rgb(255 255 255 / 40%);
-  /* GPU: فقط transform جابه‌جا می‌شود؛ layout هرگز دست نمی‌خورد */
+  background: rgba(0, 0, 0, 0.50);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
   will-change: transform;
   backface-visibility: hidden;
 }
+
 [data-theme='light'] .tabbar-lens {
-  /* تمِ روشن: همان سیاهِ ملایمِ legacySelectionViewِ تلگرام — لنزِ خاکستری
-     روی لعابِ سفید، خوانا روی هر محتوایی */
-  background: rgb(0 0 0 / 9%);
-  box-shadow: inset 0 0 0 0.8px rgb(255 255 255 / 60%);
+  background: rgba(255, 255, 255, 0.50);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 }
+
+/* رنگ محتوا و آیکون‌ها روی شیشه مایع (glassContentColor در BitChord) */
+.glass-content-text {
+  color: #ffffff;
+}
+.glass-content-muted {
+  color: rgba(255, 255, 255, 0.65);
+}
+[data-theme='light'] .glass-content-text {
+  color: #000000;
+}
+[data-theme='light'] .glass-content-muted {
+  color: rgba(0, 0, 0, 0.65);
+}
+
+/* حالت غیرفعال شیشه مایع (fallback ساده‌ی مات مثل reduceDynamicBlur در BitChord) */
+[data-liquid-glass="false"] .tabbar-shell,
+[data-liquid-glass="false"] .player-shell,
+[data-liquid-glass="false"] .glass-standalone,
+[data-liquid-glass="false"] .glass,
+[data-liquid-glass="false"] .glass-bar,
+[data-liquid-glass="false"] .glass-chip,
+[data-liquid-glass="false"] .glass-capsule,
+[data-liquid-glass="false"] .glass-tint,
+[data-liquid-glass="false"] .top-fade-blur {
+  background-color: var(--panel) !important;
+  background-image: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  box-shadow: inset 0 0 0 0.5px var(--line) !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tabbar-lens {
     transition: none;
   }
+}
+
+/* ---------- نوار شیشه مایع دسکتاپ (Desktop Liquid Glass Bar) ----------
+ *
+ * نوار شناور لبه‌دار با لبه‌ی درخشانِ انکساری بالا
+ */
+.player-bar-desktop {
+  --glass-dose: 40%;
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.10) 0%,
+    rgba(255, 255, 255, 0.01) 40%,
+    transparent 80%
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+    0 -10px 36px -6px rgba(0, 0, 0, 0.50);
+}
+
+[data-theme='light'] .player-bar-desktop {
+  --glass-dose: 40%;
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  background-image: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.88) 0%,
+    rgba(255, 255, 255, 0.25) 45%,
+    transparent 80%
+  );
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.95),
+    0 -8px 28px -4px rgba(0, 0, 0, 0.08);
+  border-top-color: rgba(0, 0, 0, 0.07);
+}
+
+/* ---------- دکمه‌ها و المان‌های شیشه مایع ---------- */
+
+/* دکمه هیرو پخش/توقف تمیز بدون درخشش نوری */
+.player-hero-btn {
+  background-color: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition:
+    transform 0.15s ease,
+    filter 0.15s ease,
+    background-color 0.15s ease;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.player-hero-btn:hover {
+  filter: brightness(1.08);
+}
+.player-hero-btn:active {
+  transform: scale(0.92);
+  filter: brightness(0.95);
+}
+
+/* دکمه قلب لایک با جهش فنری */
+.player-like-btn {
+  transition:
+    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 0.15s ease;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.player-like-btn:hover {
+  transform: scale(1.08);
+}
+.player-like-btn:active {
+  transform: scale(0.88);
+}
+
+/* پرتو مایع نوار پیشرفت موبایل */
+.player-liquid-gutter {
+  background-color: color-mix(in srgb, var(--line) 60%, transparent);
+}
+[data-theme='light'] .player-liquid-gutter {
+  background-color: color-mix(in srgb, var(--line) 80%, transparent);
+}
+.player-liquid-beam {
+  background-color: var(--accent);
+}
+
+/* اسلایدر پیشرفت دسکتاپ */
+.player-range-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 99px;
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--pct, 0%),
+    color-mix(in srgb, var(--line) 70%, transparent) var(--pct, 0%)
+  );
+}
+.player-range-seek::-moz-range-track {
+  height: 4px;
+  border-radius: 99px;
+  background: linear-gradient(
+    to right,
+    var(--accent) var(--pct, 0%),
+    color-mix(in srgb, var(--line) 70%, transparent) var(--pct, 0%)
+  );
+}
+.player-range-seek::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 99px;
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.player-range-seek:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+.player-range-seek::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.player-range-seek:hover::-moz-range-thumb {
+  transform: scale(1.2);
 }
 
 /*
@@ -524,6 +795,7 @@ body.has-player {
  * خالیِ به‌اندازه‌ی نوارِ ژست می‌ماند.
  */
 .player-dock {
+  --pb-rgb: 120 120 120;
   bottom: var(--tab-h);
   padding-bottom: var(--safe-b);
 }
@@ -556,7 +828,9 @@ body.has-player {
    * باید روی همان سطحِ شیشه‌ای بنشیند، نه روی داک.
    */
   .glass,
-  .glass-bar {
+  .glass-bar,
+  .player-shell,
+  .player-bar-desktop {
     transition: background-color 0.6s ease;
   }
 }
@@ -575,7 +849,13 @@ body.has-player {
 }
 @media (prefers-reduced-motion: reduce) {
   .player-dock[data-tint] .glass,
-  .player-dock[data-tint] .glass-bar {
+  .player-dock[data-tint] .glass-bar,
+  .player-dock[data-tint] .player-shell,
+  .player-dock[data-tint] .player-bar-desktop,
+  .player-hero-btn,
+  .player-like-btn,
+  .player-range-seek::-webkit-slider-thumb,
+  .player-range-seek::-moz-range-thumb {
     transition: none;
   }
 }
@@ -1016,27 +1296,40 @@ svg .wave-bar {
 }
 
 /*
- * ورودِ نمای تمام‌صفحه‌ی «در حال پخش» — فقط محوِ شفافیت، نه جابه‌جایی/مقیاس.
+ * انیمیشن شیتِ تمام‌صفحه‌ی «در حال پخش» (Now Playing) به سبک iOS / Apple Music / TIDAL.
  *
- * `.sheet-in` برای منوهای کوچک است (translateY + scale) و روی یک سطحِ ماتِ به‌اندازه‌ی
- * ویوپورت لبه‌ی پشت را بیرون می‌زند و کلِ لایه را دوباره ترکیب می‌کند. اینجا
- * مسیرِ اصلیِ بازکردن، گذارِ عنصرِ مشترکِ کاور است (View Transition) که زیرِ
- * `data-vt` خاموش می‌شود؛ پس در مسیرِ fallback فقط یک فیدِ نرم می‌خواهیم که هم
- * ارزان است هم لبه نشان نمی‌دهد.
+ * ورود از پایین به بالا با ترنزیشنِ سخت‌افزاری transform و ایزینگ فیزیکی شیت (0.32, 0.72, 0, 1).
+ * خروج متقارن به سمت پایین موقع بستن با دکمه یا Escape.
  */
-@keyframes np-in {
+@keyframes np-sheet-in {
   from {
-    opacity: 0;
+    transform: translateY(100%);
   }
   to {
-    opacity: 1;
+    transform: translateY(0);
   }
-}
-.np-in {
-  animation: np-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes backdrop-in {
+@keyframes np-sheet-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+.np-sheet-in {
+  animation: np-sheet-in 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+
+.np-sheet-out {
+  animation: np-sheet-out 0.28s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform;
+}
+
+@keyframes np-backdrop-in {
   from {
     opacity: 0;
   }
@@ -1044,8 +1337,24 @@ svg .wave-bar {
     opacity: 1;
   }
 }
-.backdrop-in {
-  animation: backdrop-in 0.25s ease both;
+
+@keyframes np-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.np-backdrop-in {
+  animation: np-backdrop-in 0.3s ease-out both;
+  will-change: opacity;
+}
+
+.np-backdrop-out {
+  animation: np-backdrop-out 0.28s ease-out forwards;
+  will-change: opacity;
 }
 
 /*
@@ -1073,10 +1382,8 @@ svg .wave-bar {
 .karaoke-line {
   --p: 0;
   --k-dir: to right;
-  /* عمق: خط‌های غیرِ فعال کمی عقب‌تر و محو — تعویضِ خط با گذارِ نرم تیز می‌شود.
-     فیلتر فقط روی ≤۷ خطِ پنجره اعمال می‌شود و فقط لحظه‌ی تعویض انیمیت دارد. */
-  filter: blur(2px);
-  transform: scale(0.985);
+  filter: none;
+  transform: none;
 }
 .karaoke-line[dir='rtl'] {
   --k-dir: to left;
@@ -1146,8 +1453,7 @@ svg .wave-bar {
 .audio-glow {
   --glow: 0;
   opacity: calc(var(--glow) * 0.55);
-  transform: scale(calc(1 + var(--glow) * 0.28));
-  transition: opacity 0.12s linear;
+  transform: translate3d(0, 0, 0) scale(calc(1 + var(--glow) * 0.28));
   will-change: transform, opacity;
 }
 
@@ -1185,6 +1491,232 @@ svg .wave-bar {
 .pp-bounce {
   animation: pp-bounce 0.34s cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+/*
+ * انیمیشن‌های شناور و ارگانیک اتمسفر نوری پس‌زمینه (Living Aurora).
+ */
+@keyframes aura-drift-1 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(32px, -24px, 0) scale(1.08);
+  }
+  66% {
+    transform: translate3d(-24px, 28px, 0) scale(0.96);
+  }
+}
+@keyframes aura-drift-2 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(-36px, 28px, 0) scale(1.1);
+  }
+  66% {
+    transform: translate3d(28px, -32px, 0) scale(0.94);
+  }
+}
+.aura-drift-1 {
+  animation: aura-drift-1 20s ease-in-out infinite;
+  will-change: transform;
+}
+.aura-drift-2 {
+  animation: aura-drift-2 24s ease-in-out infinite;
+  will-change: transform;
+}
+
+/*
+ * استایل چرخش و فریز وینیل بدون پرش به مبدأ
+ */
+.vinyl-spin {
+  animation: spin 7s linear infinite;
+}
+.vinyl-spin-paused {
+  animation: spin 7s linear infinite;
+  animation-play-state: paused;
+}
+
+/* پنل کنترل پخش؛ همان تون سطح و بلور سطوح BitChord */
+.glass-capsule {
+  background: color-mix(in srgb, var(--panel) 40%, transparent);
+  backdrop-filter: blur(8px) saturate(150%);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+  border: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  box-shadow: 0 12px 32px -8px rgb(0 0 0 / 32%), inset 0 1px 0 rgb(255 255 255 / 10%);
+}
+
+[data-theme='light'] .glass-capsule {
+  background: color-mix(in srgb, #fafafa 40%, transparent);
+  backdrop-filter: blur(8px) saturate(150%);
+  -webkit-backdrop-filter: blur(8px) saturate(150%);
+  border: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  box-shadow: 0 12px 32px -8px rgb(0 0 0 / 10%), inset 0 1px 0 rgb(255 255 255 / 95%);
+}
+
+/*
+ * مقیاس فنری کاور آلبوم به سبک BitChord و Apple Music
+ * هنگام پخش: ۱۰۰٪ (سایز کامل) با سایه عمیق
+ * هنگام توقف (Pause): ۸۶٪ با فیزیک جهشی و سایه نرم‌تر
+ */
+.art-spring {
+  transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.5s ease, opacity 0.4s ease;
+}
+.art-spring-playing {
+  transform: scale(1);
+  opacity: 1;
+  box-shadow: 0 24px 60px -10px rgba(0, 0, 0, 0.85);
+}
+.art-spring-paused {
+  transform: scale(0.86);
+  opacity: 0.88;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+/*
+ * نوار درخشش هایلایت مویی اسلایدر (الهام‌گرفته از BitChord ThinSlider / MixSheen).
+ * موج خطی نرم که در زمان انتظار یا فعالیت، در طول کل اسلایدر جابجا می‌شود.
+ */
+@keyframes mixSheen {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.slider-sheen {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.85) 50%,
+    transparent 100%
+  );
+  width: 50%;
+  height: 100%;
+  animation: mixSheen 1.3s linear infinite;
+  will-change: transform;
+}
+
+/*
+ * انیمیشن پرواز و بلوم کلمات کارائوکه (الهام‌گرفته از BitChord Syllable Rise & Bloom و Apple Music).
+ * کلمه در حال خوانده شدن ۲.۵ پیکسل به بالا جهش کرده و هایلایت درخشان به خود می‌گیرد.
+ */
+.karaoke-word {
+  display: inline-block;
+  white-space: pre;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.2s ease;
+  will-change: transform, filter;
+}
+
+.karaoke-word[data-active-word='true'] {
+  transform: translateY(-2.5px) scale(1.06);
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.75));
+}
+
+/*
+ * انیمیشن ورود و دریل‌این صفحات به سبک BitChord (LocalMusicScreen Drill-in).
+ * در راست‌به‌چپ (فارسی)، صفحه از سمت چپ با اسلاید و فیدین وارد می‌شود.
+ */
+@keyframes page-drill-in-rtl {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes page-drill-in-ltr {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.page-drill-in {
+  animation: page-drill-in-rtl 0.28s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  will-change: transform, opacity;
+}
+
+[dir='ltr'] .page-drill-in,
+html[dir='ltr'] .page-drill-in {
+  animation-name: page-drill-in-ltr;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slider-sheen {
+    animation: none;
+    display: none;
+  }
+  .karaoke-word {
+    transition: none;
+  }
+  .karaoke-word[data-active-word='true'] {
+    transform: none;
+    filter: none;
+  }
+  .art-spring {
+    transition: none;
+  }
+  .page-drill-in {
+    animation: none;
+  }
+}
+
+/*
+ * کپسول‌های اکشن و کنترل BitChord
+ */
+.bitchord-pill {
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+.bitchord-pill:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.bitchord-pill-active {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.38);
+  color: #ffffff;
+}
+
+/*
+ * افکت فید لبه‌های بالا و پایین صف و متن به سبک BitChord
+ */
+.bitchord-fading-edges {
+  mask-image: linear-gradient(to bottom, transparent 0%, black 6%, black 94%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 6%, black 94%, transparent 100%);
+}
+
+/*
+ * استایل‌های سوایپ ردیف‌های آهنگ به صف با بازگشت فنری (BitChord Swipe-to-Queue)
+ */
+.row-swipe-action {
+  opacity: 0;
+  transition: opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+}
+
+[data-swiping='true'] .row-swipe-action {
+  opacity: 1;
+}
+
+[data-swipe-armed='true'] .row-swipe-action {
+  background-color: var(--accent);
+  color: #ffffff;
+}
+
+
+
 
 /*
  * میله‌های اکولایزرِ ردیفِ فعالِ صف — سه میله با فازهای متفاوت تا حرکتشان
@@ -1288,9 +1820,7 @@ svg .wave-bar {
  * حینِ گذار، شیت و پس‌زمینه‌اش انیمیشنِ ورودِ خودشان را ندارند — دلیلش در
  * `viewTransition.ts` توضیح داده شده.
  */
-html[data-vt] .sheet-in,
-html[data-vt] .np-in,
-html[data-vt] .backdrop-in {
+html[data-vt] .sheet-in {
   animation: none;
 }
 
@@ -1300,6 +1830,34 @@ html[data-vt] .backdrop-in {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+  .np-sheet-in,
+  .np-sheet-out {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+/*
+ * هیروِ آلبوم: دیسک وینیل با position مطلق از جعبهٔ کاور بیرون می‌زند و
+ * روی عنوان می‌افتد. padding-inline-start همان سفرِ اضافهٔ وینیل
+ * (playing − idle) است تا متن و دیسک با duration-700 ease-out با هم
+ * حرکت کنند. زیر sm هیرو ستونی است و هم‌پوشانی نیست.
+ *
+ * sm: translate-x-20 − translate-x-9 = 2.75rem
+ * md: translate-x-26 − translate-x-9 = 4.25rem
+ */
+.album-hero-meta {
+  transition: padding-inline-start 700ms ease-out;
+}
+@media (min-width: 640px) {
+  .album-hero-meta[data-playing] {
+    padding-inline-start: 2.75rem;
+  }
+}
+@media (min-width: 768px) {
+  .album-hero-meta[data-playing] {
+    padding-inline-start: 4.25rem;
   }
 }
 
@@ -1361,9 +1919,24 @@ html[data-vt] .backdrop-in {
   animation: like-pop var(--like-pop) var(--like-pop-ease);
 }
 @keyframes like-pop {
-  0% { transform: scale(1); }
-  30% { transform: scale(0.82); }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1);
+  }
+  20% {
+    transform: scale(0.72);
+  }
+  45% {
+    transform: scale(1.28);
+  }
+  70% {
+    transform: scale(0.92);
+  }
+  85% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 .like-particles {
   position: absolute;

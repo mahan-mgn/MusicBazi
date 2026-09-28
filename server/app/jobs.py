@@ -126,6 +126,17 @@ def _rmdir_if_empty(folder: Path) -> None:
 NO_COVER = "کاور این آهنگ از منبع گرفته نشد؛ فایل سالم است ولی تصویر ندارد"
 
 
+def _file_duration_ms(path: Path) -> int | None:
+    """مدتِ فایلِ دانلودشده با mutagen؛ خوانده نشد None — هشدار جا نمی‌افتد."""
+    try:
+        from mutagen import File as mutagen_file
+
+        audio = mutagen_file(path)
+        return int(audio.info.length * 1000) if audio and audio.info else None
+    except Exception:  # noqa: BLE001 — فایل عجیب == بدون هشدارِ مدت
+        return None
+
+
 def _substitution(track: Track, used: resolver.Candidate | None) -> str | None:
     """
     وقتی فایل از جایی جز لینکِ خودِ ترک آمده.
@@ -347,21 +358,45 @@ class JobManager:
         همان فایلِ بی‌شماره و بی‌هنرمندِ آلبوم را در ZIP می‌گرفت و آلبومش در
         پلیر تکه‌تکه می‌ماند.
 
-        فقط غایب‌ها پر می‌شوند — چیزی که مقدار دارد دست‌نخورده می‌ماند.
+        فقط غایب‌ها پر می‌شوند — چیزی که مقدار دارد دست‌نخورده می‌ماند، مگر
+        اینکه ترکی قبلاً به‌عنوان سینگل ذخیره شده بود (album خالی یا برابر با عنوان ترک)
+        و حالا با یک آلبومِ واقعی و کاورِ آن آلبوم دوباره خواسته شده است.
         """
-        filled = {
-            field: value
-            for field in self._BACKFILLABLE
-            if (value := getattr(track, field)) is not None
-            and getattr(job.track, field) is None
-        }
-        if not filled:
+        filled: dict[str, Any] = {}
+        for field in self._BACKFILLABLE:
+            val = getattr(track, field)
+            if val is not None and getattr(job.track, field) is None:
+                filled[field] = val
+
+        # اگر قبلاً سینگل بود (یا نام آلبوم همان نام ترک بود) و حالا نام آلبوم واقعی آمده
+        if track.album and (job.track.album is None or job.track.album == job.track.title):
+            filled["album"] = track.album
+            if track.albumArtist:
+                filled["albumArtist"] = track.albumArtist
+            if track.albumId:
+                filled["albumId"] = track.albumId
+            if track.trackNumber:
+                filled["trackNumber"] = track.trackNumber
+
+        # کاور: اگر کاور جدیدی از آلبوم آمده
+        artwork_changed = False
+        if track.artworkUrl and track.artworkUrl != job.track.artworkUrl:
+            # اگر فایل قبلی کاور نداشت یا ترک در قالب یک آلبوم خواسته شده
+            if job.track.artworkUrl is None or track.album:
+                filled["artworkUrl"] = track.artworkUrl
+                artwork_changed = True
+
+        if not filled and not artwork_changed:
             return
 
-        job.track = job.track.model_copy(update=filled)
-        db.update_track(job.id, job.track)
+        if filled:
+            job.track = job.track.model_copy(update=filled)
+            db.update_track(job.id, job.track)
+
         if job.path and job.path.exists():
             downloader.retag_album(job.path, job.track)
+            if artwork_changed and track.artworkUrl:
+                downloader.retag_artwork(job.path, track.artworkUrl)
 
     def _refresh_lyrics(self, job: Job) -> None:
         """
@@ -550,6 +585,18 @@ class JobManager:
                 warning = await asyncio.to_thread(
                     verify.check, path, job.track.title, job.track.artist
                 )
+                # ترکِ ۲۹۲ ثانیه‌ای با فایلِ ۳۰ ثانیه‌ایِ بدون‌هشدار ready شد —
+                # مدتِ واقعی فایل را با mutagen می‌خوانیم: اگر یک‌سومِ انتظار
+                # نشد، فایل سگمنت است (پیش‌نمایش/کلیپ) و کاربر باید بداند.
+                if (expected := job.track.durationMs) and (
+                    actual := await asyncio.to_thread(_file_duration_ms, path)
+                ) and actual < expected / 3:
+                    short = (
+                        f"فایل فقط {max(1, round(actual / 1000))} ثانیه است "
+                        f"درحالی‌که آهنگ {round(expected / 1000)} ثانیه‌ست — "
+                        "احتمالاً پیش‌نمایش دانلود شده"
+                    )
+                    warning = f"{short} — {warning}" if warning else short
                 # کاورِ نیامده هم همین‌طور: فایل سالم است ولی در پلیر بی‌تصویر
                 # می‌ماند. شرطِ `artworkUrl` عمدی است — وقتی کاتالوگ اصلاً کاوری
                 # نداده، نیامدنش خبر نیست.

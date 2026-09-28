@@ -10,20 +10,29 @@ from app.bot.logic import (
     AUTO_QUALITY,
     TELEGRAM_FILE_LIMIT,
     audio_filename,
+    clean_filename_part,
+    clean_lrc_lyrics,
+    extract_album_features,
     format_album_button,
+    format_album_caption,
+    format_album_duration,
     format_artist_button,
     format_artist_search_button,
     format_playlist_button,
     format_track_button,
     looks_like_profile_url,
+    looks_like_social_media_video,
     looks_like_url,
+    looks_like_youtube_video,
     new_releases,
+    paginate_slice,
     progress_bar,
     quality_label,
     source_badge,
     too_large_for_telegram,
+    track_lyrics_hash,
 )
-from app.models import Album
+from app.models import Album, AlbumDetail, Track
 
 
 def _album(id: str, title: str = "T") -> Album:
@@ -79,6 +88,90 @@ class TestLooksLikeProfileUrl:
         assert not looks_like_profile_url(url)
 
 
+class TestLooksLikeYouTubeVideo:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "http://youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=abc12345",
+            "https://www.youtube.com/shorts/xyz9876",
+        ],
+    )
+    def test_youtube_video_urls_match(self, url):
+        assert looks_like_youtube_video(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://open.spotify.com/track/12345",
+            "https://soundcloud.com/artist/track",
+            "https://deezer.com/track/123",
+            "فرهاد مهراد کودکانه",
+        ],
+    )
+    def test_non_youtube_urls_do_not_match(self, url):
+        assert not looks_like_youtube_video(url)
+
+
+class TestLooksLikeSocialMediaVideo:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.instagram.com/reel/C-123456789/",
+            "https://instagram.com/p/ABCxyz/",
+            "https://instagr.am/reel/123",
+            "https://www.tiktok.com/@creator/video/7123456789012345678",
+            "https://vm.tiktok.com/ZM8123456/",
+            "https://m.tiktok.com/v/12345.html",
+        ],
+    )
+    def test_social_media_video_urls_match(self, url):
+        assert looks_like_social_media_video(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://open.spotify.com/track/123",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://soundcloud.com/user/track",
+            "متن فارسی معمولی",
+        ],
+    )
+    def test_non_social_media_urls_do_not_match(self, url):
+        assert not looks_like_social_media_video(url)
+
+
+class TestPaginateSlice:
+    def test_first_page_of_many(self):
+        start, end, page, total = paginate_slice(20, 1, 8)
+        assert (start, end, page, total) == (0, 8, 1, 3)
+
+    def test_middle_page(self):
+        start, end, page, total = paginate_slice(20, 2, 8)
+        assert (start, end, page, total) == (8, 16, 2, 3)
+
+    def test_last_page(self):
+        start, end, page, total = paginate_slice(20, 3, 8)
+        assert (start, end, page, total) == (16, 20, 3, 3)
+
+    def test_out_of_bounds_page_is_clamped(self):
+        start, end, page, total = paginate_slice(20, 99, 8)
+        assert (start, end, page, total) == (16, 20, 3, 3)
+        start, end, page, total = paginate_slice(20, -5, 8)
+        assert (start, end, page, total) == (0, 8, 1, 3)
+
+    def test_empty_collection(self):
+        start, end, page, total = paginate_slice(0, 1, 8)
+        assert (start, end, page, total) == (0, 0, 1, 1)
+
+    def test_single_page(self):
+        start, end, page, total = paginate_slice(5, 1, 8)
+        assert (start, end, page, total) == (0, 5, 1, 1)
+
+
+
 class TestFormatTrackButton:
     def test_joins_title_and_artist(self, track):
         assert format_track_button(track) == "Mard-e Tanha — Farhad Mehrad"
@@ -98,12 +191,31 @@ class TestTooLargeForTelegram:
         assert too_large_for_telegram(TELEGRAM_FILE_LIMIT + 1)
 
 
+class TestCleanFilenamePart:
+    def test_replaces_illegal_characters_with_hyphens(self):
+        assert clean_filename_part('AC/DC: "Live" *1992*? <test>|part\\1') == "AC-DC- -Live- -1992-- -test--part-1"
+
+    def test_strips_surrounding_dots_and_spaces(self):
+        assert clean_filename_part("  ...song title...  ") == "song title"
+
+    def test_truncates_to_max_100_chars(self):
+        assert len(clean_filename_part("A" * 150)) == 100
+
+    def test_empty_string_falls_back_to_track(self):
+        assert clean_filename_part("") == "track"
+        assert clean_filename_part("   ") == "track"
+
+
 class TestAudioFilename:
     def test_uses_first_word_of_format_as_extension(self, track):
         assert audio_filename(track, "mp3 320") == "Farhad Mehrad - Mard-e Tanha.mp3"
 
     def test_falls_back_to_mp3_when_format_is_missing(self, track):
         assert audio_filename(track, None) == "Farhad Mehrad - Mard-e Tanha.mp3"
+
+    def test_sanitizes_artist_and_title_characters(self, track):
+        t = track.model_copy(update={"artist": "AC/DC", "title": "Highway to Hell / Live"})
+        assert audio_filename(t, "mp3 320") == "AC-DC - Highway to Hell - Live.mp3"
 
 
 class TestProgressBar:
@@ -218,3 +330,162 @@ class TestNewReleases:
 class TestAutoQuality:
     def test_auto_quality_is_the_highest_usual_fit_for_telegram(self):
         assert AUTO_QUALITY == "320"
+
+
+def _make_track(title: str, artist: str, duration_ms: int = 180_000) -> Track:
+    return Track(
+        id=f"t:{title}",
+        title=title,
+        artist=artist,
+        durationMs=duration_ms,
+        source="spotify",
+        sourceUrl="https://example.com",
+    )
+
+
+class TestExtractAlbumFeatures:
+    def test_no_features_when_all_tracks_match_main_artist(self):
+        tracks = [
+            _make_track("Track 1", "Eminem"),
+            _make_track("Track 2", "Eminem"),
+        ]
+        assert extract_album_features("Eminem", tracks) == []
+
+    def test_extracts_from_artist_field(self):
+        tracks = [
+            _make_track("Track 1", "Eminem"),
+            _make_track("Track 2", "Eminem, 50 Cent"),
+            _make_track("Track 3", "Eminem feat. Dr. Dre"),
+        ]
+        features = extract_album_features("Eminem", tracks)
+        assert features == ["50 Cent", "Dr. Dre"]
+
+    def test_extracts_from_title_parentheses(self):
+        tracks = [
+            _make_track("Love The Way You Lie (feat. Rihanna)", "Eminem"),
+            _make_track("Stan [ft. Dido]", "Eminem"),
+        ]
+        features = extract_album_features("Eminem", tracks)
+        assert features == ["Rihanna", "Dido"]
+
+    def test_deduplicates_features_preserving_order(self):
+        tracks = [
+            _make_track("Track 1", "Eminem, Dr. Dre"),
+            _make_track("Track 2 (feat. Dr. Dre)", "Eminem"),
+            _make_track("Track 3", "Eminem & 50 Cent"),
+        ]
+        features = extract_album_features("Eminem", tracks)
+        assert features == ["Dr. Dre", "50 Cent"]
+
+    def test_ignores_multi_part_main_artist_names(self):
+        tracks = [
+            _make_track("Song 1", "Kanye West, Kid Cudi"),
+            _make_track("Song 2", "Kanye West, Kid Cudi, Pusha T"),
+        ]
+        features = extract_album_features("Kanye West & Kid Cudi", tracks)
+        assert features == ["Pusha T"]
+
+
+class TestFormatAlbumDuration:
+    def test_formats_over_one_hour(self):
+        assert format_album_duration(3665_000) == "1 ساعت و 1 دقیقه"
+        assert format_album_duration(7200_000) == "2 ساعت"
+
+    def test_formats_under_one_hour(self):
+        assert format_album_duration(2520_000) == "42 دقیقه"
+        assert format_album_duration(125_000) == "2 دقیقه و 5 ثانیه"
+
+    def test_formats_zero_or_short(self):
+        assert format_album_duration(0) == "0 ثانیه"
+        assert format_album_duration(45_000) == "45 ثانیه"
+
+
+class TestFormatAlbumCaption:
+    def test_includes_all_key_metadata(self):
+        tracks = [
+            _make_track("Track 1", "The Weeknd"),
+            _make_track("Starboy (feat. Daft Punk)", "The Weeknd, Daft Punk", 230_000),
+        ]
+        album = AlbumDetail(
+            id="sp:album:1",
+            title="Starboy",
+            artist="The Weeknd",
+            year=2016,
+            releaseDate="2016-11-25",
+            trackCount=2,
+            durationMs=410_000,
+            source="spotify",
+            sourceUrl="https://open.spotify.com/album/1",
+            tracks=tracks,
+        )
+        caption = format_album_caption(album)
+
+        assert "Starboy" in caption
+        assert "The Weeknd" in caption
+        assert "Daft Punk" in caption
+        assert "2016-11-25" in caption
+        assert "تعداد آهنگ‌ها: 2" in caption
+        assert "زمان کل: 6 دقیقه" in caption
+
+    def test_escapes_html_properly(self):
+        tracks = [_make_track("Track <1>", "Artist & Co")]
+        album = AlbumDetail(
+            id="sp:album:2",
+            title="Rock & Roll <Vol 1>",
+            artist="AC/DC & Guests",
+            year=2020,
+            trackCount=1,
+            durationMs=180_000,
+            source="spotify",
+            sourceUrl="https://example.com",
+            tracks=tracks,
+        )
+        caption = format_album_caption(album)
+
+        assert "&amp;" in caption
+        assert "&lt;Vol 1&gt;" in caption
+        assert "<Vol 1>" not in caption
+
+
+class TestCleanLrcLyrics:
+    def test_cleans_timestamps_and_metadata(self):
+        raw = """[ti:Shape of You]
+[ar:Ed Sheeran]
+[al:Divide]
+[00:09.12]The club isn't the best place to find a lover
+[00:11.45]So the bar is where I go
+[00:13.90]Me and my friends at the table doing shots"""
+        cleaned = clean_lrc_lyrics(raw)
+        assert "[ti:" not in cleaned
+        assert "[ar:" not in cleaned
+        assert "[00:" not in cleaned
+        assert "The club isn't the best place to find a lover" in cleaned
+        assert "So the bar is where I go" in cleaned
+
+    def test_handles_persian_lyrics(self):
+        raw = """[00:10.00]کودکانه
+[00:15.50]بوی عیدی، بوی توپ
+[00:20.10]بوی کاغذ رنگی"""
+        cleaned = clean_lrc_lyrics(raw)
+        assert cleaned == "کودکانه\nبوی عیدی، بوی توپ\nبوی کاغذ رنگی"
+
+    def test_empty_input_returns_empty_string(self):
+        assert clean_lrc_lyrics("") == ""
+        assert clean_lrc_lyrics("   ") == ""
+
+
+class TestTrackLyricsHash:
+    def test_deterministic_and_short(self):
+        h1 = track_lyrics_hash("spotify:track:4cOdK2wGLETKBW3PvgPWqT")
+        h2 = track_lyrics_hash("spotify:track:4cOdK2wGLETKBW3PvgPWqT")
+        assert h1 == h2
+        assert len(h1) == 16
+        # Fits easily in 64-byte telegram callback limit with prefix
+        assert len(f"lyr:{h1}") < 64
+
+    def test_different_tracks_produce_different_hashes(self):
+        h1 = track_lyrics_hash("track-1")
+        h2 = track_lyrics_hash("track-2")
+        assert h1 != h2
+
+

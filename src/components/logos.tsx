@@ -52,6 +52,34 @@ export const YouTubeLogo = ({ className = base }: P) => (
   </svg>
 )
 
+/** لوگوی رسمی گوگل جمینای با گرادیان اصیل آبی-بنفش */
+export const GeminiLogo = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+    <path
+      d="M12 24C12 17.373 17.373 12 24 12C17.373 12 12 6.627 12 0C12 6.627 6.627 12 0 12C6.627 12 12 17.373 12 24Z"
+      fill="url(#gemini-gradient)"
+    />
+    <defs>
+      <linearGradient id="gemini-gradient" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#4E82EE" />
+        <stop offset="0.5" stopColor="#9A62E8" />
+        <stop offset="1" stopColor="#D96570" />
+      </linearGradient>
+    </defs>
+  </svg>
+)
+
+/** لوگوی رسمی جنیوس (Genius) منبع متن ترانه‌ها */
+export const GeniusLogo = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+    <rect width="24" height="24" rx="4" fill="#FFFF64" />
+    <path
+      d="M13.5 6.5h-3.8c-2.3 0-3.7 1.6-3.7 3.8v3.4c0 2.2 1.4 3.8 3.7 3.8h3.8v-2h-3.7c-1.1 0-1.7-.7-1.7-1.8v-3.4c0-1.1.6-1.8 1.7-1.8h3.7v-2zm3.8 3.5h-2.1v7h2.1v-7z"
+      fill="#000000"
+    />
+  </svg>
+)
+
 /** لوگوی متناظر با هر منبع */
 export const SOURCE_LOGO: Record<Source, (props: P) => React.ReactElement> = {
   apple: AppleMusicLogo,

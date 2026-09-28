@@ -180,6 +180,14 @@ CREATE TABLE IF NOT EXISTS catalog_entity (
     PRIMARY KEY (id, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_entity_kind ON catalog_entity(kind, seen_at DESC);
+
+-- کش کاندیداهای حل‌شده برای هر ترک — تا جستجوی مجدد ساندکلاد/یوتیوب به صفر میلی‌ثانیه برسد
+CREATE TABLE IF NOT EXISTS resolved_candidates (
+    track_id    TEXT PRIMARY KEY,
+    candidates  TEXT NOT NULL,
+    resolved_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resolved_cand_at ON resolved_candidates(resolved_at DESC);
 """
 
 # ستون‌هایی که بعد از اولین نسخه اضافه شدند. CREATE TABLE IF NOT EXISTS روی
@@ -362,6 +370,68 @@ def find_ready(track_id: str, quality: str) -> sqlite3.Row | None:
         (track_id, quality),
     )
     return rows[0] if rows else None
+
+
+def find_any_ready(
+    track_id: str, preferred_quality: str | None = None
+) -> sqlite3.Row | None:
+    """هر فایلِ آماده‌ای از همین ترک در کتابخانه، با بالاترین کیفیت ممکن."""
+    if preferred_quality:
+        row = find_ready(track_id, preferred_quality)
+        if row and row["path"] and Path(row["path"]).exists():
+            return row
+
+    rows = _query(
+        """SELECT * FROM jobs
+           WHERE track_id = ? AND status = 'ready' AND path IS NOT NULL
+           ORDER BY
+             CASE quality
+               WHEN 'flac' THEN 7
+               WHEN 'original' THEN 6
+               WHEN '320' THEN 5
+               WHEN 'opus' THEN 4
+               WHEN 'm4a' THEN 3
+               WHEN '192' THEN 2
+               WHEN '128' THEN 1
+               ELSE 0
+             END DESC,
+             created_at DESC""",
+        (track_id,),
+    )
+    for r in rows:
+        if r["path"] and Path(r["path"]).exists():
+            return r
+    return rows[0] if rows else None
+
+
+def get_resolved_candidates(track_id: str) -> list[dict] | None:
+    """دریافت کاندیداهای کش‌شده برای یک ترک از دیتابیس."""
+    rows = _query("SELECT candidates FROM resolved_candidates WHERE track_id = ?", (track_id,))
+    if not rows:
+        return None
+    try:
+        return json.loads(rows[0]["candidates"])
+    except Exception:
+        return None
+
+
+def put_resolved_candidates(
+    track_id: str, candidates: list[dict], resolved_at: float | None = None
+) -> None:
+    """ذخیره‌ی کاندیداهای حل‌شده برای استفاده مجدد."""
+    if resolved_at is None:
+        resolved_at = time.time()
+    payload = json.dumps(candidates)
+    _exec(
+        """INSERT OR REPLACE INTO resolved_candidates (track_id, candidates, resolved_at)
+           VALUES (?, ?, ?)""",
+        (track_id, payload, resolved_at),
+    )
+
+
+def delete_resolved_candidates(track_id: str) -> None:
+    """حذف کاندیداهای کش‌شده (مثلاً در صورت نامعتبر شدن لینک)."""
+    _exec("DELETE FROM resolved_candidates WHERE track_id = ?", (track_id,))
 
 
 def ready_jobs() -> list[sqlite3.Row]:
@@ -700,6 +770,33 @@ def daily_mix(
 
 
 # ---------- پلی‌لیست‌ها ----------
+
+
+def owned_refs(track_ids: list[str]) -> dict[str, sqlite3.Row]:
+    """
+    کدام از این ترک‌ها از قبل در کتابخانه‌اند — برای چت‌باتِ وایب.
+
+    کلید، `track_id` است و مقدار ردیفِ جابِ آماده. اگر یک ترک دو جاب دارد
+    (دو کیفیت)، پرحجم‌تر انتخاب می‌شود: چت دارد پیشنهاد می‌دهد نه آرشیو، و
+    نسخه‌ی باکیفیت‌تر همان فایل است که کاربر دوست دارد بشنود.
+
+    ترتیبِ `ORDER BY bytes DESC` به‌تنهایی این را تضمین می‌کند و `dict.setdefault`
+    اولین (یعنی بهترین) را نگه می‌دارد.
+    """
+    if not track_ids:
+        return {}
+    marks = ", ".join("?" for _ in track_ids)
+    rows = _query(
+        f"""SELECT id, track_id, lyrics_path, loudness, peak, bytes
+            FROM jobs
+            WHERE status = 'ready' AND path IS NOT NULL AND track_id IN ({marks})
+            ORDER BY bytes DESC""",
+        tuple(track_ids),
+    )
+    found: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        found.setdefault(row["track_id"], row)
+    return found
 
 
 def create_playlist(playlist_id: str, name: str, kind: str, rule: dict | None, created_at: float) -> None:

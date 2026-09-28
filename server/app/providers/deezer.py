@@ -37,6 +37,7 @@ def _track(row: dict[str, Any], album_row: dict[str, Any] | None = None) -> Trac
         trackNumber=row.get("track_position"),
         discNumber=row.get("disk_number"),
         artistId=f"deezer:artist:{artist['id']}" if artist.get("id") else None,
+        artistArtworkUrl=_cover(artist, "picture"),
         # نتیجه‌ی جستجو فقط یک آلبومِ خلاصه همراه دارد؛ سال و ژانر تنها وقتی
         # می‌آیند که از صفحه‌ی آلبوم آمده باشیم
         year=_year(alb.get("release_date")),
@@ -78,6 +79,19 @@ def _implied_tracks(row: dict[str, Any]) -> int:
     return 1 if row.get("record_type") == "single" else 0
 
 
+def _release_type(row: dict[str, Any]) -> str | None:
+    """
+    دسته‌ی انتشار از `record_type` دیزر.
+
+    `/artist/{id}/albums` تعداد ترک نمی‌دهد؛ بدون این فیلد فرانت آلبومِ واقعی را
+    از فیلتر «آلبوم‌ها» بیرون می‌انداخت چون trackCount صفر بود.
+    """
+    kind = (row.get("record_type") or "").lower()
+    if kind in ("album", "single", "ep", "compilation"):
+        return kind
+    return None
+
+
 def _album(row: dict[str, Any]) -> Album:
     artist = row.get("artist") or {}
     return Album(
@@ -92,6 +106,8 @@ def _album(row: dict[str, Any]) -> Album:
         # جستجوی دیزر آرتیست‌آیدی و عکسِ آرتیست را همراهِ آلبوم می‌دهد — رایگان
         artistId=f"deezer:artist:{artist['id']}" if artist.get("id") else None,
         artistArtworkUrl=_cover(artist, "picture"),
+        releaseType=_release_type(row),
+        releaseDate=row.get("release_date"),
     )
 
 
@@ -177,6 +193,10 @@ async def album(client: httpx.AsyncClient, album_id: str) -> AlbumDetail | None:
             base.artistArtworkUrl = _cover(await _get(client, f"/artist/{artist_row['id']}"), "picture")
         except Exception:
             pass
+    if base.artistArtworkUrl:
+        for t in tracks:
+            if not t.artistArtworkUrl:
+                t.artistArtworkUrl = base.artistArtworkUrl
     return AlbumDetail(
         **base.model_dump(),
         durationMs=sum(t.durationMs for t in tracks),

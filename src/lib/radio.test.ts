@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pickRadioTrack, radioKey } from './radio'
+import { normalizeTrackTitle, pickRadioTrack, radioKey, trackDedupeKey } from './radio'
 import type { Track } from './types'
 
 function track(id: string, title: string, artist = 'Farhad Mehrad'): Track {
@@ -43,5 +43,27 @@ describe('pickRadioTrack', () => {
     const exclude = new Set([radioKey(pool[0]), radioKey(pool[1])])
     const picked = pickRadioTrack(pool, exclude)
     expect(picked?.id).toBe('c')
+  })
+})
+
+describe('normalizeTrackTitle', () => {
+  it('strips release tags like - Single, - EP, (Remastered)', () => {
+    expect(normalizeTrackTitle('Baraye - Single')).toBe('baraye')
+    expect(normalizeTrackTitle('Baraye (Single Version)')).toBe('baraye')
+    expect(normalizeTrackTitle('Song - Remastered 2021')).toBe('song')
+    expect(normalizeTrackTitle('Track (Album Version)')).toBe('track')
+  })
+
+  it('preserves artistic tags like Remix and Acoustic', () => {
+    expect(normalizeTrackTitle('Baraye (Remix)')).toBe('baraye (remix)')
+    expect(normalizeTrackTitle('Song (Acoustic Version)')).toBe('song (acoustic version)')
+  })
+})
+
+describe('trackDedupeKey', () => {
+  it('deduplicates a single release against an album track', () => {
+    const single = track('1', 'Baraye - Single', 'Shervin Hajipour')
+    const albumTrack = track('2', 'Baraye', 'Shervin Hajipour')
+    expect(trackDedupeKey(single)).toBe(trackDedupeKey(albumTrack))
   })
 })

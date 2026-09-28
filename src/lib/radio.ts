@@ -1,6 +1,30 @@
 import { api } from './api'
 import type { Quality, Track } from './types'
 
+/**
+ * عنوان را برای یکتاسازی نرمال می‌کند — پسوندهای انتشاری مثل Single و Remastered
+ * حذف می‌شوند ولی گونه‌های هنری مثل Remix و Acoustic دست‌نخورده می‌مانند.
+ */
+export function normalizeTrackTitle(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/\s*-\s*(single|ep|album version|remastered|mono|stereo).*/i, '')
+    .replace(/\s*\((single version|remastered[^)]*|mono|stereo|album version)\)/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** کلید یکتای (عنوان نرمال‌شده، هنرمند) برای یکتاسازی ترک‌های سینگل و آلبوم */
+export function trackDedupeKey(
+  track: Pick<Track, 'title' | 'artist'>,
+  mainArtistName?: string,
+): string {
+  const normTitle = normalizeTrackTitle(track.title)
+  const normArtist = (mainArtistName ?? track.artist).trim().toLowerCase()
+  return `${normTitle}::${normArtist}`
+}
+
 /** کلید یکتای (عنوان، هنرمند) — برای جلوگیری از پیشنهاد دوباره‌ی همان ترک */
 export const radioKey = (t: Pick<Track, 'title' | 'artist'>) =>
   `${t.title.trim().toLowerCase()}::${t.artist.trim().toLowerCase()}`

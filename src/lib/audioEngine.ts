@@ -487,6 +487,19 @@ export const engine = {
     return sum / (bins * 255)
   },
 
+  /**
+   * داده‌های خام طیف فرکانسی برای ویژوالایزر زنده.
+   */
+  getFrequencyData(out?: Uint8Array): Uint8Array | null {
+    if (!analyser || !spectrum) return null
+    analyser.getByteFrequencyData(spectrum)
+    if (out) {
+      out.set(spectrum.subarray(0, Math.min(out.length, spectrum.length)))
+      return out
+    }
+    return spectrum
+  },
+
   stop(): void {
     fading = false
     nextSource = null

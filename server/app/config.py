@@ -59,6 +59,11 @@ DATA_DIR = Path(os.getenv("UNSTREAM_DATA_DIR", BASE_DIR / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("UNSTREAM_DB", DATA_DIR / "unstream.db"))
 
+# کش موقت فایل‌های استریم آنلاین — مجزا از دانلودهای دائمی کتابخانه
+STREAM_CACHE_DIR = Path(os.getenv("UNSTREAM_STREAM_CACHE_DIR", DATA_DIR / "cache" / "stream"))
+STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+STREAM_CACHE_MAX_MB = int(os.getenv("UNSTREAM_STREAM_CACHE_MAX_MB", "1024"))
+
 # چند دانلود همزمان — بیشتر از این هم به یوتیوب فشار می‌آورد هم throttle می‌خوریم
 MAX_CONCURRENT_DOWNLOADS = int(os.getenv("UNSTREAM_CONCURRENCY", "3"))
 
@@ -140,6 +145,10 @@ AUDIO_SOURCES = tuple(
     if s.strip()
 )
 
+# کاتالوگ ساندکلاد در جستجو — پیش‌فرض فعال
+SOUNDCLOUD_ENABLED = _flag("UNSTREAM_SOUNDCLOUD", True)
+SOUNDCLOUD_CLIENT_ID = os.getenv("UNSTREAM_SOUNDCLOUD_CLIENT_ID") or None
+
 # متن آهنگ از LRCLIB — عمومی، بدون کلید. کنار فایل .lrc می‌سازد و در تگ هم می‌نشیند.
 LYRICS_ENABLED = _flag("UNSTREAM_LYRICS", True)
 LRCLIB_API = os.getenv("UNSTREAM_LRCLIB_API", "https://lrclib.net")
@@ -175,7 +184,7 @@ SPOTIFY_CLIENT_SECRET = os.getenv("UNSTREAM_SPOTIFY_CLIENT_SECRET") or None
 # مدل عمداً GA است (بدون پسوندِ preview) و قابلِ بازنویسی، چون شناسه‌های
 # Gemini هر چند ماه جابه‌جا می‌شوند و نمی‌خواهیم برای یک تغییرِ اسم دیپلوی کنیم.
 GEMINI_API_KEY = os.getenv("UNSTREAM_GEMINI_API_KEY") or None
-GEMINI_MODEL = os.getenv("UNSTREAM_GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("UNSTREAM_GEMINI_MODEL", "gemini-3.6-flash")
 # v1beta نه v1: `responseSchema` در v1 کامل پشتیبانی نمی‌شود. در config است چون
 # هم `vibe.py` مصرفش می‌کند هم `setup.py` (آزمایشِ کلید) و setup نباید vibe را
 # import کند.
@@ -208,7 +217,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("UNSTREAM_TELEGRAM_BOT_TOKEN") or None
 # TimedOut می‌گرفت — بی‌آنکه چیزی از تنظیماتِ پروکسی اشتباه به نظر برسد.
 # جدا از PROXY نگه داشته شده چون ممکن است کاتالوگ‌ها مستقیم بیایند و فقط
 # تلگرام پروکسی بخواهد (یا برعکس).
-TELEGRAM_PROXY = os.getenv("UNSTREAM_TELEGRAM_PROXY") or PROXY
+TELEGRAM_PROXY = (
+    os.getenv("UNSTREAM_TELEGRAM_PROXY")
+    or PROXY
+    or os.getenv("HTTPS_PROXY")
+    or os.getenv("ALL_PROXY")
+    or os.getenv("HTTP_PROXY")
+    or None
+)
 # فقط وقتی بات پروسه‌ی جدایی از خودِ سرور است لازم می‌شود (مثل سرویس داکر)
 API_BASE_URL = os.getenv("UNSTREAM_API_BASE_URL", "http://localhost:8000")
 
@@ -227,6 +243,14 @@ FOLLOW_POLL_INTERVAL = int(os.getenv("UNSTREAM_FOLLOW_POLL_INTERVAL", str(30 * 6
 # inline می‌نشیند. بدونش، نتیجه‌ی inline فقط لینکِ مستقیمِ فایل را نشان می‌دهد.
 _cache_chat_raw = os.getenv("UNSTREAM_TELEGRAM_CACHE_CHAT_ID")
 TELEGRAM_CACHE_CHAT_ID = int(_cache_chat_raw) if _cache_chat_raw else None
+
+# آدرسِ مینی‌اپ تلگرام (HTTPS). اگر ست شود، دکمه‌ی منوی بات و دکمه‌ی استارت مستقیم
+# وب‌اپلیکیشنِ موزیک‌بازی را درون تلگرام باز می‌کنند.
+TELEGRAM_WEBAPP_URL = (
+    os.getenv("UNSTREAM_TELEGRAM_WEBAPP_URL")
+    or os.getenv("UNSTREAM_WEBAPP_URL")
+    or None
+)
 
 # مبدأهایی که اجازه‌ی CORS دارند.
 #

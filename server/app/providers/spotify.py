@@ -51,7 +51,7 @@ MARKET = "US"
 # «Invalid limit» رد می‌کند و پیش‌فرضش هم پنج است. با پنجاه، دیسکوگرافیِ هر
 # هنرمند خالی می‌آمد.
 ARTIST_ALBUM_PAGE = 10
-ARTIST_ALBUMS = 50
+ARTIST_ALBUMS = MAX_TRACKS
 
 # زیرنویسِ هنرمندی که چیزی درباره‌اش نمی‌دانیم — روی صفحه‌ی هنرمند با تعداد
 # آلبوم عوض می‌شود
@@ -172,6 +172,26 @@ def _year(release_date: str | None) -> int | None:
     return int(head) if head.isdigit() else None
 
 
+def _release_type(row: dict[str, Any]) -> str | None:
+    """
+    دسته‌ی انتشار از `album_type` اسپاتیفای.
+
+    EP جداگانه نیست: اسپاتیفای آن را `single` می‌گذارد. اگر تعداد ترک بین ۲ و ۶
+    باشد EP است — همان حدودی که خودِ اپ هم برای کارت «EP» به کار می‌برد.
+    """
+    kind = (row.get("album_type") or "").lower()
+    tracks = int(row.get("total_tracks") or 0)
+    if kind == "compilation":
+        return "compilation"
+    if kind == "album":
+        return "album"
+    if kind == "single":
+        if 2 <= tracks <= 6:
+            return "ep"
+        return "single"
+    return None
+
+
 def _album_head(row: dict[str, Any]) -> Album:
     return Album(
         id=f"sp:album:{row['id']}",
@@ -184,6 +204,8 @@ def _album_head(row: dict[str, Any]) -> Album:
         sourceUrl=(row.get("external_urls") or {}).get("spotify")
         or f"https://open.spotify.com/album/{row['id']}",
         artistId=_first_artist_id(row),
+        releaseType=_release_type(row),
+        releaseDate=row.get("release_date"),
     )
 
 
@@ -274,6 +296,10 @@ async def album(client: httpx.AsyncClient, album_id: str) -> AlbumDetail | None:
     # آواتارِ آرتیست: «Get Artist» یک درخواست بیشتر است و عکسِ واقعیِ پروفایل
     # را می‌دهد — چیزی که ردیفِ آلبوم ندارد
     base.artistArtworkUrl = await _artist_avatar(client, base.artistId)
+    if base.artistArtworkUrl:
+        for t in tracks:
+            if not t.artistArtworkUrl:
+                t.artistArtworkUrl = base.artistArtworkUrl
     return AlbumDetail(
         **base.model_dump(),
         durationMs=sum(t.durationMs for t in tracks),
@@ -503,6 +529,10 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
             discography.append(album_row)
 
     base = _artist_head(head)
+    if base.artworkUrl:
+        for t in tracks:
+            if not t.artistArtworkUrl:
+                t.artistArtworkUrl = base.artworkUrl
     if base.subtitle == UNKNOWN_ARTIST and discography:
         # کلیدِ حالت توسعه ژانر و دنبال‌کننده را هم نمی‌دهد، پس زیرنویس «هنرمند»
         # خالی می‌ماند. تعداد آلبوم را همین‌جا داریم و مثل دیزر گویاتر است.

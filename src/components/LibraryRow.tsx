@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { useLongPress } from '../lib/useLongPress'
+import { useRowSwipe } from '../lib/useRowSwipe'
 import { usePopover } from '../lib/usePopover'
 import {
   bytes as fmtBytes,
@@ -26,6 +27,8 @@ import LikeHeart from './LikeHeart'
 import SourcePicker from './SourcePicker'
 import SourceLogo from './logos'
 import {
+  AlbumIcon,
+  ArtistIcon,
   ArrowIcon,
   CheckIcon,
   DotsIcon,
@@ -33,10 +36,12 @@ import {
   EqualizerIcon,
   HeartIcon,
   LyricsIcon,
+  NextIcon,
   OfflineIcon,
   PauseIcon,
   PlayIcon,
   PlaylistIcon,
+  QueueIcon,
   Spinner,
   SwapIcon,
   TelegramIcon,
@@ -250,6 +255,32 @@ function RowMenu({
             <>
               <button
                 role="menuitem"
+                onClick={() => {
+                  usePlayer.getState().playNext([toPlayItem(item)])
+                  useToasts.getState().push(t.playNextAdded(item.track.title), 'info')
+                  setOpen(false)
+                }}
+                className={menuItem}
+              >
+                <NextIcon className="size-3.5 shrink-0" />
+                {t.playNext}
+              </button>
+
+              <button
+                role="menuitem"
+                onClick={() => {
+                  usePlayer.getState().enqueue([toPlayItem(item)])
+                  useToasts.getState().push(t.queueAdded(item.track.title), 'info')
+                  setOpen(false)
+                }}
+                className={menuItem}
+              >
+                <QueueIcon className="size-3.5 shrink-0" />
+                {t.addToQueue}
+              </button>
+
+              <button
+                role="menuitem"
                 onClick={() => void toggleFavorite(item.jobId)}
                 className={menuItem}
               >
@@ -274,6 +305,38 @@ function RowMenu({
                 <span className="flex-1">{t.playlistAdd}</span>
                 <ArrowIcon className="size-3 shrink-0 text-muted-2 rtl:-scale-x-100" />
               </button>
+
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  const ref = item.track.artistId || item.track.artist
+                  if (ref) {
+                    window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+                  }
+                }}
+                className={menuItem}
+              >
+                <ArtistIcon className="size-3.5 shrink-0" />
+                {t.goToArtist(item.track.artist)}
+              </button>
+
+              {item.track.album && (
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false)
+                    const ref = item.track.albumId || item.track.album
+                    if (ref) {
+                      window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+                    }
+                  }}
+                  className={menuItem}
+                >
+                  <AlbumIcon className="size-3.5 shrink-0" />
+                  {t.goToAlbum(item.track.album)}
+                </button>
+              )}
 
               <SaveToPhoneItem item={item} onDone={() => setOpen(false)} />
 
@@ -325,13 +388,17 @@ interface RowProps {
   index: number
   /** شماره‌ای که در ستونِ اول دیده می‌شود — معمولاً همان index + 1 */
   number: number
-  onRemove: () => void
+  /**
+   * آبجکت/شناسه می‌گیرد نه کلوزرِ آماده: با `memo`، کلوزری که هر رندر
+   * تازه ساخته می‌شود کل ردیف را بی‌معنی از نو رندر می‌کرد.
+   */
+  onRemove: (item: LibraryItem) => void
   selectable: boolean
   selected: boolean
-  onToggleSelect: () => void
+  onToggleSelect: (jobId: string) => void
 }
 
-export function LibraryRow({
+export const LibraryRow = memo(function LibraryRow({
   item,
   queue,
   index,
@@ -347,8 +414,17 @@ export function LibraryRow({
   const { pinned, saving, toggle } = useOfflinePin(item)
   const favorite = useFavorites((s) => Boolean(s.items[item.jobId]))
   const toggleFavorite = useFavorites((s) => s.toggle)
-  const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null)
-  const playing = usePlayer((s) => s.playing)
+  /*
+   * دو سلکتورِ primitive به‌جای `playing` عمومی.
+   *
+   * `usePlayer((s) => s.playing)` یعنی هر play/pause روی هر ۴۸ ردیف یک
+   * رندر می‌ریزد (اشتراک zustand از memo ردیف رد می‌شود). این‌طور فقط ردیفی
+   * که وضعیتش *واقعاً* عوض شده رندر می‌کند — و تیک‌های جایگاهِ پخش که هر
+   * ربع‌ثانیه state می‌سازند هیچ ردیفی را بیدار نمی‌کنند.
+   */
+  const jobId = item.jobId
+  const isCurrent = usePlayer((s) => s.queue[s.index]?.id === jobId)
+  const isPlaying = usePlayer((s) => s.playing && s.queue[s.index]?.id === jobId)
 
   /*
    * نگه‌داشتنِ انگشت روی ردیف (و راست‌کلیک روی دسکتاپ) همان منویِ «⋯» را
@@ -360,9 +436,21 @@ export function LibraryRow({
    */
   const holdRef = useLongPress<HTMLDivElement>(() => setMenuOpen(true), !selectable)
 
+  useRowSwipe<HTMLDivElement>({
+    ref: holdRef,
+    onStartToEnd: () => {
+      usePlayer.getState().enqueue([toPlayItem(item)])
+      useToasts.getState().push(t.queueAdded(item.track.title), 'info')
+    },
+    onEndToStart: () => {
+      const isFav = Boolean(useFavorites.getState().items[item.jobId])
+      void toggleFavorite(item.jobId)
+      useToasts.getState().push(isFav ? t.favoriteRemove : t.favoriteAdd, 'info')
+    },
+    enabled: !selectable,
+  })
+
   const { track } = item
-  const isCurrent = currentId === item.jobId
-  const isPlaying = isCurrent && playing
   const filename = `${safeFilename(`${track.artist} - ${track.title}`)}.${fileExt(item.format)}`
 
   /*
@@ -378,7 +466,7 @@ export function LibraryRow({
   return (
     <div
       ref={holdRef}
-      className={`group hold-menu relative rounded-lg px-1.5 py-1.5 transition sm:px-2 ${ROW_GRID} ${
+      className={`group hold-menu relative touch-pan-y rounded-lg px-1.5 py-1.5 transition sm:px-2 ${ROW_GRID} ${
         quiet ? 'row-cv ' : ''
       }${selected ? 'bg-accent-dim' : 'hover:bg-panel-2'}`}
     >
@@ -387,7 +475,7 @@ export function LibraryRow({
       <div className="relative grid size-7 place-items-center">
         {selectable ? (
           <button
-            onClick={onToggleSelect}
+            onClick={() => onToggleSelect(jobId)}
             role="checkbox"
             aria-checked={selected}
             aria-label={t.selectionRow(track.title)}
@@ -443,13 +531,45 @@ export function LibraryRow({
             <span className="sr-only">{SOURCE_LABEL[track.source]}</span>
           </p>
           <p className="bidi truncate text-xs text-muted">
-            <bdi>{track.artist}</bdi>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                const ref = track.artistId || track.artist
+                if (ref) {
+                  window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+                }
+              }}
+              title={t.goToArtist(track.artist)}
+              className="truncate text-start transition hover:text-accent hover:underline decoration-accent/40 underline-offset-2"
+            >
+              <bdi>{track.artist}</bdi>
+            </button>
           </p>
         </div>
       </div>
 
       {/* آلبوم و تاریخ فقط روی صفحه‌ی بزرگ — روی موبایل همان دو خطِ بالا کافی است */}
-      <p className="bidi hidden truncate text-xs text-muted-2 md:block">{track.album ?? '—'}</p>
+      {track.album ? (
+        <p className="bidi hidden truncate text-xs text-muted-2 md:block">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              const ref = track.albumId || track.album
+              if (ref) {
+                window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+              }
+            }}
+            title={t.goToAlbum(track.album)}
+            className="truncate text-start transition hover:text-fg hover:underline decoration-muted-2/40 underline-offset-2"
+          >
+            {track.album}
+          </button>
+        </p>
+      ) : (
+        <p className="bidi hidden truncate text-xs text-muted-2 md:block">—</p>
+      )}
       <p className="hidden truncate text-[11px] text-muted-2 xl:block">
         {shortDate(item.createdAt, lang)}
       </p>
@@ -498,7 +618,7 @@ export function LibraryRow({
 
         <RowMenu
           item={item}
-          onRemove={onRemove}
+          onRemove={() => onRemove(item)}
           onPickSource={() => setPicking(true)}
           open={menuOpen}
           setOpen={setMenuOpen}
@@ -510,7 +630,7 @@ export function LibraryRow({
       )}
     </div>
   )
-}
+})
 
 /**
  * سرستون‌ها — همان قالبِ ردیف، تا ستون‌ها زیرِ هم بنشینند.

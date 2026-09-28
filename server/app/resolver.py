@@ -12,12 +12,12 @@ import re
 import time
 import unicodedata
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 
 from yt_dlp import YoutubeDL
 
-from . import ydl
+from . import db, ydl
 from .config import AUDIO_SOURCES
 from .models import Track
 
@@ -139,6 +139,13 @@ def score_candidate(track: Track, title: str, uploader: str, duration_ms: int) -
 
     if track.durationMs and duration_ms:
         delta = abs(track.durationMs - duration_ms) / 1000
+        # «دو پنجره»ی ۲۹۲ ثانیه‌ای با یک پیش‌نمایشِ ۳۰ ثانیه‌ای تحویل شد و جاب
+        # بدون هیچ هشداری ready شد — کاندیدِ کوتاه‌تر از ۶۰ ثانیه وقتی ترک کامل
+        # است هرگز سگمنتِ معتبر نیست (پیش‌نمایشِ فروشگاه، اینترو، کلیپ). جریمه
+        # سنگین تا پایین لیست برود؛ اگر چیز بهتری نبود، دانلودشدنش از نبودنش
+        # بهتر است ولی `jobs` مدتِ فایل واقعی را چک می‌کند و هشدار می‌دهد.
+        if duration_ms < 60_000 and track.durationMs >= 120_000:
+            score -= 60
         if delta <= 2:
             score += 30
         elif delta <= 5:
@@ -316,7 +323,19 @@ def _search_all_sources(track: Track, sources: Iterable[str] | None = None) -> l
     return found[:MAX_ATTEMPTS]
 
 
-def resolve(track: Track) -> list[Candidate]:
+_mem_candidate_cache: dict[str, list[Candidate]] = {}
+
+
+def invalidate_cache(track_id: str) -> None:
+    """حذف کش حافظه و دیتابیس برای یک ترک (مثلاً وقتی کاندیدا نامعتبر بود)."""
+    _mem_candidate_cache.pop(track_id, None)
+    try:
+        db.delete_resolved_candidates(track_id)
+    except Exception:
+        pass
+
+
+def resolve(track: Track, use_cache: bool = False) -> list[Candidate]:
     """
     کاندیدهای قابل دانلود را مرتب‌شده بر اساس امتیاز برمی‌گرداند.
 
@@ -342,7 +361,27 @@ def resolve(track: Track) -> list[Candidate]:
             )
         ]
 
-    return _search_all_sources(track)
+    if use_cache:
+        if track.id in _mem_candidate_cache:
+            return _mem_candidate_cache[track.id]
+        try:
+            cached_rows = db.get_resolved_candidates(track.id)
+            if cached_rows is not None:
+                candidates = [Candidate(**c) for c in cached_rows]
+                _mem_candidate_cache[track.id] = candidates
+                return candidates
+        except Exception:
+            pass
+
+    found = _search_all_sources(track)
+    if found and use_cache:
+        _mem_candidate_cache[track.id] = found
+        try:
+            db.put_resolved_candidates(track.id, [asdict(c) for c in found])
+        except Exception:
+            pass
+
+    return found
 
 
 def resolve_fallback(track: Track, tried_sources: frozenset[str] = frozenset()) -> list[Candidate]:

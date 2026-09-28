@@ -10,6 +10,7 @@ import {
   type LyricLine,
 } from '../lib/lrc'
 import { haptic } from '../lib/native'
+import { InstrumentalIcon, SyncLyricsIcon } from './icons'
 
 /**
  * نمای کارائوکه‌ی متن آهنگ.
@@ -106,6 +107,11 @@ export default function LyricsPanel({ lines, position, trackEnd, onSeek }: Props
             const spans = line.querySelectorAll<HTMLElement>('[data-word]')
             for (let i = 0; i < spans.length; i++) {
               spans[i].style.setProperty('--wp', i < w ? '1' : '0')
+              if (i === w) {
+                spans[i].setAttribute('data-active-word', 'true')
+              } else {
+                spans[i].removeAttribute('data-active-word')
+              }
             }
             lastWord = w
           }
@@ -119,6 +125,10 @@ export default function LyricsPanel({ lines, position, trackEnd, onSeek }: Props
         }
       }
       if (idx !== last) {
+        if (last >= 0 && lineRefs.current[last]) {
+          const oldSpans = lineRefs.current[last]?.querySelectorAll<HTMLElement>('[data-active-word]')
+          oldSpans?.forEach((s) => s.removeAttribute('data-active-word'))
+        }
         lastWord = -2
         last = idx
         setActive(idx)
@@ -129,83 +139,113 @@ export default function LyricsPanel({ lines, position, trackEnd, onSeek }: Props
     return () => cancelAnimationFrame(raf)
   }, [lines, trackEnd])
 
-  /*
-   * خطِ فعال وسطِ پنل بماند — فقط با تعویضِ خط، وگرنه اسکرولِ دستی هر لحظه ریست می‌شد.
-   *
-   * `scrollIntoView` عمداً اینجا نیست: آن روش *همه* جدرهای اسکرول‌پذیر را
-   * جابه‌جا می‌کند، از جمله خودِ شیتِ مودال (که `overflow-hidden` است ولی باز
-   * هم از نظر برنامه‌ای ظرفیتِ اسکرول دارد). نتیجه‌اش این بود که با هر خطِ
-   * تازه، کلِ شیت بالا می‌رفت و هدر/اسمِ هنرمند روی متن و کنترل‌ها زیرِ متن
-   * می‌افتاد. این‌جا فقط و فقط ظرفِ خودش اسکرول می‌شود.
-   */
-  useEffect(() => {
+  // وضعیت اسکرول دستی توسط کاربر جهت نمایش دکمه شناور همگام‌سازی (TIDAL Floating Sync Button)
+  const [userScrolled, setUserScrolled] = useState(false)
+  const scrollTimeoutRef = useRef<number | null>(null)
+
+  const handleUserInteraction = () => {
+    setUserScrolled(true)
+    if (scrollTimeoutRef.current) window.clearTimeout(scrollTimeoutRef.current)
+    scrollTimeoutRef.current = window.setTimeout(() => {
+      setUserScrolled(false)
+    }, 7000)
+  }
+
+  const scrollToActive = () => {
     const pane = scrollRef.current
     const line = lineRefs.current[active]
     if (!pane || !line) return
     const target = line.offsetTop + line.offsetHeight / 2 - pane.clientHeight / 2
     pane.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
-  }, [active])
+    setUserScrolled(false)
+  }
+
+  /*
+   * خطِ فعال وسطِ پنل بماند — اگر کاربر اسکرول دستی نکرده باشد.
+   */
+  useEffect(() => {
+    if (userScrolled) return
+    const pane = scrollRef.current
+    const line = lineRefs.current[active]
+    if (!pane || !line) return
+    const target = line.offsetTop + line.offsetHeight / 2 - pane.clientHeight / 2
+    pane.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
+  }, [active, userScrolled])
 
   return (
-    <div
-      ref={scrollRef}
-      /*
-       * `absolute inset-0` نه `h-full`: والدِ flex ارتفاعش از max-heightِ
-       * شیت می‌آید و برای مرورگر «نامعین» است — درصدِ ارتفاع در آن حالت به
-       * auto برمی‌گردد و پنل به ارتفاعِ محتوا رشد می‌کرد و روی عنوان و
-       * کنترل‌ها می‌افتاد. جای‌گذاریِ مطلق در والدِ relative از درصد بی‌نیاز است.
-       *
-       * همه‌ی خط‌ها یک‌جا رندر می‌شوند (بدونِ پنجره‌ی اطرافِ خطِ فعال) تا
-       * متنِ کامل پیوسته دیده و اسکرول شود؛ خط‌های غیرِ فعال فقط متنِ ساده‌اند
-       * پس DOM سبک می‌ماند. `no-scrollbar` هم نوارِ اسکرول را می‌پوشاند —
-       * خودِ خطِ فعال راهنمای «کجا هستیم» است.
-       */
-      className="lyrics-scroll scroll-pane no-scrollbar absolute inset-0 overflow-y-auto rounded-2xl border border-line-soft bg-panel-2/40 px-4 py-3"
-    >
-      <div className="space-y-4 py-8">
-        {lines.map((line, index) => {
-          const isActive = index === active
-          return (
-            <p
-              key={index}
-              ref={(el) => {
-                lineRefs.current[index] = el
-              }}
-              dir={isRtl(line.text) ? 'rtl' : 'ltr'}
-              role="button"
-              tabIndex={0}
-              aria-label={t.lyricSeekTo}
-              aria-current={isActive ? 'true' : undefined}
-              onClick={() => {
-                haptic.tap()
-                onSeek(line.time)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
+    <div className="relative size-full overflow-hidden">
+      <div
+        ref={scrollRef}
+        onWheel={handleUserInteraction}
+        onTouchMove={handleUserInteraction}
+        onPointerDown={handleUserInteraction}
+        className="lyrics-scroll scroll-pane no-scrollbar absolute inset-0 overflow-y-auto px-4 sm:px-8 py-3 select-none"
+      >
+        <div className="space-y-6 sm:space-y-8 py-16 px-2">
+          {lines.map((line, index) => {
+            const isActive = index === active
+            const distance = Math.abs(index - active)
+
+            const styleObj: CSSProperties = isActive
+              ? ({
+                  '--p': lineProgress(lines, index, position, trackEnd),
+                  opacity: 1,
+                } as CSSProperties)
+              : ({
+                  opacity: distance === 1 ? 0.45 : distance === 2 ? 0.38 : 0.28,
+                } as CSSProperties)
+
+            return (
+              <p
+                key={index}
+                ref={(el) => {
+                  lineRefs.current[index] = el
+                }}
+                dir={isRtl(line.text) ? 'rtl' : 'ltr'}
+                role="button"
+                tabIndex={0}
+                aria-label={t.lyricSeekTo}
+                aria-current={isActive ? 'true' : undefined}
+                onClick={() => {
+                  haptic.tap()
+                  setUserScrolled(false)
                   onSeek(line.time)
-                }
-              }}
-              /*
-               * `--p` را حلقه‌ی rAF می‌نویسد؛ این‌جا فقط مقدارِ اولیه‌اش از
-               * positionِ استور است تا قبلِ اولین فریم هم رنگ درست باشد.
-               */
-              style={
-                isActive
-                  ? ({ '--p': lineProgress(lines, index, position, trackEnd) } as CSSProperties)
-                  : undefined
-              }
-              className={`karaoke-line cursor-pointer text-lg leading-8 outline-none transition-[opacity,color,filter,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus-visible:ring-2 focus-visible:ring-accent sm:text-xl ${
-                isActive
-                  ? 'karaoke-active font-bold'
-                  : 'text-muted-2 opacity-70'
-              }`}
-            >
-              {renderContent(line, isActive)}
-            </p>
-          )
-        })}
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setUserScrolled(false)
+                    onSeek(line.time)
+                  }
+                }}
+                style={styleObj}
+                className={`karaoke-line cursor-pointer text-2xl sm:text-3xl lg:text-4xl font-extrabold leading-snug sm:leading-tight outline-none transition-[opacity,color] duration-300 focus-visible:ring-2 focus-visible:ring-white/40 ${
+                  isActive
+                    ? 'karaoke-active text-white'
+                    : 'text-white/40 hover:text-white/60'
+                }`}
+              >
+                {renderContent(line, isActive)}
+              </p>
+            )
+          })}
+        </div>
       </div>
+
+      {/* دکمه شناور بازگشت به خط در حال پخش به سبک TIDAL */}
+      {userScrolled && active >= 0 && (
+        <button
+          onClick={() => {
+            haptic.tap()
+            scrollToActive()
+          }}
+          aria-label={t.nowPlayingView}
+          title="همگام‌سازی با خط در حال پخش"
+          className="absolute end-4 sm:end-6 bottom-4 sm:bottom-6 z-30 grid size-12 sm:size-14 place-items-center rounded-full bg-white text-black shadow-2xl transition hover:scale-105 active:scale-95 cursor-pointer animate-in fade-in zoom-in-95 duration-200"
+        >
+          <SyncLyricsIcon className="size-6 text-black" />
+        </button>
+      )}
     </div>
   )
 }
@@ -216,7 +256,18 @@ export default function LyricsPanel({ lines, position, trackEnd, onSeek }: Props
  * رندر می‌شوند تا DOM سبک بماند.
  */
 function renderContent(line: LyricLine, isActive: boolean): ReactNode {
-  if (!line.words || !isActive) return line.text || '♪'
+  const trimmed = line.text?.trim() ?? ''
+  const isInst = !trimmed || trimmed === '♪' || trimmed === '...' || trimmed === '…' || /^\s*\[.*(music|instrumental|solo|outro|intro).*\]\s*$/i.test(trimmed)
+
+  if (isInst) {
+    return (
+      <span className="inline-flex items-center gap-2 py-1">
+        <InstrumentalIcon className={`size-5 transition-all duration-300 ${isActive ? 'animate-pulse text-white scale-110' : 'text-white/40'}`} />
+      </span>
+    )
+  }
+
+  if (!line.words || !isActive) return line.text
   return line.words.map((w, i) => (
     <span key={i} data-word className="karaoke-word" style={{ '--wp': 0 } as CSSProperties}>
       {w.text}

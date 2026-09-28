@@ -220,3 +220,38 @@ class TestSearchAndArtistPage:
         assert with_picture.artworkUrl == SQUARE
         # بی‌عکس، همان رفتارِ قبلی: کاورِ تازه‌ترین آلبوم
         assert without.artworkUrl.endswith("/500x500bb.jpg")
+
+    def test_artist_without_albums_falls_back_to_songs_lookup(self):
+        rows = {
+            "album": [],
+            "song": [
+                {"wrapperType": "artist", "artistId": 5, "artistName": "هنرمند تک‌آهنگی"},
+                {
+                    "wrapperType": "track", "kind": "song", "trackId": 501,
+                    "trackName": "Single Song", "artistName": "هنرمند تک‌آهنگی",
+                },
+            ],
+        }
+
+        async def run():
+            itunes._image_cache.clear()
+            async with _client(self._handler(rows, {"5": _page(None)})) as client:
+                return await itunes.artist(client, "5")
+
+        detail = asyncio.run(run())
+        assert detail is not None
+        assert detail.name == "هنرمند تک‌آهنگی"
+        assert len(detail.topTracks) == 1
+        assert detail.topTracks[0].title == "Single Song"
+
+    def test_parse_url_supports_various_apple_music_artist_urls(self):
+        urls = [
+            ("https://music.apple.com/us/artist/taylor-swift/159260351", "159260351"),
+            ("https://music.apple.com/artist/taylor-swift/159260351", "159260351"),
+            ("https://music.apple.com/us/artist/159260351", "159260351"),
+            ("https://music.apple.com/artist/159260351", "159260351"),
+            ("https://music.apple.com/us/artist/taylor-swift/159260351?uo=4", "159260351"),
+        ]
+        for url, expected_id in urls:
+            parsed = itunes.parse_url(url)
+            assert parsed == ("artist", expected_id), f"Failed to parse {url}"

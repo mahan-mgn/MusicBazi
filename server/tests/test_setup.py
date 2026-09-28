@@ -100,6 +100,31 @@ def test_test_rejects_unknown_group_and_key():
     assert r.status_code == 400
 
 
+def test_save_rejects_multiline_values(env_file):
+    """
+    حفره‌ی واقعی: کلید در allowlist است ولی *مقدار* خطِ دومِ دلخواه می‌آورد.
+
+    `UNSTREAM_PROXY = "socks5://x\\nUNSTREAM_DB=/evil"` یک خط مجاز می‌نویسد و
+    کنارش یک خطِ کاملاً خارجِ allowlist — چون allowlist فقط نامِ کلیدِ ارسالی را
+    می‌بیند، نه چیزی که روی دیسک می‌نشیند. اندپوینت احراز هویت ندارد، پس تنها
+    دفاع، ردّکردنِ خودِ مقدارِ چندخطی است.
+    """
+    client = TestClient(_app())
+    r = client.post(
+        "/api/setup/save",
+        json={"values": {"UNSTREAM_PROXY": "socks5://127.0.0.1:1080\nUNSTREAM_DB=/evil.db"}},
+    )
+    assert r.status_code == 400
+    assert not env_file.exists()
+    # مقدارِ تک‌خطیِ عادی نباید با این بررسی رد شود
+    ok = client.post(
+        "/api/setup/save",
+        json={"values": {"UNSTREAM_PROXY": "socks5://127.0.0.1:1080"}, "restart": False},
+    )
+    assert ok.status_code == 200
+    assert env_file.read_text(encoding="utf-8").count("\n") == 1
+
+
 # ---------------------------------------------------------------- آزمایِش‌ها
 
 

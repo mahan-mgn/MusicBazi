@@ -7,11 +7,17 @@ import { useMoodChat } from '../store/moodChat'
 import { usePlayer, type PlayItem } from '../store/player'
 import { useRecent, type RecentEntry } from '../store/recent'
 import Artwork from './Artwork'
-import LogoLoop from './LogoLoop'
 import ShinyText from './ShinyText'
 import SpotlightCard from './SpotlightCard'
 import { SectionHead, Shelf, TrackTile } from './Shelf'
-import { ArrowIcon, LibraryIcon, PauseIcon, PlayIcon, SparkleIcon } from './icons'
+import {
+  ArrowIcon,
+  ExploreIcon,
+  LibraryIcon,
+  PauseIcon,
+  PlayIcon,
+  SparkleIcon,
+} from './icons'
 import SourceLogo from './logos'
 
 /** منبع‌هایی که سرچ‌بار می‌شناسد — همان‌ها که در هیرو نشان داده می‌شوند */
@@ -35,14 +41,6 @@ const VIBE_GRADIENT: Record<string, [string, string]> = {
   heartbreak: ['#4a2060', '#b07be0'],
 }
 
-/**
- * ارتفاع میله‌های موج‌نمای هیرو — درصد.
- *
- * از sin ساخته می‌شود نه random: طرح باید بین رفرش‌ها یکی بماند، وگرنه هر بار
- * یک نمودارِ دیگر است و شبیه نویز می‌شود نه امضای صفحه.
- */
-const WAVE = Array.from({ length: 26 }, (_, i) => 22 + Math.abs(Math.sin(i * 1.1)) * 68)
-
 /** «چه ساعتی از روز» — همان سلامِ ساده‌ای که هر صفحه‌ی خانه‌ی موزیک دارد */
 function greeting(t: Dict): string {
   const h = new Date().getHours()
@@ -62,12 +60,26 @@ const toPlayItem = (item: LibraryItem): PlayItem => ({
 interface Props {
   onOpenRef: (kind: 'artist' | 'album', ref: string) => void
   onOpenLibrary: () => void
+  onFocusSearch?: () => void
+  onSearch: (query: string) => void
+  onIdentify?: () => void
 }
 
-export default function Home({ onOpenRef, onOpenLibrary }: Props) {
+const STARTER_QUERIES = {
+  fa: ['موسیقی بی‌کلام', 'همایون شجریان', 'lofi'],
+  en: ['lofi', 'Daft Punk', 'jazz'],
+} as const
+
+export default function Home({
+  onOpenRef,
+  onOpenLibrary,
+  onFocusSearch: _onFocusSearch,
+  onSearch,
+  onIdentify: _onIdentify,
+}: Props) {
   const { t } = useI18n()
   const history = useRecent((s) => s.items)
-  const library = useRecentLibrary()
+  const { items: library, loaded: libraryLoaded } = useRecentLibrary()
   // ردیفِ «تازه گرفته‌ای» فقط یک نگاهِ کوتاه است؛ استخرِ کاورها کلِ کتابخانه
   const recent = library.slice(0, 12)
   // کل ردیف یک صف است: کلیک روی کاشی سوم یعنی «از سومی به بعد»
@@ -77,6 +89,29 @@ export default function Home({ onOpenRef, onOpenLibrary }: Props) {
   const coverPool = useMemo(
     () => [...new Set(library.map((x) => x.track.artworkUrl).filter((url) => Boolean(url)))] as string[],
     [library],
+  )
+
+  const recentShelf = recent.length > 0 && (
+    <section className="rise" style={{ animationDelay: '210ms' }}>
+      <SectionHead
+        title={t.recentlyDownloaded}
+        hint={t.recentlyDownloadedHint}
+        action={
+          <button
+            onClick={onOpenLibrary}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full border border-line bg-panel px-3 py-1.5 text-[11px] text-muted transition hover:text-fg"
+          >
+            <LibraryIcon className="size-3.5" />
+            {t.seeAll}
+          </button>
+        }
+      />
+      <Shelf>
+        {recent.map((item, i) => (
+          <TrackTile key={item.jobId} item={item} queue={recentQueue} index={i} />
+        ))}
+      </Shelf>
+    </section>
   )
 
   return (
@@ -95,10 +130,20 @@ export default function Home({ onOpenRef, onOpenLibrary }: Props) {
         </section>
       )}
 
+      {!history.length && libraryLoaded && recent.length === 0 && (
+        <StarterSearch onSearch={onSearch} />
+      )}
+
+      {!history.length && recent.length > 0 && recentShelf}
+
       <DailyMixShelf />
 
       <section className="rise" style={{ animationDelay: '140ms' }}>
-        <SectionHead title={t.madeForYou} hint={t.madeForYouHint} />
+        <SectionHead
+          title={t.madeForYou}
+          hint={t.madeForYouHint}
+          icon={<ExploreIcon className="size-4 text-accent" />}
+        />
         <Shelf>
           {VIBE_KEYS.map((key) => (
             <VibeTile key={key} vibe={key} covers={vibeCovers(coverPool, key)} />
@@ -106,29 +151,30 @@ export default function Home({ onOpenRef, onOpenLibrary }: Props) {
         </Shelf>
       </section>
 
-      {recent.length > 0 && (
-        <section className="rise" style={{ animationDelay: '210ms' }}>
-          <SectionHead
-            title={t.recentlyDownloaded}
-            hint={t.recentlyDownloadedHint}
-            action={
-              <button
-                onClick={onOpenLibrary}
-                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-line bg-panel px-3 py-1.5 text-[11px] text-muted transition hover:text-fg"
-              >
-                <LibraryIcon className="size-3.5" />
-                {t.seeAll}
-              </button>
-            }
-          />
-          <Shelf>
-            {recent.map((item, i) => (
-              <TrackTile key={item.jobId} item={item} queue={recentQueue} index={i} />
-            ))}
-          </Shelf>
-        </section>
-      )}
+      {history.length > 0 && recentShelf}
     </div>
+  )
+}
+
+function StarterSearch({ onSearch }: { onSearch: (query: string) => void }) {
+  const { t, lang } = useI18n()
+  const queries = STARTER_QUERIES[lang]
+
+  return (
+    <section className="rise rounded-2xl border border-line-soft bg-panel/50 p-4 sm:p-5">
+      <SectionHead title={t.homeStartTitle} hint={t.homeStartHint} />
+      <div className="flex flex-wrap gap-2">
+        {queries.map((query) => (
+          <button
+            key={query}
+            onClick={() => onSearch(query)}
+            className="rounded-full border border-line bg-panel px-3.5 py-2 text-xs text-muted transition hover:border-accent/50 hover:text-fg"
+          >
+            {query}
+          </button>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -139,8 +185,9 @@ export default function Home({ onOpenRef, onOpenLibrary }: Props) {
  * مود دمو اصلاً کتابخانه ندارد؛ آن‌جا ردیف کلاً رندر نمی‌شود به‌جای این‌که یک
  * جعبه‌ی خالیِ «در دسترس نیست» وسط خانه بگذارد.
  */
-function useRecentLibrary(): LibraryItem[] {
+function useRecentLibrary(): { items: LibraryItem[]; loaded: boolean } {
   const [items, setItems] = useState<LibraryItem[]>([])
+  const [loaded, setLoaded] = useState(API_MODE !== 'http')
 
   useEffect(() => {
     if (API_MODE !== 'http') return
@@ -148,44 +195,31 @@ function useRecentLibrary(): LibraryItem[] {
     api
       .library('', ctrl.signal)
       .then((page) => {
-        if (!ctrl.signal.aborted) setItems(page?.items ?? [])
+        if (!ctrl.signal.aborted) {
+          setItems(page?.items ?? [])
+          setLoaded(true)
+        }
       })
       // خانه بدون این ردیف هم کامل است — خطای کتابخانه ارزش توست ندارد
-      .catch(() => {})
+      .catch(() => {
+        if (!ctrl.signal.aborted) setLoaded(true)
+      })
     return () => ctrl.abort()
   }, [])
 
-  return items
+  return { items, loaded }
 }
 
 function Hero() {
   const { t, lang } = useI18n()
 
   return (
-    <section className="rise relative isolate overflow-hidden rounded-3xl border border-line-soft bg-panel/40 px-5 py-8 sm:px-9 sm:py-11">
+    <section className="rise relative isolate overflow-hidden rounded-2xl border border-line-soft bg-panel/40 px-5 py-5 sm:rounded-3xl sm:px-8 sm:py-6">
       <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -top-24 start-[-3rem] size-64 rounded-full bg-accent/25 blur-[90px]" />
-        <div className="absolute -bottom-28 end-[-2rem] size-72 rounded-full bg-accent-2/20 blur-[100px]" />
-
-        {/*
-          طرفِ خالیِ هیرو (سمتِ مخالفِ متن) از lg به بالا موج‌نما می‌گیرد. زیر آن
-          عرض، متن تا همان‌جا کش می‌آید و موج فقط پشتش شلوغی می‌شد.
-        */}
-        <div className="absolute inset-y-0 end-0 hidden w-2/5 items-end gap-1.5 px-8 py-10 opacity-20 lg:flex">
-          {WAVE.map((h, i) => (
-            <span
-              key={i}
-              className="wave-bar flex-1 rounded-full bg-accent"
-              style={{ height: `${h}%`, animationDelay: `${i * 110}ms` }}
-            />
-          ))}
-        </div>
+        <div className="absolute -top-20 start-[-2rem] size-48 rounded-full bg-accent/20 blur-[60px]" />
+        <div className="absolute -bottom-20 end-[-1.5rem] size-52 rounded-full bg-accent-2/15 blur-[70px]" />
       </div>
 
-      {/*
-        فاصله‌ی حروف فقط در انگلیسی: در فارسی حروفِ چسبان را از هم باز می‌کند و
-        «شب بخیر» شکسته دیده می‌شود
-      */}
       <p
         className={`flex items-center gap-1.5 text-[11px] font-semibold text-muted-2 ${
           lang === 'en' ? 'uppercase tracking-[0.18em]' : ''
@@ -195,36 +229,30 @@ function Hero() {
         {greeting(t)}
       </p>
 
-      <h1 className="mt-3 text-3xl font-black leading-[1.25] sm:text-5xl sm:leading-[1.2]">
+      <h1 className="mt-2 text-2xl font-black leading-tight sm:text-4xl sm:leading-tight">
         {t.heroLine1}
         <br />
-        {/* براقی فقط روی همین یک خط: وقتی همه‌جا باشد دیگر جایی را نشان نمی‌دهد */}
         <ShinyText>{t.heroLine2}</ShinyText>
       </h1>
 
-      <p className="mt-4 max-w-xl text-xs leading-6 text-muted sm:text-sm sm:leading-7">
+      <p className="mt-2.5 max-w-xl text-xs leading-5 text-muted sm:text-sm sm:leading-6">
         {t.heroBody}
       </p>
 
-      {/*
-        منبع‌ها به‌جای پیچیدن در دو خط، در یک نوارِ بی‌پایان می‌گذرند.
-        روی موبایل پنج تراشه دو ردیف می‌شدند و ارتفاعِ هیرو را می‌خوردند؛ حالا
-        همیشه یک ردیف است و پیامش هم بهتر می‌رسد: «همه‌ی این‌ها».
-      */}
-      <div className="mt-6 flex items-center gap-3">
+      <div className="mt-4 flex items-center gap-2.5">
         <span className="shrink-0 text-[11px] text-muted-2">{t.worksWith}</span>
-        <LogoLoop ariaLabel={t.worksWith} className="min-w-0 flex-1 py-1">
+        <ul className="flex items-center gap-1.5" aria-label={t.worksWith}>
           {SOURCES.map((source) => (
             <li
               key={source}
               title={SOURCE_LABEL[source]}
-              className="inline-grid size-7 shrink-0 place-items-center rounded-full border border-line bg-panel/70"
+              className="inline-grid size-6 shrink-0 place-items-center rounded-full border border-line bg-panel/70"
             >
-              <SourceLogo source={source} className="size-4" />
+              <SourceLogo source={source} className="size-3.5" />
               <span className="sr-only">{SOURCE_LABEL[source]}</span>
             </li>
           ))}
-        </LogoLoop>
+        </ul>
       </div>
     </section>
   )
@@ -391,6 +419,9 @@ function VibeTile({ vibe, covers }: { vibe: string; covers: string[] }) {
           {t.vibePlaylist}
         </span>
         <span className="bidi block truncate text-sm font-bold text-white drop-shadow">{text}</span>
+        <span className="bidi mt-0.5 block truncate text-[10px] text-white/80 drop-shadow">
+          {t[`vibe${vibe[0].toUpperCase()}${vibe.slice(1)}Hint` as keyof Dict] as string}
+        </span>
       </span>
 
       <span className="hover-reveal absolute end-2 top-2 grid size-7 place-items-center rounded-full bg-accent text-accent-fg opacity-0 shadow-lg shadow-black/40 transition group-hover:opacity-100">

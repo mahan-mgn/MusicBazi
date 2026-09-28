@@ -197,6 +197,7 @@ class TestArtistPage:
         assert [t.artist for t in detail.topTracks] == ["Dorcci"]
         # تازه‌ترین اول، مثل بقیه‌ی صفحه‌های هنرمند
         assert [a.title for a in detail.albums] == ["GONAH", "YOUNG MORVARID"]
+        assert [a.releaseType for a in detail.albums] == ["album", "album"]
 
     def test_an_empty_set_is_not_listed(self, monkeypatch):
         """ستِ ساخته‌شده و پرنشده، کارتی است که باز کردنش به صفحه‌ی خالی می‌رسد."""
@@ -232,6 +233,20 @@ class TestArtistPage:
 
         assert ytdlp.soundcloud_artist("9") is None
 
+    def test_top_tracks_request_uses_soundcloud_hotness_order(self, monkeypatch):
+        seen: list[tuple[str, dict]] = []
+
+        def fake(path, **params):
+            seen.append((path, params))
+            return [_row(11, "GONAH", playback_count=900)]
+
+        monkeypatch.setattr(soundcloud, "_collection", fake)
+
+        rows = soundcloud.user_top_tracks("9", limit=20)
+
+        assert [row["title"] for row in rows] == ["GONAH"]
+        assert seen == [("/users/9/tracks", {"limit": 20, "order": "hotness"})]
+
     def test_a_blocked_track_is_left_out(self, monkeypatch):
         """BLOCK یعنی از همین IP پخش نمی‌شود — همان IP ای که دانلود هم از آن می‌رود."""
         self._api(
@@ -244,6 +259,78 @@ class TestArtistPage:
         )
 
         assert [t.title for t in ytdlp.soundcloud_artist("9").topTracks] == ["EDGEBAR"]
+
+    def test_top_tracks_are_ordered_by_plays_not_recency(self, monkeypatch):
+        """صفحه‌ی هنرمند ساندکلاد محبوب می‌چیند، نه تازه‌به‌قدیمِ تبِ Tracks."""
+        self._api(
+            monkeypatch,
+            {
+                "/users/9": _user_row(9, "Dorcci"),
+                "/users/9/tracks": [
+                    _row(11, "WIND", playback_count=12),
+                    _row(12, "GONAH", playback_count=900),
+                ],
+                "/users/9/albums": {"collection": []},
+            },
+        )
+
+        assert [t.title for t in ytdlp.soundcloud_artist("9").topTracks] == ["GONAH", "WIND"]
+
+    def test_a_standalone_track_lands_in_singles(self, monkeypatch):
+        """ترکِ تکی ست نیست؛ بدون این، Singles & EP خالی می‌ماند."""
+        self._api(
+            monkeypatch,
+            {
+                "/users/9": _user_row(9, "Dorcci"),
+                "/users/9/tracks": [
+                    _row(
+                        11,
+                        "WIND",
+                        publisher_metadata={"album_title": "WIND - Single"},
+                        release_date="2026-01-01T00:00:00Z",
+                    ),
+                    _row(
+                        12,
+                        "GONAH",
+                        publisher_metadata={"album_title": "GONAH"},
+                        release_date="2025-02-01T00:00:00Z",
+                    ),
+                    _row(
+                        13,
+                        "BOY",
+                        publisher_metadata={"album_title": "YOUNG MORVARID"},
+                        release_date="2025-01-01T00:00:00Z",
+                    ),
+                ],
+                "/users/9/albums": {
+                    "collection": [
+                        _set_row(21, "YOUNG MORVARID", track_count=12, release_date="2025-01-01T00:00:00Z"),
+                        _set_row(22, "GONAH", track_count=1, release_date="2025-02-01T00:00:00Z"),
+                    ]
+                },
+            },
+        )
+
+        albums = ytdlp.soundcloud_artist("9").albums
+
+        assert [a.title for a in albums] == ["WIND", "GONAH", "YOUNG MORVARID"]
+        assert [a.releaseType for a in albums] == ["single", "single", "album"]
+        # ترکِ هم‌نام با ست دوباره نمی‌آید
+        assert [a.id for a in albums if a.title == "GONAH"] == ["sc:playlist:22"]
+
+    def test_a_short_set_is_an_ep(self, monkeypatch):
+        self._api(
+            monkeypatch,
+            {
+                "/users/9": _user_row(9, "Dorcci"),
+                "/users/9/tracks": [],
+                "/users/9/albums": {
+                    "collection": [_set_row(21, "NIGHT EP", track_count=4)]
+                },
+            },
+        )
+
+        assert ytdlp.soundcloud_artist("9").albums[0].releaseType == "ep"
 
 
 class TestLikesAndReposts:
@@ -605,3 +692,71 @@ class TestClientId:
         soundcloud.tracks([str(i) for i in range(120)], hint="ok")
 
         assert batches == [50, 50, 20]
+
+
+class TestSoundcloudSetExtract:
+    def test_artist_set_with_playlist_set_type_is_recognized_as_album(self, monkeypatch):
+        from types import SimpleNamespace
+
+        class FakeYDL:
+            def __init__(self, opts):
+                self.cache = SimpleNamespace(load=lambda *args: None)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def extract_info(self, url, download=False):
+                return {
+                    "id": "2304743880",
+                    "title": "FUCK MUSIC",
+                    "uploader": "Mvshreghi",
+                    "uploader_id": "12345",
+                    "webpage_url": "https://soundcloud.com/mvshreghi/sets/fuck-music",
+                    "set_type": "playlist",
+                    "entries": [
+                        {
+                            "id": "1",
+                            "title": "Mvshreghi - Track 1",
+                            "uploader": "Mvshreghi",
+                            "duration": 180,
+                            "webpage_url": "https://soundcloud.com/mvshreghi/track-1",
+                        },
+                        {
+                            "id": "2",
+                            "title": "Mvshreghi, Guest - Track 2",
+                            "uploader": "Mvshreghi",
+                            "duration": 200,
+                            "webpage_url": "https://soundcloud.com/mvshreghi/track-2",
+                        },
+                    ],
+                }
+
+        monkeypatch.setattr(ytdlp, "YoutubeDL", FakeYDL)
+        detail = ytdlp.extract("https://soundcloud.com/mvshreghi/sets/fuck-music")
+
+        assert detail is not None
+        assert detail.title == "FUCK MUSIC"
+        assert detail.artist == "Mvshreghi"
+        assert detail.releaseType == "ep"  # 2 tracks => ep
+        # تگ‌های آلبوم روی همه‌ی ترک‌ها نشسته‌اند
+        assert [t.album for t in detail.tracks] == ["FUCK MUSIC", "FUCK MUSIC"]
+        assert [t.albumArtist for t in detail.tracks] == ["Mvshreghi", "Mvshreghi"]
+        assert [t.trackNumber for t in detail.tracks] == [1, 2]
+
+
+class TestCatalogResolveScPlaylist:
+    def test_sc_playlist_id_resolves_via_permalink(self, monkeypatch):
+        import asyncio
+        from app import catalog
+
+        monkeypatch.setattr(
+            soundcloud, "_api",
+            lambda path, **kwargs: {"permalink_url": "https://soundcloud.com/mvshreghi/sets/fuck-music"}
+            if path == "/playlists/2304743880" else None
+        )
+        monkeypatch.setattr(ytdlp, "extract", lambda url: "resolved-detail")
+
+        client = httpx.AsyncClient()
+        res = asyncio.run(catalog.resolve_ref(client, "sc:playlist:2304743880"))
+        assert res == "resolved-detail"
+

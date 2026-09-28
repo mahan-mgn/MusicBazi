@@ -10,7 +10,8 @@ import {
   type SetupState,
   type TestGroup,
 } from '../lib/setup'
-import { CheckIcon, CloseIcon, HeadphonesIcon, Spinner, WarnIcon } from './icons'
+import { CheckIcon, CloseIcon, HeadphonesIcon, Spinner, TelegramIcon, WarnIcon } from './icons'
+import { GeminiLogo, GeniusLogo, SpotifyLogo } from './logos'
 
 /**
  * ویزاردِ راه‌اندازی — دروازه‌ی ورودِ مرورگر.
@@ -114,16 +115,33 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
   useEffect(() => {
     let alive = true
     void fetchSetupState().then((s) => {
-      if (alive) setState(s)
+      if (!alive) return
+      setState(s)
+      // null یعنی به سرور نرسیدیم. بی‌این، چک‌لیست تا ابد «در حال بررسی…»
+      // می‌ماند و کاربر نمی‌فهمد سرور پایین است یا اینترنت
+      if (!s) setFatal(t.setupEnvUnavailable)
     })
     return () => {
       alive = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  /**
+   * آزمایشِ هم‌زمان دو گروه: نتیجه‌ای که *بعد از* عوض‌شدنِ مقدارِ همان گروه
+   * می‌رسد نباید نشان داده شود — «کلید سالم است» برای مقداری که دیگر در فیلد
+   * نیست، از نبودنش بدتر است. شمارنده به‌ازای هر فیلد، پاسخِ کهنه را بازمی‌گرداند.
+   */
+  const testSeq = useRef<Record<string, number>>({})
 
   const set = (key: SetupKey, value: string) => {
     setValues((v) => ({ ...v, [key]: value }))
-    // مقدار عوض شده یعنی نتیجه‌ی آزمایشِ قبلی دیگر به این مقدار نمی‌خورد
+    // مقدار عوض شده یعنی نتیجه‌ی آزمایشِ قبلی دیگر به این مقدار نمی‌خورد —
+    // هم خطِ نتیجه پاک می‌شود، هم آزمایشِ در جاری که با مقدارِ *قدیم* رفته
+    // بی‌اعتبار می‌گردد (وگرنه پاسخِ دیررس همان نتیجه‌ی پاک‌شده را برمی‌گرداند)
+    for (const f of FIELDS) {
+      if (f.group.includes(key)) testSeq.current[f.id] = (testSeq.current[f.id] ?? 0) + 1
+    }
     setProbes((p) => {
       const next = { ...p }
       for (const f of FIELDS) if (f.group.includes(key)) delete next[f.id]
@@ -132,13 +150,17 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
   }
 
   async function test(field: (typeof FIELDS)[number]) {
+    const seq = (testSeq.current[field.id] ?? 0) + 1
+    testSeq.current[field.id] = seq
     setProbes((p) => ({ ...p, [field.id]: { kind: 'busy' } }))
     const sent: Partial<Record<SetupKey, string>> = {}
     for (const key of field.group) sent[key] = values[key] ?? ''
     try {
       const r = await testSetupKey(field.id, sent)
+      if (testSeq.current[field.id] !== seq) return
       setProbes((p) => ({ ...p, [field.id]: r.ok ? { kind: 'ok', detail: r.detail } : { kind: 'fail', detail: r.detail } }))
     } catch (err) {
+      if (testSeq.current[field.id] !== seq) return
       setProbes((p) => ({ ...p, [field.id]: { kind: 'fail', detail: err instanceof Error ? err.message : String(err) } }))
     }
   }
@@ -148,6 +170,10 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
     try {
       const r = await uploadCookies(file)
       setCookieProbe({ kind: 'ok', detail: t.setupCookiesOk(r.cookies, r.youtube) })
+      // چک‌لیستِ «وضعیتِ این سرور» بی‌خبر از کوکیِ تازه می‌ماند — دوباره بپرس
+      void fetchSetupState().then((s) => {
+        if (s) setState(s)
+      })
     } catch (err) {
       setCookieProbe({ kind: 'fail', detail: err instanceof Error ? err.message : String(err) })
     }
@@ -189,6 +215,13 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
           setFatal(t.setupRestartFailed)
           return
         }
+        // `?setup=1` باید قبل از reload پاک شود، وگرنه صفحه‌ی تازه‌بارگذاری‌شده
+        // دوباره خودش را درِ ویزارد می‌بندد — کاربرِ «فقط کلید اضافه کردم» گیر
+        // می‌افتد و باید دو بار صفحه را ببندد
+        const p = new URLSearchParams(location.search)
+        p.delete('setup')
+        const qs = p.toString()
+        window.history.replaceState(null, '', qs ? `/?${qs}` : '/')
         location.reload()
         return
       }
@@ -312,7 +345,11 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
 
           {FIELDS.map((f) => (
             <div key={f.id} className="mt-5 first:mt-4">
-              <div className="flex flex-wrap items-baseline gap-x-2">
+              <div className="flex flex-wrap items-center gap-x-2">
+                {f.id === 'gemini' && <GeminiLogo className="size-4 shrink-0" />}
+                {f.id === 'genius' && <GeniusLogo className="size-4 shrink-0 rounded" />}
+                {f.id === 'spotify' && <SpotifyLogo className="size-4 shrink-0" />}
+                {f.id === 'telegram' && <TelegramIcon className="size-4 shrink-0 text-[#229ED9]" />}
                 <h3 className="text-xs font-bold">{f.label(t)}</h3>
                 {f.url && (
                   <a

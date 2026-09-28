@@ -12,6 +12,8 @@ export const MAX_CROSSFADE = 12
 interface SettingsState {
   quality: Quality
   theme: Theme
+  /** فعال‌بودنِ شیشه مایع (Liquid Glass) مطابق با BitChord */
+  liquidGlass: boolean
   /** هم‌ترازیِ بلندیِ ترک‌ها با گِینی که سرور اندازه گرفته */
   normalize: boolean
   /** ثانیه؛ صفر یعنی خاموش */
@@ -21,6 +23,7 @@ interface SettingsState {
   boost: number
   setQuality: (q: Quality) => void
   toggleTheme: () => void
+  setLiquidGlass: (on: boolean) => void
   setNormalize: (on: boolean) => void
   setCrossfade: (seconds: number) => void
   setEq: (preset: EqPreset) => void
@@ -28,7 +31,9 @@ interface SettingsState {
 }
 
 function applyTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.theme = theme
+  }
   writeStored('theme', theme)
   // نوار وضعیت شفاف است و روی خودِ محتوا می‌افتد؛ اگر رنگِ آیکون‌هایش با تم
   // عوض نشود، در تمِ روشن ساعتِ سفید روی پس‌زمینه‌ی سفید ناپدید می‌شود
@@ -43,12 +48,18 @@ function applyTheme(theme: Theme) {
 const initialTheme: Theme = readStoredAs<Theme>('theme', 'dark') === 'light' ? 'light' : 'dark'
 applyTheme(initialTheme)
 
+const initialLiquidGlass = readStored('ui:liquidGlass') !== '0'
+if (typeof document !== 'undefined') {
+  document.documentElement.dataset.liquidGlass = initialLiquidGlass ? 'true' : 'false'
+}
+
 // پیش‌فرضِ نرمال‌سازی روشن است: بدون آن اولین چیزی که کاربر از یک صفِ مخلوط
 // می‌شنود همان جهش‌های صداست. کراس‌فید ولی خاموش می‌ماند — روی آلبومی که خودش
 // گپلس است، محوکردنِ ترک‌ها چیزی را خراب می‌کند که درست بوده.
 export const useSettings = create<SettingsState>((set, get) => ({
   quality: readStoredAs<Quality>('quality', '320'),
   theme: initialTheme,
+  liquidGlass: initialLiquidGlass,
   normalize: readStored('audio:normalize') !== '0',
   crossfade: readStoredNumber('audio:crossfade', 0, { max: MAX_CROSSFADE }),
   eq: readStoredAs<EqPreset>('audio:eq', 'off'),
@@ -63,6 +74,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const theme = get().theme === 'dark' ? 'light' : 'dark'
     applyTheme(theme)
     set({ theme })
+  },
+
+  setLiquidGlass: (on) => {
+    writeStored('ui:liquidGlass', on ? '1' : '0')
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.liquidGlass = on ? 'true' : 'false'
+    }
+    set({ liquidGlass: on })
   },
 
   setNormalize: (on) => {

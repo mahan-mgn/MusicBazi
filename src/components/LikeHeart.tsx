@@ -1,4 +1,5 @@
 import { useCallback, useRef } from 'react'
+import { haptic } from '../lib/native'
 import { HeartIcon } from './icons'
 
 /** فاصله‌ی پاششِ نقطه‌ها (پیکسل) — هم‌خوان با منطقِ `seedParticles` */
@@ -56,6 +57,7 @@ export default function LikeHeart({
     if (liked) {
       // برداشتنِ لایک: پاششِ مانده پاک شود — همان رفتارِ نمونه
       el?.classList.remove('is-bursting')
+      haptic.select()
       onToggle()
       return
     }
@@ -64,6 +66,7 @@ export default function LikeHeart({
       seedParticles()
       void el.offsetWidth // reflow تا پاشش از نو پخش شود
       el.classList.add('is-bursting')
+      haptic.tap()
     }
     onToggle()
   }

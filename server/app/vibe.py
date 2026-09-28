@@ -31,7 +31,7 @@ import httpx
 
 from . import catalog
 from .config import GEMINI_API_KEY, GEMINI_API_URL, GEMINI_MODEL
-from .models import AlbumDetail, Playlist, SearchResults, Track, VibeRequest, VibeSuggestion
+from .models import AlbumDetail, Playlist, SearchResults, Track, VibeReady, VibeRequest, VibeSuggestion
 from .providers import deezer, spotify
 
 log = logging.getLogger(__name__)
@@ -40,8 +40,10 @@ log = logging.getLogger(__name__)
 # تکی است، نه یک زنجیره‌ی provider که ذاتاً کند است
 LLM_TIMEOUT = 20.0
 
-# سقفِ نهاییِ پلی‌لیست — بیشتر از این فقط صف را طولانی می‌کند بدون فایده
-MAX_TRACKS = 10
+# سقفِ نهاییِ پلی‌لیست — با MAX_TRACKSِ فرانت (MoodChat.tsx) یکی است؛ اگر
+# سرور بیشتر از فرانت بفرستد، اضافه‌ها دور ریخته می‌شوند و فقط پهنای باند
+# جستجو هدر رفته. اگر فرانت بیشتر بفرستد، لیستِ کاربر کوتاه‌تر از حد می‌شود.
+MAX_TRACKS = 8
 
 # از استخرِ کنسرویِ هر وایب، هر بار همین تعداد به‌طور تصادفی انتخاب می‌شود —
 # بدونش کلیک‌های پیاپیِ روی یک چیپ همیشه همان پلی‌لیست را می‌دادند
@@ -284,6 +286,8 @@ class VibeResult:
     label: str
     reply: str
     picks: list[tuple[str, str]]
+    # «چرا این‌ها؟» — فقط مسیرِ LLM آن را دارد؛ مسیرِ کلیدواژه توضیحی نمی‌سازد
+    reason: str | None = None
 
 
 def _sample_picks(pool: tuple[tuple[str, str], ...]) -> list[tuple[str, str]]:
@@ -347,9 +351,16 @@ class Qualifiers:
     persian_only: bool = False
 
 
-def detect_qualifiers(text: str) -> Qualifiers:
-    """قیدهای دوره/زبان را از متنِ کاربر می‌خواند — مستقل از تشخیصِ خودِ وایب."""
-    normalized = text.strip()
+def detect_qualifiers(text: str, history: list[VibeTurn] | None = None) -> Qualifiers:
+    """
+    قیدهای دوره/زبان را از متنِ کاربر می‌خواند — مستقل از تشخیصِ خودِ وایب.
+
+    تاریخچه هم اسکن می‌شود (فقط نوبت‌های user): «غمگینِ ایرانیِ قدیمی» و بعد
+    «نه آروم‌تر» — قیدِ اول در پیامِ جاری نیست ولی هنوز پابرجاست. بدونِ این،
+    حافظه فقط در LLM اثر می‌کرد و فیلترِ پلی‌لیست‌ها بی‌قید می‌شد.
+    """
+    parts = [text.strip()] + [t.text for t in (history or [])[-HISTORY_TURNS:] if t.role == "user"]
+    normalized = " ".join(parts)
     return Qualifiers(
         old=any(kw in normalized for kw in OLD_KEYWORDS),
         persian_only=any(kw in normalized for kw in PERSIAN_KEYWORDS),
@@ -389,17 +400,18 @@ def _describe_qualifiers(qualifiers: Qualifiers) -> str:
 
 # --------- تشخیصِ حال‌وهوا با Gemini (Google AI Studio) ---------
 
-# پاسخِ مدل باید دقیقاً این شکل باشد. `responseSchema` به Gemini تحمیل می‌کند
-# همان قالب را برگرداند (کلیدها به همان ترتیبِ properties)، پس `_parse_llm_json`
-# دیگر «تلاش برای نجاتِ متنِ آزاد» نیست — فقط اعتبارسنجیِ *مقادیر* است: وایبِ
-# ناشناخته، picks خالی و آیتمِ بدشکل هنوز رد می‌شوند چون schema نمی‌تواند
-# «واقعاً وجود داشته باشد» را تضمین کند.
+# سقفِ نوبت‌هایی که از تاریخچه به مدل داده می‌شود. بیشتر از این فقط توکن
+# می‌سوزاند؛ «دو پیامِ آخر» تقریباً همه‌ی ارجاع‌های محاوره‌ای را پوشش می‌دهد.
+HISTORY_TURNS = 6
+
+
 def _response_schema() -> dict:
     return {
         "type": "object",
         "properties": {
             "vibe": {"type": "string", "enum": list(VIBES)},
             "reply": {"type": "string"},
+            "reason": {"type": "string"},
             "picks": {
                 "type": "array",
                 "minItems": 1,
@@ -411,7 +423,7 @@ def _response_schema() -> dict:
                 },
             },
         },
-        "required": ["vibe", "reply", "picks"],
+        "required": ["vibe", "reply", "reason", "picks"],
     }
 
 
@@ -450,10 +462,69 @@ def _parse_llm_json(raw: str) -> VibeResult | None:
     if not cleaned:
         return None
 
-    return VibeResult(vibe=vibe, label=VIBES[vibe].label, reply=reply.strip(), picks=cleaned)
+    # reason اختیاریِ عمداً-سست است: schema آن را required می‌کند ولی مدل‌های
+    # قدیمی‌تر ممکن است حذفش کنند — نبودنش نباید کل پاسخِ خوب را باطل کند.
+    reason = data.get("reason")
+    return VibeResult(
+        vibe=vibe,
+        label=VIBES[vibe].label,
+        reply=reply.strip(),
+        picks=cleaned,
+        reason=reason.strip() if isinstance(reason, str) and reason.strip() else None,
+    )
 
 
-async def _call_llm(client: httpx.AsyncClient, text: str) -> VibeResult | None:
+def library_digest() -> str | None:
+    """
+    خلاصه‌ی یک‌خطیِ سلیقه‌ی کاربر از کتابخانه‌ی خودش — برای system prompt.
+
+    چرا این‌جا نه جستجوی مستقیمِ کتابخانه: پیشنهاد باید از کاتالوگ بیرون بیاید
+    (چت برای «چیزی که نداری» است)، ولی دانستنِ اینکه کاربر چه می‌پسندد کیفیتِ
+    انتخاب را عوض می‌کند. سه سیگنال کافی است: هنرمندانِ لایک‌شده، مرکزِ حسیِ
+    لایک‌ها، و حجمِ کتابخانه. همه از همین dbِ محلی، بدونِ شبکه.
+    """
+    from . import db
+
+    favorites = db.favorite_jobs()
+    if not favorites:
+        return None
+    artists: dict[str, int] = {}
+    centers: list[tuple[float, float]] = []
+    for row in favorites[:40]:
+        try:
+            track = Track.model_validate_json(row["track_json"])
+        except Exception:  # noqa: BLE001 — ردیفِ خراب نباید چت را بخواباند
+            continue
+        artists[track.artist] = artists.get(track.artist, 0) + 1
+        if row["valence"] is not None and row["energy"] is not None:
+            centers.append((float(row["valence"]), float(row["energy"])))
+    top = sorted(artists.items(), key=lambda kv: -kv[1])[:6]
+    parts = [f"User's liked artists: {', '.join(a for a, _ in top)}"]
+    if centers:
+        v = sum(c[0] for c in centers) / len(centers)
+        e = sum(c[1] for c in centers) / len(centers)
+        parts.append(f"Their taste sits at valence {v:.2f}, energy {e:.2f} (0-1)")
+    parts.append(f"Library size: {len(favorites)} liked tracks")
+    return " | ".join(parts)
+
+
+def _contents(req: VibeRequest, text: str) -> list[dict]:
+    """
+    تاریخچه‌ی گفتگو + پیامِ جاری به شکلِ contentsِ Gemini.
+
+    نقش‌ها همان role‌های خودِ APIاند (user/model)؛ نوبتِ خالی حذف می‌شود تا یک
+    پیامِ بی‌محتوا (مثلاً چیپی که برچسبش خالی شده) تاریخچه را شلوغ نکند.
+    """
+    contents = [
+        {"role": turn.role, "parts": [{"text": turn.text[:500]}]}
+        for turn in req.history[-HISTORY_TURNS:]
+        if turn.role in ("user", "model") and turn.text.strip()
+    ]
+    contents.append({"role": "user", "parts": [{"text": text}]})
+    return contents
+
+
+async def _call_llm(client: httpx.AsyncClient, req: VibeRequest, text: str) -> VibeResult | None:
     """
     تشخیصِ حال‌وهوا با Gemini — بی‌صدا None برمی‌گرداند اگر کلید نباشد، شبکه
     بیفتد، یا پاسخ معتبر نباشد. suggest() در آن صورت به کلیدواژه می‌افتد.
@@ -463,12 +534,16 @@ async def _call_llm(client: httpx.AsyncClient, text: str) -> VibeResult | None:
 
     known = ", ".join(VIBES.keys())
     system = (
-        "You read a short mood message in Persian or English and respond with "
-        "STRICT JSON only — no prose, no markdown fences. Shape: "
+        "You are the mood-playlist bot of a Persian music app. You read a short "
+        "mood message in Persian or English (possibly a follow-up like 'no, "
+        "calmer' or 'same but Iranian') and respond with STRICT JSON only — no "
+        "prose, no markdown fences. Shape: "
         '{"vibe": one of [' + known + "], "
         '"reply": a short warm Persian reply (1-2 sentences, matches the mood), '
+        '"reason": one short Persian sentence saying WHY these songs fit this '
+        "user specifically, "
         '"picks": [{"title": ..., "artist": ...}, ...]}. '
-        "picks must be 8-10 REAL, well-known songs that genuinely fit the mood — "
+        "picks must be 8 REAL, well-known songs that genuinely fit the mood — "
         "never invent a song. Default to a mix of Persian and international "
         "songs, but the message may also state an explicit constraint beyond "
         "the mood — a language/origin (e.g. only Iranian/Persian songs), an "
@@ -477,8 +552,15 @@ async def _call_llm(client: httpx.AsyncClient, text: str) -> VibeResult | None:
         "constraint instead of the default mix: a request for 'a sad playlist "
         "of old Iranian songs' must return ONLY real, well-known CLASSIC "
         "Persian songs (e.g. Farhad Mehrad, Dariush, Googoosh, Ebi, Vigen, "
-        "Hayedeh) — no international songs and no modern Persian pop."
+        "Hayedeh) — no international songs and no modern Persian pop. "
+        "Use the conversation history to resolve follow-ups: 'no'/'بازم'/"
+        "'آروم‌تر' refer to the previous turn. "
+        "If a taste profile is provided below, lean toward that taste but never "
+        "repeat songs the user already owns — suggest what they don't have yet."
     )
+    digest = await asyncio.to_thread(library_digest)
+    if digest:
+        system += "\n\nTaste profile: " + digest
 
     try:
         res = await client.post(
@@ -487,10 +569,18 @@ async def _call_llm(client: httpx.AsyncClient, text: str) -> VibeResult | None:
             headers={"x-goog-api-key": GEMINI_API_KEY, "content-type": "application/json"},
             json={
                 "systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": text}]}],
+                "contents": _contents(req, text),
                 "generationConfig": {
                     "temperature": 0.7,
-                    "maxOutputTokens": 1024,
+                    # 1024 جواب نمی‌داد: فارسی گران‌توکن است و 8 تا picks +
+                    # reply + reason از سقف رد می‌شد → JSON نصفه → fallbackِ
+                    # بی‌صدا. نشانه‌ی همان حالت: finishReason=MAX_TOKENS
+                    "maxOutputTokens": 4096,
+                    # gemini-3.6-flash با thinkingِ پیش‌فرض ۸۱۰ توکن فکر
+                    # می‌کند و ~۱۶ ثانیه طول می‌کشد — روی شبکه‌ی کند از
+                    # LLM_TIMEOUT رد می‌شود و چت بی‌صدا به کلیدواژه می‌افتد.
+                    # low: ۲.۷ ثانیه، همان کیفیتِ انتخاب
+                    "thinkingConfig": {"thinkingLevel": "low"},
                     "responseMimeType": "application/json",
                     "responseSchema": _response_schema(),
                 },
@@ -507,7 +597,10 @@ async def _call_llm(client: httpx.AsyncClient, text: str) -> VibeResult | None:
         if blocked:
             log.info("gemini blocked the mood message (%s), keyword fallback", blocked)
             return None
-        parts = ((body.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+        candidate = (body.get("candidates") or [{}])[0]
+        if candidate.get("finishReason") == "MAX_TOKENS":
+            log.warning("gemini answer hit maxOutputTokens, keyword fallback")
+        parts = (candidate.get("content") or {}).get("parts") or []
         raw = "".join(p.get("text", "") for p in parts)
         return _parse_llm_json(raw)
     except Exception:  # noqa: BLE001 — قراردادِ بی‌صدا: چت نباید با قطعیِ گذرا بمیرد
@@ -516,26 +609,36 @@ async def _call_llm(client: httpx.AsyncClient, text: str) -> VibeResult | None:
 
 
 async def suggest(client: httpx.AsyncClient, req: VibeRequest) -> VibeResult:
-    """تصمیمِ نهایی: چیپِ صریح > Gemini > کلیدواژه > پیش‌فرضِ عمومی."""
+    """
+    تصمیمِ نهایی: Gemini (حتی برای کلیکِ چیپ) > کلیدواژه > پیش‌فرضِ عمومی.
+
+    چیپ قبلاً LLM را دور می‌زد و همیشه همان ریپلایِ ثابت را می‌داد؛ حالا برچسبِ
+    چیپ به‌عنوانِ پیام به مدل می‌رود تا انتخاب‌ها با تاریخچه و سلیقه قاطی شوند.
+    مسیرِ کلیدواژه دست‌نخورده می‌ماند: بدونِ کلید، چیپ همان رفتارِ همیشگی است.
+    """
+    text = (req.message or "").strip()
+    if not text and req.vibe and req.vibe in VIBES:
+        text = VIBES[req.vibe].label
+
+    if text and (result := await _call_llm(client, req, text)):
+        return result
+
+    # چیپِ صریح حتی وقتی LLM جواب نمی‌دهد نباید به «حدسِ متن» تبدیل شود:
+    # کاربر دقیقاً همان وایب را خواسته
     if req.vibe and req.vibe in VIBES:
         definition = VIBES[req.vibe]
         return VibeResult(
             vibe=req.vibe, label=definition.label, reply=definition.reply, picks=_sample_picks(definition.picks)
         )
 
-    message = (req.message or "").strip()
-    if message:
-        if llm_result := await _call_llm(client, message):
-            return llm_result
-
-        if key := detect_from_keywords(message):
-            definition = VIBES[key]
-            return VibeResult(
-                vibe=key,
-                label=definition.label,
-                reply=definition.reply,
-                picks=_sample_picks(definition.picks),
-            )
+    if text and (key := detect_from_keywords(text)):
+        definition = VIBES[key]
+        return VibeResult(
+            vibe=key,
+            label=definition.label,
+            reply=definition.reply,
+            picks=_sample_picks(definition.picks),
+        )
 
     return VibeResult(
         vibe="discover", label=DISCOVER.label, reply=DISCOVER.reply, picks=_sample_picks(DISCOVER.picks)
@@ -684,8 +787,38 @@ async def _tracks_from_playlists(
 
 
 def _describe_playlists(playlists: list[Playlist]) -> str:
-    names = "، ".join(f"«{p.title}»" for p in playlists if p.title)
-    return f" این‌ها رو از پلی‌لیستِ {names} آوردم." if names else ""
+    # یک پلی‌لیست ممکن است از چند پلتفرم به‌عنوانِ یکیِ همان‌نام بیاید — تکرارِ
+    # «آهنگ های قدیمی با وایب غمگین» ×۳ در جوابِ چت زشت است
+    names: list[str] = []
+    for p in playlists:
+        if p.title and p.title not in names:
+            names.append(p.title)
+    return f" این‌ها رو از پلی‌لیستِ {'، '.join(f'«{n}»' for n in names)} آوردم." if names else ""
+
+
+def _owned_files(tracks: list[Track]) -> dict[str, VibeReady]:
+    """
+    کدام ترک‌های پیشنهادی از قبل در کتابخانه‌اند — با فایلِ آماده، نه با
+    «بازدانلودِ همان چیز».
+
+    چرا روی دیسک چک نمی‌شود (مثلِ مسیرِ /api/mix که Path.exists() می‌زند):
+    این‌جا فقط می‌خواهیم به فرانت بگوییم «این یکی را داری، استریمش کن»؛ اگر
+    فایل رفته باشد، استریم ۴۰۴ می‌دهد و فرانت همان ترک را مثلِ بقیه دانلود
+    می‌کند — یک round-trip در حالتِ نادر، در برابرِ یک exists() به‌ازای هر ترک
+    در هر درخواستِ چت.
+    """
+    from . import db, jobs, loudness
+
+    owned = db.owned_refs([t.id for t in tracks])
+    out: dict[str, VibeReady] = {}
+    for track_id, row in owned.items():
+        out[track_id] = VibeReady(
+            jobId=row["id"],
+            streamUrl=jobs.stream_url(row["id"]),
+            lyricsUrl=jobs.lyrics_url(row["id"]) if row["lyrics_path"] else None,
+            gainDb=loudness.gain_db(row["loudness"], row["peak"]),
+        )
+    return out
 
 
 async def build_playlist(client: httpx.AsyncClient, req: VibeRequest) -> VibeSuggestion:
@@ -699,7 +832,7 @@ async def build_playlist(client: httpx.AsyncClient, req: VibeRequest) -> VibeSug
     ترکیبی («غمگینِ قدیمیِ ایرانی») واقعاً همان را برگرداند، نه فقط وایبِ کلی.
     """
     result = await suggest(client, req)
-    qualifiers = detect_qualifiers(req.message or "")
+    qualifiers = detect_qualifiers(req.message or "", req.history)
     exclude = set(req.excludeIds)
 
     candidates = await _search_playlists(client, result.vibe, qualifiers)
@@ -715,4 +848,7 @@ async def build_playlist(client: httpx.AsyncClient, req: VibeRequest) -> VibeSug
     if not tracks:
         tracks = await resolve_tracks(client, _filter_picks(result.picks, qualifiers), exclude)
 
-    return VibeSuggestion(vibe=result.vibe, label=result.label, reply=reply, tracks=tracks)
+    owned = await asyncio.to_thread(_owned_files, tracks)
+    return VibeSuggestion(
+        vibe=result.vibe, label=result.label, reply=reply, tracks=tracks, reason=result.reason, ready=owned
+    )

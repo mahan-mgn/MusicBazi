@@ -42,6 +42,9 @@ secrets/*
 .claude/
 .hermes/
 .specify/
+.agents/
+.playwright-mcp/
+.vros/
 
 # موکاپ‌های دورریختنیِ طراحی — محصول نیستند
 sketches/

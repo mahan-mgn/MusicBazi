@@ -302,4 +302,6 @@ export const mockApi: MusicApi = {
   async unfollow(): Promise<never> {
     throw new Error('در مود دمو بات تلگرام وجود ندارد.')
   },
+
+  async prefetchStream() {},
 }

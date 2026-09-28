@@ -13,8 +13,8 @@ from ..config import ITUNES_API, SEARCH_LIMIT
 from ..models import Album, AlbumDetail, Artist, ArtistDetail, SearchResults, Track
 
 # https://music.apple.com/us/album/mard-e-tanha/1801042661?i=1801042670
-ALBUM_URL = re.compile(r"music\.apple\.com/[^/]+/album/[^/]*/(\d+)", re.I)
-ARTIST_URL = re.compile(r"music\.apple\.com/[^/]+/artist/[^/]*/(\d+)", re.I)
+ALBUM_URL = re.compile(r"music\.apple\.com/(?:[a-z]{2}/)?album/(?:[^/\s]+/)?(\d+)", re.I)
+ARTIST_URL = re.compile(r"music\.apple\.com/(?:[a-z]{2}/)?artist/(?:[^/\s]+/)?(\d+)", re.I)
 
 # صفحه‌ی هنرمند روی وب. شناسه بس است و اپل خودش به آدرسِ نام‌دار ریدایرکت می‌کند.
 ARTIST_PAGE = "https://music.apple.com/us/artist/{id}"
@@ -57,7 +57,50 @@ def _year(release_date: str | None) -> int | None:
     return int(head) if head.isdigit() else None
 
 
-def _album(row: dict[str, Any]) -> Album:
+def _own_release(row: dict[str, Any], artist_id: Any) -> bool:
+    """
+    آیا این کالکشن مالِ خودِ هنرمند است، نه compilation که فقط توش ظاهر شده؟
+
+    `lookup?entity=album` هر دو را می‌دهد. اگر `collectionArtistId` با شناسه‌ی
+    هنرمند فرق دارد، یا نوع صریحاً Compilation است، مالِ دیگران است.
+    """
+    if (row.get("collectionType") or "").lower() == "compilation":
+        return False
+    owner = row.get("collectionArtistId")
+    if owner is not None and artist_id is not None and str(owner) != str(artist_id):
+        return False
+    return True
+
+
+def _release_type(row: dict[str, Any]) -> str | None:
+    """
+    دسته‌ی انتشار از کالکشنِ اپل.
+
+    `collectionType == Compilation` صریح است. بقیه از تعداد ترک حدس زده
+    می‌شود: یک ترک سینگل، دو تا شش EP، بیشتر آلبوم.
+    """
+    kind = (row.get("collectionType") or "").lower()
+    if kind == "compilation":
+        return "compilation"
+    tracks = int(row.get("trackCount") or 0)
+    if tracks == 1:
+        return "single"
+    if 2 <= tracks <= 6:
+        return "ep"
+    if tracks > 6:
+        return "album"
+    return None
+
+
+def _album(row: dict[str, Any], artist: dict[str, Any] | None = None) -> Album:
+    """
+    ردیفِ کالکشن به آلبوم.
+
+    `artist` برای فهرستِ دیسکوگرافی می‌آید: آن ردیف‌ها آرتیست‌آیدیِ خودشان را
+    همراه ندارند و بدون این، کارتِ آلبوم در صفحه‌ی هنرمند بی‌شناسه می‌ماند و
+    «آثار دیگرِ همین هنرمند» وقتی از همان‌جا باز شود پر نمی‌شود.
+    """
+    artist_id = artist.get("artistId") if artist else row.get("artistId")
     return Album(
         id=f"itunes:album:{row['collectionId']}",
         title=row.get("collectionName") or "",
@@ -67,6 +110,9 @@ def _album(row: dict[str, Any]) -> Album:
         trackCount=int(row.get("trackCount") or 0),
         source="apple",
         sourceUrl=row.get("collectionViewUrl") or "",
+        artistId=f"itunes:artist:{artist_id}" if artist_id else None,
+        releaseType=_release_type(row),
+        releaseDate=(row.get("releaseDate") or "")[:10] or None,
     )
 
 
@@ -77,7 +123,10 @@ def _artist(row: dict[str, Any], artwork_url: str | None = None) -> Artist:
         # iTunes Search عکس هنرمند نمی‌دهد؛ از صفحه‌ی وب می‌آید (`artist_images`)
         artworkUrl=artwork_url,
         source="apple",
-        sourceUrl=row.get("artistLinkUrl") or "",
+        # `artistLinkUrl` روی ردیفِ `lookup` همیشه هست ولی روی بعضی پاسخ‌ها
+        # (مثلاً `entity=song`) غایب است؛ بدون این فالبک، دکمه‌ی «باز کردن منبع»
+        # و کپیِ لینکِ صفحه‌ی هنرمند بی‌صدا می‌افتادند
+        sourceUrl=row.get("artistLinkUrl") or ARTIST_PAGE.format(id=row["artistId"]),
         subtitle=row.get("primaryGenreName") or "هنرمند",
     )
 
@@ -215,6 +264,10 @@ async def album(client: httpx.AsyncClient, collection_id: str) -> AlbumDetail | 
     # آرتیست نمی‌دهد ولی همین آدرسِ صفحه برای ناوبری کافی است
     base.artistId = f"itunes:artist:{head.get('artistId')}" if head.get("artistId") else None
     base.artistArtworkUrl = await _artist_avatar(client, base.artistId)
+    if base.artistArtworkUrl:
+        for t in tracks:
+            if not t.artistArtworkUrl:
+                t.artistArtworkUrl = base.artistArtworkUrl
     return AlbumDetail(
         **base.model_dump(),
         durationMs=sum(t.durationMs for t in tracks),
@@ -230,26 +283,37 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         artist_images(client, [str(artist_id)]),
     )
 
-    head = next((r for r in albums if r.get("wrapperType") == "artist"), None)
+    head = next((r for r in albums if r.get("wrapperType") == "artist"), None) or next(
+        (r for r in songs if r.get("wrapperType") == "artist"), None
+    )
     if head is None:
         return None
 
     # با تاریخِ کامل مرتب می‌شود نه با سال: هنرمندی که در یک سال شش سینگل داده
     # وگرنه ترتیبشان دلبخواه می‌شد، درحالی‌که صفحه‌ی خودِ اپل‌موزیک تازه‌ترین را
-    # اول می‌گذارد
+    # اول می‌گذارد.
+    #
+    # `lookup?entity=album` هر کالکشنی که هنرمند توش باشد می‌آورد — از جمله
+    # compilation دیگران. آن‌ها دیسکوگرافی این هنرمند نیستند.
+    own_id = head.get("artistId")
     discography = [
-        _album(r)
+        _album(r, head)
         for r in sorted(albums, key=lambda r: r.get("releaseDate") or "", reverse=True)
-        if r.get("collectionId")
+        if r.get("collectionId") and _own_release(r, own_id)
     ]
     top = [_track(r) for r in songs if r.get("trackId")]
 
     base = _artist(head, images.get(str(artist_id)))
+    final_art = base.artworkUrl or next((a.artworkUrl for a in discography if a.artworkUrl), None)
+    if final_art:
+        for t in top:
+            if not t.artistArtworkUrl:
+                t.artistArtworkUrl = final_art
     return ArtistDetail(
         **base.model_dump(exclude={"artworkUrl"}),
         # هنرمندی که در اپل‌موزیک عکس ندارد (یا صفحه‌اش نیامد): کاور تازه‌ترین
         # آلبوم نزدیک‌ترین چیز است
-        artworkUrl=base.artworkUrl or next((a.artworkUrl for a in discography if a.artworkUrl), None),
+        artworkUrl=final_art,
         topTracks=top,
         albums=discography,
     )

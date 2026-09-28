@@ -1,3 +1,4 @@
+import { useSettings } from '../../store/settings'
 import { absolute, apiUrl } from '../server'
 import { IdentifyUnavailable, IntranetError } from '../types'
 import type {
@@ -46,6 +47,7 @@ const trackRef = (track: Track) => ({
   discNumber: track.discNumber,
   year: track.year,
   genre: track.genre,
+  source: track.source,
 })
 
 /**
@@ -81,7 +83,7 @@ async function errorText(res: Response): Promise<string> {
 }
 
 async function json<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(base() + path, { signal })
+  const res = await fetch(base() + path, { signal, cache: 'no-store' })
   // مسیرهای POST از اول `errorText` را می‌خواندند ولی GETها نه، و همه‌ی
   // پیام‌های دقیقِ سرور («این لینک شناخته نشد یا محتوایی نداشت») سرِ راه به
   // یک «۴۰۴ Not Found»ِ بی‌فایده تبدیل می‌شد
@@ -223,8 +225,9 @@ export const httpApi: MusicApi = {
       body: JSON.stringify({ ...trackRef(track), quality, candidateUrl }),
       signal: ctrl.signal,
     })
-      .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`)
+      .then(async (r) => {
+        if (r.status === 503) throw new IntranetError(await errorText(r))
+        if (!r.ok) throw new Error(await errorText(r))
         return r.json() as Promise<{ jobId: string; reused: boolean }>
       })
       .then(({ jobId }) => {
@@ -422,8 +425,8 @@ export const httpApi: MusicApi = {
     // و تگ‌های آلبومیِ فایلی که به تلگرام می‌رود هم درست درمی‌آیند
     const body =
       req.kind === 'track'
-        ? { kind: 'track', track: trackRef(req.track), title: req.track.title, quality: req.quality }
-        : { kind: 'album', ref: req.ref, title: req.title, quality: req.quality }
+        ? { kind: 'track', track: trackRef(req.track), title: req.track.title, quality: req.quality, keep: req.keep }
+        : { kind: 'album', ref: req.ref, title: req.title, quality: req.quality, keep: req.keep }
 
     const res = await fetch(`${base()}/telegram/send`, {
       method: 'POST',
@@ -472,5 +475,18 @@ export const httpApi: MusicApi = {
       { method: 'DELETE' },
     )
     if (!res.ok) throw new Error(await errorText(res))
+  },
+
+  async prefetchStream(track: Track, quality?: Quality | null) {
+    try {
+      const q = quality ?? useSettings.getState().quality
+      await fetch(`${base()}/stream/prefetch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...trackRef(track), quality: q }),
+      })
+    } catch {
+      // پری‌فچ بهترین تلاش است و خطایش نباید رابط کاربری را تحت تاثیر بگذارد
+    }
   },
 }

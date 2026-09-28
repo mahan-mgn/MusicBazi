@@ -209,30 +209,6 @@ def artist(ref: str) -> ArtistDetail | None:
         return None
 
 
-# عمرِ صفحهای که هنوز «تازه» شمرده می‌شود و نیازی به به‌روزرسانیِ پسزمینه ندارد.
-# یک ساعت: در یک نشستِ معمولی، تغییرِ چیدمانِ ترکهای یک هنرمند در این بازه
-# به چشم نمیآید؛ ولی بازکردنِ دوبارهی همان صفحه نباید ۸ ثانیه صدا بزند.
-ARTIST_FRESH_SECONDS = 3600
-
-
-def artist_with_age(ref: str) -> tuple[ArtistDetail, float] | None:
-    """
-    صفحهی هنرمندِ کششده + عمرش به ثانیه — برای stale-while-revalidate.
-
-    پاسخِ کشِ یکصفحهای که از قبل هست آنقدر سریع است که نباید کاربر پشتِ
-    واکشیِ دوبارهی صدا بماند؛ فراخوان تصمیم میگیرد با `cached_at` که فقط
-    بهروزرسانی کند یا همین را برگرداند.
-    """
-    row = db.get_ref(ref.strip(), "artist")
-    if row is None:
-        return None
-    try:
-        detail = ArtistDetail.model_validate_json(row["payload"])
-    except Exception:
-        return None
-    return detail, max(0.0, time.time() - float(row["cached_at"]))
-
-
 def stats() -> dict:
     entities, searches = db.catalog_stats()
     return {"entities": entities, "searches": searches}

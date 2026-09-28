@@ -113,6 +113,26 @@ async function errorText(res: Response): Promise<string> {
 }
 
 /**
+ * سلامتِ مسیرِ تشخیصِ حال‌وهوا — برای نشانگرِ کوچکِ بالای چت.
+ *
+ * چرا جدا از `MusicApi`: آن اینترفیس را مود دمو هم پیاده می‌کند و در مود دمو
+ * سروری نیست. این هم مثلِ بقیه‌ی این فایل فقط در `VITE_API_MODE=http` صدا
+ * زده می‌شود، و `null` یعنی «نمی‌دانیم» — نه «خاموش است».
+ */
+export async function fetchVibeStatus(signal?: AbortSignal): Promise<{ llm: boolean; model: string | null } | null> {
+  try {
+    const res = await fetch(apiUrl('/api/health'), { cache: 'no-store', signal })
+    if (!res.ok) return null
+    const body = (await res.json()) as { features?: { vibeLlm?: boolean; vibeModel?: string | null } }
+    const f = body.features
+    if (!f) return null
+    return { llm: Boolean(f.vibeLlm), model: f.vibeModel ?? null }
+  } catch {
+    return null
+  }
+}
+
+/**
  * تا سرور برگردد صبر می‌کند.
 
  * ری‌استارت از سمتِ خودِ سرور انجام می‌شود، پس مرورگر نمی‌تواند منتظرِ پاسخِ

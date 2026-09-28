@@ -1,1110 +1,402 @@
-# آنستریم (Unstream)
+# Unstream
 
-دانلودر موزیک، آلبوم و پلی‌لیست — رابط فارسی و RTL، با بک‌اند واقعی.
+<div align="center">
 
-متادیتا از کاتالوگ‌های عمومی (اپل‌موزیک، دیزر و اسپاتیفای) می‌آید و فایل صوتی از
-منابع باز (یوتیوب/ساندکلاد) با مچ‌کردن هوشمند پیدا، دانلود، ترنسکد و تگ‌گذاری
-می‌شود — همان مدلی که `spotDL` کار می‌کند. عبور از DRM سرویس‌های اشتراکی پیاده نشده.
+**High-performance, self-hosted music streaming and downloader with public catalog aggregation, smart audio resolving, lossless transcoding, offline resilience, and a native Android application.**
 
-## اجرا
+[![Release](https://img.shields.io/github/v/release/mahan-mgn/Unstream?style=flat-square&color=blue)](https://github.com/mahan-mgn/Unstream/releases)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Node](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
+[![Capacitor](https://img.shields.io/badge/Capacitor-Android-119EFF?style=flat-square&logo=capacitor&logoColor=white)](https://capacitorjs.com)
+[![Tests](https://img.shields.io/badge/Tests-1238%20Passed-brightgreen?style=flat-square)]()
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-### با داکر (ساده‌ترین راه)
+[Features](#key-features) • [Quick Start](#system-setup-desktop--server) • [Mobile Setup](#mobile-setup-android) • [Architecture](#architecture) • [API Reference](#api-reference) • [Releases](https://github.com/mahan-mgn/Unstream/releases)
 
-```bash
-cp .env.docker.example .env      # همه‌ی مقدارها اختیاری‌اند
-docker compose up --build        # http://localhost:8080
+</div>
+
+---
+
+## Overview
+
+**Unstream** bridges the gap between commercial streaming platforms and self-hosted personal music libraries. It queries public metadata catalogs (**Apple Music**, **Deezer**, and **Spotify**) to index tracks, albums, and playlists, then intelligently locates, extracts, and transcodes high-quality audio from open sources (**YouTube** and **SoundCloud** via `yt-dlp`).
+
+Audio files are automatically transcoded to user-selected bitrates, injected with official cover artwork, tagged with normalized ID3 metadata, aligned with synchronized lyrics (`.lrc`), and normalized for loudness according to **EBU R128**.
+
+Whether deployed on a home server via Docker, run locally for development, accessed as a PWA, installed as a native Android APK, or executed fully standalone on an Android phone via Termux without any computer, Unstream provides a unified audiophile experience.
+
+---
+
+## Key Features
+
+### 🎧 Catalog Aggregation & Metadata
+- **Keyless Public Catalogs:** Direct search and metadata indexing via Apple Music (iTunes Search API) and Deezer API with zero API keys required.
+- **Spotify Integration:** Instant URL resolution via public oEmbed, with optional Spotify Web API credentials for exact playlist and album parsing.
+- **Rich Discography Views:** View full artist profiles, top tracks, albums, singles, and public user playlists.
+
+### 🎯 Intelligent Audio Matcher
+- **Multi-Source Resolver:** Evaluates candidates across YouTube and SoundCloud concurrently.
+- **Smart Heuristics:** Matches track duration with steep penalties for deviations (>30s difference receives -35 penalty), penalizes unwanted noise tokens (`live`, `cover`, `remix`, `karaoke`), and normalizes localized text characters.
+- **Manual Candidate Picker (`browse`):** Override matching decisions on any track to preview and select alternate audio streams directly.
+
+### 🎼 Audiophile Playback Engine
+- **Web Audio Dual-Deck Architecture:** Smooth 0–12 second crossfading between consecutive tracks.
+- **Loudness Normalization (EBU R128):** Measures integrated loudness (LUFS) and true peak on download without altering the underlying audio file. Real-time gain adjustment matches target loudness (-14 LUFS standard).
+- **Custom Parametric Equalizer:** 5-band graphic equalizer with genre presets and audio preamp gain (+0 to +12 dB).
+- **Synchronized Lyrics:** Automatic lookup via LRCLIB for synchronized time-coded lyrics (`.lrc`), with fallback to Genius.
+
+### ✂️ Long Mix & DJ Set Splitting
+- **Chapter Extraction:** Detects embedded timestamps and track chapters on long sets (e.g. 1–2 hour DJ mixes or full album compilations).
+- **Lossless Slicing:** Downloads the source once and slices chapters using `ffmpeg -c copy` without re-encoding, creating tagged standalone library tracks with individual artwork and metadata.
+
+### 🎙️ Audio Fingerprinting ("What's Playing?")
+- **AcoustID (Chromaprint):** Free full-file acoustic fingerprinting to verify download authenticity or identify untagged audio files.
+- **AudD Integration:** High-accuracy acoustic snippet and microphone recording identification (Shazam-like feature).
+
+### 📶 Offline-First & Intranet Resilience
+- **Range-Aware Service Worker:** Pin tracks directly into browser Cache Storage. A custom Service Worker handles HTTP `206 Partial Content` Range requests for seamless seeking without internet.
+- **Intranet Mode for Network Outages:**
+  - **Cover Art Mirroring:** Caches remote artwork onto local server storage, avoiding broken images during international connectivity blackouts.
+  - **3-Tier Catalog Cache:** Serves prior search results, viewed artist/album pages, and historical track entries when upstream APIs are inaccessible.
+  - **Reachability Probing:** Background probe engine with hysteresis (2 strikes to disconnect, 1 success to recover) and an escape valve.
+  - **Deferred Download Queue:** Automatically preserves download jobs during outages and resumes them when international connectivity is restored.
+
+### 📱 Android Native Experience
+- **Foreground Playback Service:** Background playback that survives application minimization, complete with MediaStyle lock screen controls, notification album art, and Bluetooth/headphone control hooks.
+- **Edge-to-Edge Fluid UI:** Liquid glass aesthetic with dynamic cover-art color extraction, responsive bottom tab bar, thumb-friendly gesture sheet dismissal, and swipeable library rows.
+- **MediaStore Export:** Save tracks directly into the Android `Music/Unstream` directory for accessibility by any system media player.
+
+### 🤖 Telegram Bot & Web Integration
+- **Full Bot Client:** Search songs, download albums, and inspect audio files directly from Telegram (@BotFather integration).
+- **Web-to-Telegram Dispatch:** Send any track or full album from the web interface directly to your paired Telegram chat with one click.
+- **Automated Artist Tracker:** Follow artists via `/follow` or web UI to automatically receive new releases in high-fidelity with cover art upon publication.
+
+---
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                          Clients Layer                                 │
+│                                                                        │
+│   Web / PWA (React 19 + Vite)          Native Android App (Capacitor)   │
+│   ├── Liquid Glass Design System       ├── PlaybackForegroundService   │
+│   ├── Dual-Deck Web Audio Graph        ├── MediaNotification & Controls │
+│   └── Range-Aware Service Worker       └── MediaStore Direct Exporter   │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ HTTP / REST / SSE
+┌───────────────────────────────────▼────────────────────────────────────┐
+│                    Unstream Server (FastAPI)                           │
+│                                                                        │
+│  ┌──────────────────────┐  ┌─────────────────┐  ┌───────────────────┐  │
+│  │ Catalog Aggregator   │  │ Audio Resolver  │  │ Download Pipeline │  │
+│  │ ├── Apple Music      │  │ ├── YouTube     │  │ ├── yt-dlp Core   │  │
+│  │ ├── Deezer           │  │ ├── SoundCloud  │  │ ├── ffmpeg Trans  │  │
+│  │ └── Spotify (oEmbed) │  │ └── Scoring Alg │  │ └── Tag / Art / LRC│  │
+│  └──────────────────────┘  └─────────────────┘  └───────────────────┘  │
+│                                                                        │
+│  ┌──────────────────────┐  ┌─────────────────┐  ┌───────────────────┐  │
+│  │ Intranet Engine      │  │ Telegram Sync   │  │ Acoustic Analysis │  │
+│  │ ├── Local Art Mirror │  │ ├── Bot Poller  │  │ ├── EBU R128 Norm │  │
+│  │ ├── 3-Tier Cache     │  │ ├── Web Outbox  │  │ ├── Librosa Mood  │  │
+│  │ └── Reach Prober     │  │ └── Follow Feed │  │ └── AcoustID fp   │  │
+│  └──────────────────────┘  └─────────────────┘  └───────────────────┘  │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+┌───────────────────────────────────▼────────────────────────────────────┐
+│                           Storage Layer                                │
+│   SQLite Database (Jobs, Library, History) • Server Volume Cache       │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-سه سرویس بالا می‌آید: فرانت پشت nginx، بک‌اند، و سرور PO Token. `ffmpeg`،
-`node` و `fpcalc` داخل ایمیج هستند. دیتابیس و فایل‌ها روی volume می‌مانند.
+---
 
-کوکی یوتیوب را در `secrets/cookies.txt` بگذار و `UNSTREAM_COOKIES_FILE` را در
-`.env` باز کن — داخل کانتینر کوکی از مرورگر خوانده نمی‌شود.
+## System Setup (Desktop & Server)
 
-### محلی
+### Option 1: Docker Compose (Recommended)
 
+The easiest and most reliable deployment method. Packages the React frontend behind Nginx, the FastAPI backend, and a dedicated `bgutil-ytdlp-pot-provider` container for YouTube PO Tokens.
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/mahan-mgn/Unstream.git
+   cd Unstream
+   ```
+
+2. **Configure environment:**
+   ```bash
+   cp .env.docker.example .env
+   ```
+   *(All default values work out of the box. Edit `.env` to supply optional Spotify, Genius, or Proxy configurations).*
+
+3. **Start the containers:**
+   ```bash
+   docker compose up --build -d
+   ```
+
+4. **Access the application:**
+   Open your browser at `http://localhost:8080`.
+
+To enable the optional Telegram Bot service alongside the stack:
 ```bash
-# فرانت
-npm install
-npm run dev                       # http://localhost:5174
+docker compose --profile bot up -d
+```
 
-# بک‌اند (ترمینال دوم)
+---
+
+### Option 2: Manual Local Development
+
+#### Prerequisites
+- **Node.js:** v20.x or higher
+- **Python:** 3.11 or higher
+- **ffmpeg:** Installed and available in your system `PATH` (or specified via `UNSTREAM_FFMPEG`)
+- **JavaScript Runtime:** `node`, `deno`, or `bun` (for YouTube signature cipher decoding)
+
+#### 1. Backend Setup
+```bash
 cd server
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
-bash setup_potoken.sh             # لازم برای یوتیوب — پایین توضیح داده شده
-cp .env.example .env              # و کوکی مرورگرت را تویش بگذار
-.venv/Scripts/python -m uvicorn app.main:app --port 8000
+
+# On Linux/macOS:
+source .venv/bin/activate
+# On Windows (cmd/PowerShell/Git Bash):
+.venv/Scripts/activate
+
+pip install -r requirements.txt
+
+# Build the local YouTube PO Token provider script
+bash setup_potoken.sh
+
+# Setup environment variables
+cp .env.example .env
+
+# Run FastAPI development server
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-`ffmpeg` باید در PATH باشد (یا `UNSTREAM_FFMPEG` را ست کن).
-`.env.local` در ریشه تعیین می‌کند فرانت به کدام لایه وصل شود:
+#### 2. Frontend Setup
+In a separate terminal window:
+```bash
+npm install
+npm run dev
+```
+Open `http://localhost:5174` in your browser.
 
-| مقدار | رفتار |
-|---|---|
-| `VITE_API_MODE=http` | بک‌اند واقعی (پیش‌فرض فعلی) |
-| `VITE_API_MODE=mock` | داده‌ی ساختگی داخل مرورگر، بدون نیاز به پایتون |
+Verify backend health at `http://localhost:8000/api/health`.
 
-سلامت سیستم: `curl http://localhost:8000/api/health`
+---
 
-### تست
+### Option 3: Cloud / Railway Deployment
+
+Unstream supports single-container cloud deployment with Nginx, Uvicorn, and PO Token bundled together:
+
+1. Deploy using the repository's `Dockerfile`.
+2. Attach a persistent volume mounted at `/data`.
+3. Set `UNSTREAM_PORT` (e.g. `8080` or provided `$PORT`).
+4. Set `UNSTREAM_DATA_DIR=/data`.
+
+---
+
+## Mobile Setup (Android)
+
+Unstream provides two ways to use the platform on mobile devices:
+1. **Native Android APK** (connecting to your home server or remote server).
+2. **Standalone Mobile Server** (running the FastAPI backend directly on the phone via **Termux** — no computer required).
+
+---
+
+### 1. Installing the Android APK
+
+1. Go to the [Unstream Releases](https://github.com/mahan-mgn/Unstream/releases) page.
+2. Download `app-release.apk` from the latest release.
+3. Install the APK on your Android device (allow "Install from unknown sources" if prompted).
+4. Launch **Unstream**. On first launch, the app prompts for your server address:
+   - **Local Wi-Fi:** Enter `http://192.168.x.x:8080` (Docker) or `http://192.168.x.x:5174` (Vite dev).
+   - **Remote / Cloud:** Enter your domain or Cloudflare Tunnel URL (`https://your-tunnel.trycloudflare.com`).
+   - **On-Phone Server:** Tap **"On This Device"** (`http://127.0.0.1:8000`).
+5. Tap **Test Connection**. Once verified, tap **Save and Continue**.
+
+---
+
+### 2. Standalone Phone Server (Termux — No PC Required)
+
+You can run the entire Unstream backend on your Android device without needing a computer running in the background.
+
+#### Why Termux?
+`pydantic-core` (the Rust validation engine used by FastAPI) currently provides zero pre-built wheels for Android Bionic on PyPI. Termux allows compiling `pydantic-core` directly on the device using its native Rust and Clang toolchain, guaranteeing 100% backend code parity between desktop and mobile without compromising features.
+
+#### Setup Steps:
+1. Install **Termux** from [F-Droid](https://f-droid.org/packages/com.termux/) (do not use the obsolete Google Play version).
+2. Download or clone this repository onto your phone's storage.
+3. Open Termux and execute:
+   ```bash
+   pkg update && pkg install git
+   git clone https://github.com/mahan-mgn/Unstream.git ~/unstream-repo
+   bash ~/unstream-repo/scripts/phone-server.sh
+   ```
+4. The script will:
+   - Install required system packages (`python`, `ffmpeg`, `nodejs`, `rust`, `python-numpy`).
+   - Compile `pydantic-core` for Android.
+   - Configure background execution with `termux-wake-lock`.
+   - Start the FastAPI server on `http://127.0.0.1:8000`.
+5. Open the Unstream APK, choose **"On This Device"**, and enjoy!
+
+#### CLI Server Management on Android:
+```bash
+phone-server.sh status               # Check server health
+phone-server.sh restart              # Restart background server
+phone-server.sh boot                 # Automatically start on device boot
+phone-server.sh cookies <path>       # Set YouTube cookies
+phone-server.sh proxy <url>          # Set SOCKS5 / HTTP proxy
+phone-server.sh spotify <id> <sec>   # Configure Spotify credentials
+```
+
+---
+
+### 3. Building the Android App from Source
+
+To build and sign the Android APK yourself:
 
 ```bash
-npm test                                          # vitest — منطق فرمت‌دهی و قرارداد تایپ‌ها
-cd server && .venv/Scripts/python -m pytest       # pytest — resolver، دیتابیس، پاک‌سازی
+# 1. Build frontend and sync Capacitor Android assets
+npm run android:sync
+
+# 2. Build debug APK
+npm run android:apk
+
+# 3. Build optimized, minified release APK
+node scripts/android-release.mjs --apk
 ```
 
-## یوتیوب: سه گیت مستقل
+Output APK will be placed in `release-out/app-release.apk`.
 
-یوتیوب استخراج سمت سرور را با سه سد جدا می‌بندد. هر سه باید باز باشند وگرنه
-یا «Sign in to confirm you're not a bot» می‌گیری یا لیست فرمت خالی برمی‌گردد.
-سلامتشان را از `/api/health` ببین.
-
-| گیت | نشانه | راه‌حل |
-|---|---|---|
-| ضدربات | `Sign in to confirm you're not a bot` | کوکی مرورگر |
-| PO Token | لیست فرمت خالی | `bash setup_potoken.sh` یا سرویس داکر |
-| چالش امضا/n | `Signature solving failed` | `yt-dlp-ejs` + یک JS runtime |
-
-**کوکی** — روی ویندوز فقط فایرفاکس خوانده می‌شود؛ کوکی کروم/اج/بریو با DPAPI رمز
-شده و yt-dlp نمی‌تواند بازش کند. در `server/.env`:
-
-```ini
-UNSTREAM_COOKIES_BROWSER=firefox
-# یا: UNSTREAM_COOKIES_FILE=C:\cookies.txt
-```
-
-**PO Token** — دو راه دارد و بک‌اند هر دو را می‌شناسد:
-
-- *اسکریپتی* (پیش‌فرض محلی): `setup_potoken.sh` سرور
-  [`bgutil-ytdlp-pot-provider`](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
-  را در `server/vendor/` کلون، پچ و بیلد می‌کند. نسخه‌اش باید با پلاگین پایتون یکی
-  باشد (هر دو `1.3.1`).
-- *HTTP* (پیش‌فرض داکر): سرورش جدا بالاست و فقط `UNSTREAM_POT_BASE_URL` را می‌دهیم.
-  بهتر است، چون برای هر توکن یک پروسه‌ی node تازه اجرا نمی‌شود.
-
-> پچ `bgutil-keepalive.patch` برای حالت اسکریپتی لازم است: `asDispatcher()` برای هر
-> درخواست یک `https.Agent` بدون keepAlive می‌سازد، و اتصال تازه به `www.google.com`
-> (جایی که اسکریپت BotGuard میزبانی می‌شود) روی بعضی شبکه‌ها `ECONNRESET` می‌گیرد —
-> اندازه‌گیری‌شده ۰/۳ موفق بدون keepAlive در برابر ۳/۳ با آن.
-
-**JS runtime** — `yt-dlp-ejs` در requirements هست. yt-dlp پیش‌فرض فقط `deno` را
-می‌پذیرد، پس بک‌اند خودش بین `deno`/`bun`/`node` می‌گردد و صریح فعالش می‌کند.
-
-### ساندکلاد
-
-بدون تنظیمات کار می‌کند و fallback خودکار است، ولی جستجویش **حدود ۱۰۰ ثانیه**
-طول می‌کشد. برای همین resolver وقتی یوتیوب تطابق قانع‌کننده داده، اصلاً سراغش
-نمی‌رود. بعضی ترک‌هایش هم DRM دارند و رد می‌شوند.
-
-### پروکسی
-
-روی شبکه‌هایی که یوتیوب یا خودِ کاتالوگ‌ها مستقیم در دسترس نیستند، یک متغیر کافی
-است. روی همه‌ی ترافیک بیرونی اثر می‌گذارد: yt-dlp، کاتالوگ‌ها، متن آهنگ و کاور.
-
-```ini
-UNSTREAM_PROXY=socks5h://127.0.0.1:1080
-# یا: http://user:pass@host:port
-```
-
-`socks5h` به‌جای `socks5` یعنی DNS هم آن‌طرف حل شود — اگر resolver محلی هم فیلتر
-باشد (که معمولاً هست) تنها حالتی است که کار می‌کند. برای socks، `httpx[socks]`
-لازم است و در requirements هست؛ yt-dlp خودش بومی می‌فهمد.
-
-بات تلگرام هم از همین پروکسی می‌رود. تنها جایی از برنامه است که مستقیم با یک
-سرویسِ بیرونی حرف می‌زند (`api.telegram.org`) و از مسیرِ resolver رد نمی‌شود، پس
-قبلاً از `UNSTREAM_PROXY` جا می‌ماند: روی شبکه‌ای که تلگرام مستقیم درنمی‌آمد،
-`getUpdates` با «getaddrinfo failed» می‌افتاد و آپلودِ فایل وسطِ راه `Timed out`
-می‌گرفت. اگر تلگرام پروکسیِ دیگری می‌خواهد، `UNSTREAM_TELEGRAM_PROXY` را جدا بده.
-
-اگر فقط استخراج صوت به پروکسی نیاز دارد و کاتالوگ‌ها مستقیم درمی‌آیند،
-`UNSTREAM_YTDLP_PROXY` را جدا بده. وضعیتش در `/api/health` دیده می‌شود — بدون
-نام‌کاربری و رمز، چون آن اندپوینت احراز هویت ندارد.
-
-داخل داکر، `127.0.0.1` خودِ کانتینر است؛ برای پروکسیِ روی هاست
-`socks5h://host.docker.internal:1080` بده (کامپوز `host-gateway` را ست کرده).
-
-### چیدمان آرشیو
-
-ZIP با ساختار پوشه‌ای می‌آید که هر کتابخانه‌ی موسیقی بدون تنظیمات می‌فهمد، به‌علاوه‌ی
-یک `.m3u` که ترتیب آلبوم را نگه می‌دارد:
-
-```
-Farhad Mehrad/Mard-E Tanha/04 - Mard-e Tanha.mp3
-Farhad Mehrad/Mard-E Tanha/04 - Mard-e Tanha.lrc
-Mard-E Tanha.m3u
-```
-
-الگو قابل تغییر است. جای‌گذارها: `{albumartist} {artist} {album} {title} {track} {disc}
-{year} {genre}` و `/` پوشه می‌سازد. مقداری که غایب باشد بخشِ خودش را حذف می‌کند، پس ترکِ
-بی‌آلبوم در پوشه‌ای بی‌نام گم نمی‌شود.
-
-سطحِ اول `{albumartist}` است نه `{artist}`: آلبومی که چند ترکش مهمان دارد وگرنه به چند
-پوشه‌ی هم‌نام تقسیم می‌شد و پلیر هم همان‌قدر آلبومِ جدا نشان می‌داد.
-
-```ini
-UNSTREAM_PATH_TEMPLATE={artist}/{year} - {album}/{track}. {title}
-UNSTREAM_M3U=0        # اگر پلی‌لیست نمی‌خواهی
-```
-
-فقط روی آرشیو اثر دارد، نه روی چیدمان دیسک سرور — دلیلش پایین‌تر در «تصمیم‌ها».
-
-### اسپاتیفای
-
-بدون کلید هم لینک اسپاتیفای باز می‌شود، ولی فقط عنوان از oEmbed خوانده و در
-اپل/دیزر جستجو می‌شود — یعنی حدس، و پلی‌لیست اصلاً درنمی‌آید. با
-[کلید رایگان](https://developer.spotify.com/dashboard) لیست ترک‌ها دقیق خوانده
-می‌شود:
-
-```ini
-UNSTREAM_SPOTIFY_CLIENT_ID=...
-UNSTREAM_SPOTIFY_CLIENT_SECRET=...
-```
-
-### متن آهنگ
-
-اول [LRCLIB](https://lrclib.net) امتحان می‌شود — بدون کلید، و اگر پیدا کند متن
-هم‌زمان‌شده (`.lrc`) هم می‌دهد. اگر چیزی پیدا نکرد و کلید Genius ست شده باشد،
-نوبت به Genius می‌رسد — فقط متن ساده (بدون هم‌زمان‌سازی)، چون API عمومی‌اش
-متن را مستقیم نمی‌دهد و باید از صفحه‌ی خودِ آهنگ استخراج شود:
-
-```ini
-UNSTREAM_GENIUS_ACCESS_TOKEN=...
-```
-
-کلید رایگان: [genius.com/api-clients](https://genius.com/api-clients) → New
-API Client → Generate Access Token.
-
-### شناسایی آهنگ از روی صدا
-
-دکمه‌ی میکروفون در هدر (و در بات: هر ویس/فایل صوتی/ویدیویی که بفرستی). دو مسیرِ
-کاملاً متفاوت پشتش هست، و **دانستن تفاوتشان مهم است** چون یکی رایگان است ولی
-کارِ محدودی می‌کند:
-
-| مسیر | چه چیزی را می‌شناسد | هزینه |
-|---|---|---|
-| AcoustID | فایلِ کاملِ آهنگ (مثلاً یک mp3 بی‌تگ روی دیسکت) | رایگان |
-| AudD | تکه‌ی کوتاه و ضبطِ میکروفون — حالتِ «شزم» | توکن می‌خواهد |
-
-**AcoustID شزم نیست.** فینگرپرینتِ کروماپرینت را با ایندکسِ *فایل‌های کامل*
-می‌سنجد: صدایی که با میکروفون از بلندگو ضبط شده — با نویزِ اتاق، اکو و
-کلیپینگ — دیگر همان سیگنال نیست، و مدت‌زمانِ یک تکه‌ی بیست‌ثانیه‌ای هم با هیچ
-ترکِ کاملی نمی‌خواند. پس اگر انتظارت شزم است، فقط با AcoustID جواب نمی‌گیری —
-هرچقدر هم آهنگ معروف باشد.
-
-روی فایلِ کامل ولی دقیق است و کاتالوگش آن‌قدرها هم غربی‌محور نیست: پاپ فارسی
-معمولاً هست (اندازه‌گیری‌شده — «شادمهر عقیلی — تقدیر» با امتیاز ۰.۹۹). چیزی که
-اغلب نیست، کاور و ریمیکس‌های کم‌شنیده است، چون ایندکسش را خودِ کاربران پر
-می‌کنند.
-
-**دو کلید دارد و فقط یکی به درد می‌خورد.** کلیدِ *برنامه* (از
-[new-application](https://acoustid.org/new-application) بساز، بعد از
-[my-applications](https://acoustid.org/my-applications) بردار) همان چیزی است که
-در `client` می‌نشیند. کلیدِ شخصیِ [api-key](https://acoustid.org/api-key) فقط
-برای *ثبتِ* فینگرپرینت است و در lookup خطای «invalid API key» می‌دهد.
-
-```ini
-# مسیر رایگان — شناساییِ فایلِ کامل. هر دو لازم‌اند:
-UNSTREAM_ACOUSTID_KEY=...      # کلیدِ برنامه، از acoustid.org/my-applications
-# و خودِ fpcalc (بسته‌ی Chromaprint) باید در PATH باشد:
-#   داکر → از قبل داخل ایمیج هست (libchromaprint-tools)
-#   لینوکس → apt install libchromaprint-tools
-#   ویندوز → chromaprint را از https://acoustid.org/chromaprint بگیر و:
-UNSTREAM_FPCALC=C:\tools\chromaprint\fpcalc.exe
-
-# مسیرِ «شزم» — ضبط میکروفون و تکه‌ی کوتاه. اختیاری:
-UNSTREAM_AUDD_TOKEN=...        # https://dashboard.audd.io
-```
-
-هر کدام که تنظیم باشد کار می‌کند و اگر هر دو باشند اول AudD امتحان می‌شود (تنها
-مسیری که در حالتِ ضبط جواب می‌دهد) و بعد AcoustID. بدون توکنِ AudD هیچ صوتی از
-سرور بیرون نمی‌رود.
-
-اگر هیچ‌کدام تنظیم نباشد، خودِ اپ می‌گوید دقیقاً چه چیزی کم است — `/api/identify`
-پیامِ ۵۰۳‌اش را نام‌به‌نام می‌نویسد و همان جمله در وب و بات نشان داده می‌شود.
-وضعیتِ هر دو مسیر در `/api/health` هم هست (`identifyMic` و `identifyFile`).
-
-### کتابخانه‌ی آفلاین
-
-روی هر ردیف کتابخانه یک دکمه‌ی سنجاق هست: فایل صوتی (به‌علاوه‌ی `.lrc` و کاورش)
-در Cache Storage مرورگر می‌نشیند و از آن به بعد بدون اینترنت هم پخش می‌شود.
-آفلاین که باشی، خودِ صفحه‌ی کتابخانه هم به همان فهرستِ سنجاق‌شده برمی‌گردد
-به‌جای اینکه خالی بماند.
-
-سرویس‌ورکرِ Workbox این را نمی‌دهد و `runtimeCaching` هم جوابش نبود: پخش‌کننده
-برای هر جابه‌جایی روی نوار یک درخواستِ `Range` می‌فرستد و پاسخِ کاملِ کش‌شده را
-قبول نمی‌کند. پس `public/sw-offline.js` کنارِ همان سرویس‌ورکر می‌نشیند
-(`importScripts`) و فقط دو چیز را برمی‌دارد: استریمِ فایل‌های سنجاق‌شده — که
-خودش `206 Partial Content` می‌سازد — و کاورهای کش‌شده. بقیه‌ی درخواست‌ها
-دست‌نخورده به Workbox می‌رسند.
-
-فضا را مرورگر مدیریت می‌کند؛ اپ موقع اولین سنجاق `navigator.storage.persist()`
-می‌خواهد تا کمتر قربانیِ کمبود جا شود، ولی تضمینی نیست — هر بار که کتابخانه باز
-شود، فهرستِ محلی با آنچه واقعاً در کش مانده یکی می‌شود.
-
-### حالت اینترانت (قطعیِ اینترنتِ بین‌الملل)
-
-در ایران قطعیِ بین‌الملل یعنی اینترنتِ ملی همچنان برقرار است: سرورِ خانگی از
-روی وای‌فای در دسترس است، فایل‌ها روی دیسک‌اند و پخش می‌شوند — ولی هر درخواستی
-به اپل/دیزر/اسپاتیفای/یوتیوب در تایم‌اوت می‌میرد. قبل از این، آن حالت به‌شکلِ
-یک برنامه‌ی خراب دیده می‌شد: جستجو ۵۰۲ می‌داد، صفحه‌ی آلبوم ۴۰۴، هر کاورِ
-کتابخانه سفید می‌شد و هر دانلود بعد از نیم‌دقیقه انتظار شکست می‌خورد.
-
-حالا آن حالت یک نامِ صریح دارد و چهار چیز پشتش کار می‌کند.
-
-**۱. آینه‌ی محلیِ کاور** (`app/artcache.py`) — تنها بخشِ کتابخانه که روی دیسکِ
-ما نبود، کاور بود: `artworkUrl` به CDNِ همان کاتالوگ اشاره می‌کرد. حالا هر
-آدرسی که از سرور بیرون می‌رود به `/api/art/{sha}` تبدیل می‌شود؛ اولین باری که
-مرورگر آن را می‌خواهد، سرور تصویر را می‌گیرد و نگه می‌دارد. یعنی کش با مرورِ
-عادیِ خودت پر می‌شود، و کاورِ هر ترکی که دانلود می‌کنی همان لحظه‌ی تگ‌گذاری
-مجانی ذخیره می‌شود. دو فایده‌ی جانبی هم دارد که ربطی به قطعی ندارند: کاورِ
-مشترکِ یک آلبوم یک‌بار گرفته می‌شود، و چون درخواست از سرور رد می‌شود،
-`UNSTREAM_PROXY` روی آن هم اثر دارد.
-
-**۲. کشِ کاتالوگ** (`app/catcache.py`) — سه لایه، از دقیق به عام: عینِ همان
-جستجو اگر قبلاً زده شده باشد؛ صفحه‌ی آلبوم/هنرمندی که قبلاً باز شده؛ و
-ردیف‌های تکی، که مهم‌ترین لایه است — هر ترک و آلبومی که از *هر* مسیری یک‌بار از
-جلوی چشم رد شده قابلِ جستجو می‌ماند، حتی با عبارتی که هرگز تایپ نشده. کتابخانه
-هم به نتیجه اضافه می‌شود، چون ترک‌هایش تنها ردیف‌هایی‌اند که دکمه‌ی پخششان
-قطعاً کار می‌کند. کش تاریخ انقضا ندارد و این عمدی است: انتخاب بین «داده‌ی
-سه‌ماهه» و «هیچ» است.
-
-**۳. تشخیصِ خودکار** (`app/reach.py`) — `navigator.onLine` این را نمی‌فهمد: از
-دیدِ گوشی وای‌فای وصل است و اینترنت هست. تنها جایی که می‌شود فهمید خودِ سرور
-است، پس یک حلقه‌ی پس‌زمینه چند آدرسِ بالادست را پروب می‌کند. *هر* پاسخِ HTTP
-یعنی رسیدیم — حتی ۴۰۴؛ چیزی که اندازه می‌گیریم دسترسیِ شبکه است نه سلامتِ API،
-وگرنه یک ۴۲۹ِ اسپاتیفای کلِ برنامه را بی‌دلیل خاموش می‌کرد. درخواست‌های واقعی
-هم سیگنال می‌دهند: جستجویی که جواب گرفت یعنی برگشت، و خطای اتصال یعنی قطع —
-پس تشخیص به دورِ بعدیِ پروب گره نخورده.
-
-> **چرا پروب روی خودِ کاتالوگ‌ها نیست.** نسخه‌ی اول `itunes.apple.com` و
-> `api.deezer.com` را می‌زد، با این استدلالِ به‌ظاهر درست که «همان چیزی را بسنج
-> که برنامه لازم دارد». روی یک اتصالِ ایرانی این بدترین انتخابِ ممکن بود: اپل
-> آی‌پی‌های ایران را به‌خاطر تحریم مسدود می‌کند و دیزر geo-block دارد، پس هر دو
-> مرتب قطع‌ووصل می‌شوند *در حالی که اینترنت کاملاً سالم است*. حالا پروب به
-> سؤالِ ساده‌ترِ «اصلاً مسیری به بیرون هست؟» جواب می‌دهد، با آدرس‌هایی که
-> خودشان سیاست جغرافیایی ندارند (Cloudflare، gstatic، و یکی با آی‌پی برای وقتی
-> DNS دستکاری شده).
-
-**۳.۱. دو محافظ در برابر تشخیصِ اشتباه.** چون هیچ تشخیصی صددرصد نیست:
-
-*هیسترزیس* — رفتن به اینترانت دو شکستِ پیاپی می‌خواهد، ولی برگشتن با یک
-موفقیت اتفاق می‌افتد. نامتقارنی عمدی است: یک اعلامِ اشتباهِ «قطع» جستجوی زنده
-را خاموش می‌کند و دانلودها را به صف می‌فرستد، ولی یک اعلامِ اشتباهِ «وصل» فقط
-یک درخواستِ ناموفق است که خودش فوراً تصحیح می‌شود. با `UNSTREAM_REACH_STRIKES`
-قابل تنظیم است.
-
-*دریچه‌ی فرار* — هر بار که کش دستِ خالی است (یعنی دقیقاً همان‌جا که کاربر چیزی
-از دست می‌دهد) وضعیت دوباره پرسیده می‌شود، و اگر اشتباه کرده بودیم همان درخواست
-از مسیرِ زنده جواب می‌گیرد. بدونِ این، یک «قطع»ِ اشتباه هیچ‌وقت بازبینی نمی‌شد:
-در حالتِ اینترانت مسیرِ زنده اصلاً امتحان نمی‌شود، پس برنامه راهی برای فهمیدنِ
-اشتباهش نداشت و کاربر تا ابد حبس می‌ماند. سقفِ هزینه‌اش یک پروب در هر ۲۰ ثانیه
-است، و کشی که جواب دارد اصلاً پروب نمی‌زند.
-
-**۴. صفِ دانلودِ معوق** — دانلودی که موقعِ قطعی خواسته شود به‌جای شکست، وضعیتِ
-`deferred` می‌گیرد و با برگشتنِ اینترنت خودکار شروع می‌شود. برخلاف بقیه‌ی
-وضعیت‌های نیمه‌کاره از ری‌استارتِ سرور جان سالم به در می‌برد (قطعی ممکن است
-چند روز طول بکشد) و انتخابِ دستیِ منبع هم با آن ذخیره می‌شود. بازاستفاده از
-کتابخانه سرِ جایش می‌ماند: «دانلودِ همه»ی آلبومی که نصفش را داری، همان نصف را
-فوراً می‌دهد و فقط بقیه صف می‌کشند.
-
-در UI، نوارِ بالای صفحه سه وضعیت را از هم جدا می‌کند — «شبکه نیست»، «به سرور
-نمی‌رسیم»، «اینترنت بین‌الملل قطع است» — چون کارِ کاربر در هرکدام فرق دارد.
-حالتِ اینترانت رنگِ هشدار نمی‌گیرد: بیشترِ برنامه کار می‌کند و رنگِ خطر پیامِ
-اشتباهی می‌داد. نتایجِ جستجو هم صریح می‌گویند از حافظه‌ی محلی آمده‌اند، وگرنه
-کاربر فکر می‌کند کاتالوگ فقیر شده.
-
-| متغیر | پیش‌فرض | کار |
-|---|---|---|
-| `UNSTREAM_ART_MIRROR` | `1` | آینه‌ی محلیِ کاور |
-| `UNSTREAM_CATALOG_CACHE` | `1` | کشِ کاتالوگ و جستجوی آفلاین |
-| `UNSTREAM_DEFER_DOWNLOADS` | `1` | صفِ دانلودِ معوق |
-| `UNSTREAM_REACH_PROBES` | دیزر + اپل | آدرس‌های پروب، جدا با کاما. خالی = تشخیص خاموش |
-| `UNSTREAM_REACH_TIMEOUT` | `6` | ثانیه — تنگ عمدی است |
-| `UNSTREAM_REACH_STRIKES` | `2` | چند شکستِ پیاپی تا اعلامِ «قطع» |
-| `UNSTREAM_REACH_INTERVAL` | `120` | فاصله‌ی پروب وقتی وصل است |
-| `UNSTREAM_REACH_RETRY_INTERVAL` | `30` | فاصله‌ی پروب وقتی قطع است |
-| `UNSTREAM_ART_WARM` | `1` | پرکردنِ پس‌زمینه‌ی کاورهای هنوز نگرفته |
-
-> آینه‌ی کاور و کشِ کاتالوگ هر دو در `UNSTREAM_DATA_DIR` می‌نشینند — همان
-> volume ای که دیتابیس در آن است. یعنی با `docker compose down` از بین
-> نمی‌روند، و بکاپ گرفتن از آن پوشه یعنی بکاپِ کلِ حافظه‌ی آفلاین.
-
-**اگر سرور را روی کامپیوترِ خودت اجرا می‌کنی** (که برای این سناریو بهترین حالت
-است) دو کار ارزشش را دارد: `UNSTREAM_FILE_RETENTION=0` تا فایل‌ها بعد از هفت
-روز پاک نشوند، و باز کردنِ پورت روی شبکه‌ی خانه تا گوشی هم ببیندش — بخشِ
-«اجرا روی گوشی» پایین‌تر توضیحش داده.
-
-### پلی‌لیست‌های خودت
-
-تبِ دومِ کتابخانه. دو نوع دارند و تفاوتشان یک جمله است:
-
-- **دستی** — فهرستی که خودت می‌چینی (`+` روی هر ردیف کتابخانه).
-- **هوشمند** — به‌جای فهرست، یک قانون: «شاد»، «آرام»، یا ترکیبشان. قانون در
-  لحظه‌ی باز کردن اجرا می‌شود، پس هر دانلودِ تازه‌ای که بخواند خودش اضافه
-  می‌شود.
-
-قانونِ هوشمند روی همان والانس/انرژی‌ای کار می‌کند که سرور بعد از هر دانلود از
-خودِ فایل درمی‌آورد (`app/mood.py`) — یعنی بدون هیچ برچسب‌گذاریِ دستی. ترکی که
-تحلیل نشده (librosa خاموش بوده یا فایل عجیب بوده) عمداً وارد نتیجه نمی‌شود:
-واردکردنش یعنی نتیجه‌ی تصادفی.
-
-### آمار گوش‌دادن، علاقه‌مندی‌ها و میکس روزانه
-
-تا اینجا اپ یک دانلودر است؛ از اینجا به بعد یک پلیر است که تو را می‌شناسد.
-
-**۱. ثبتِ پخش.** هر بار که ترکی واقعاً پخش می‌شود، فرانت یک رویداد به
-`/api/plays` می‌فرستد و سرور یک ردیف در جدول `plays` می‌سازد — با کپیِ
-متادیتا (عنوان/هنرمند/کاور)، نه فقط شناسه: اگر فایل بعداً از کتابخانه پاک
-شود، تاریخچه و آمار با آن نمی‌میرند. همه‌ی مسیرهای پخش پوشش دارند
-(کتابخانه، پلی‌لیست، رادیو، کراس‌فید)؛ ترک‌های رادیو شناسه‌ی جابشان را از
-آدرسِ استریم استخراج می‌کنند. ثبتِ پخش «آتش‌بفرما و فراموش کن» است: شکستش
-هرگز پخش را خراب نمی‌کند.
-
-**۲. لایک.** قلبِ کنارِ ردیفِ کتابخانه، منوی «⋯» و هدرِ پخش‌کننده‌ی باز.
-ستونِ `favorite` روی خودِ جدول جاب‌هاست (صفتِ فایل است، نه رابطه‌ی جدا) و
-قلب با به‌روزرسانی خوش‌بینانه پر و خالی می‌شود — اگر سرور نپذیرد، برمی‌گردد.
-در کتابخانه یک چیپِ «علاقه‌مندی‌ها» هست که فقط لایک‌شده‌ها را نشان می‌دهد
-(از `/api/favorites`) و قلب‌های برداشته‌شده از جاهای دیگر را هم همان لحظه
-اعمال می‌کند. ترک‌های رادیو — که در کتابخانه نیستند — اصلاً قلب نمی‌گیرند.
-
-**۳. صفحه‌ی آمار.** چهارمین مقصدِ ناوبری (تبِ «آمار» در هدر دسکتاپ و نوارِ
-پایینِ موبایل). کاشی‌های شمارنده (تعداد پخش، دقیقه‌ی گوش‌داده‌شده، آهنگ‌های
-متفاوت)، «بیشترین‌ها» و «هنرمندهای برتر» با میله‌ی مقایسه، و «آخرین پخش‌ها».
-بازه با سه چیپ ۷/۳۰/۳۶۵ عوض می‌شود. آمار روی گروه‌بندیِ `track_id` حساب
-می‌کند نه جاب، پس یک آهنگ با دو کیفیت دو بار شمرده نمی‌شود.
-
-**۴. میکسِ روزانه.** یک سکشن در خانه که سرور می‌چیندش نه کاربر: مرکزِ
-انتخاب میانگینِ والانس/انرژیِ لایک‌هاست، و اگر لایکی نبود، حس‌وحالِ
-بیشترین‌های گوش‌داده‌شده‌ی بازه؛ بعد کتابخانه بر اساسِ فاصله از همان مرکز
-مرتب می‌شود. دو ترجیحِ دیگر هم هست: لایک‌ها پاداشِ مجاورت می‌گیرند، و
-ترک‌هایی که در بازه گوش داده شده‌اند وارد میکس نمی‌شوند تا هر روز تکراری
-نباشد. نه لایکی هست نه پخشی → سکشن اصلاً رندر نمی‌شود (پیشنهادِ بی‌سیگنال،
-ردیفِ تصادفی است و از نداشتنش بدتر). همه‌چیز روی دیسک و دیتابیسِ محلی است،
-پس در حالتِ اینترانت هم کار می‌کند.
-
-```
-جدول‌های تازه:
-  plays     — هر پخش یک ردیف؛ متادیتا کپی شده
-  jobs.favorite — ستونِ لایک
-```
-
-### هم‌ترازی بلندی، کراس‌فید، اکولایزر، تایمر خواب
-
-از دکمه‌ی تنظیم صدا روی نوار پخش (و در پخش‌کننده‌ی باز، برای موبایل):
-
-| تنظیم | چه می‌کند |
-|---|---|
-| هم‌ترازی بلندی | همه‌ی ترک‌ها با یک بلندی شنیده می‌شوند — پیش‌فرض روشن |
-| تقویتِ صدا | ۰ تا ۱۲ دسی‌بل بلندتر روی همه‌ی ترک‌ها — برای گوشی/اسپیکری که خودش کم‌صداست؛ پیش‌فرض خاموش |
-| کراس‌فید | ۰ تا ۱۲ ثانیه محوشدنِ ترک در ترکِ بعدی — پیش‌فرض خاموش |
-| اکولایزر | پنج باند، با چند پریست آماده |
-| تایمر خواب | پخش بعد از ۱۵/۳۰/۴۵/۶۰ دقیقه خودش می‌ایستد |
-
-بلندی سمتِ سرور و یک بار اندازه گرفته می‌شود: بعد از هر دانلود، `ffmpeg` با
-فیلترِ `ebur128` بلندیِ ادراکی (LUFS) و اوجِ واقعی را می‌دهد و همان دو عدد کنار
-ردیفِ جاب ذخیره می‌شوند. **خودِ فایل دست‌نخورده می‌ماند** — تقویت موقع پخش
-اعمال می‌شود، پس نه ترنسکدِ دوباره‌ای در کار است نه دینامیکی از دست می‌رود.
-تبدیلِ آن دو عدد به «چند دسی‌بل» موقع تحویل انجام می‌شود، با دو سقف: تقویتِ
-بیش از ۱۲ دسی‌بل (که فقط نویز را بالا می‌آورد) و هر تقویتی که اوج را از یک
-دسی‌بلِ زیرِ صفر بالاتر ببرد (که یعنی کلیپ).
-
-سمتِ مرورگر، پخش‌کننده دیگر یک `<audio>` تنها نیست: دو «دک» زیر یک گرافِ
-Web Audio (`src/lib/audioEngine.ts`). کراس‌فید بدون دو المنت اصلاً ممکن نیست، و
-هم‌ترازی و اکولایزر بدون گراف. اگر مرورگر Web Audio نداشته باشد، همه‌چیز بی‌صدا
-به همان پخشِ ساده‌ی قبلی برمی‌گردد.
-
-```ini
-UNSTREAM_LOUDNESS=0            # اگر اصلاً اندازه‌گیری نمی‌خواهی
-UNSTREAM_LOUDNESS_TARGET=-14   # LUFS
-```
-
-### تکه‌کردنِ میکس‌های بلند
-
-لینکِ «۲ ساعت بهترین‌های فلانی» یک فایلِ غول است که هیچ پلیری ترکِ ششمش را پیدا
-نمی‌کند — ولی معمولاً چپتر دارد، یعنی خودِ آپلودکننده مرزها و نام‌ها را نوشته.
-روی صفحه‌ی چنین لینکی دکمه‌ی «تکه‌اش کن» ظاهر می‌شود: چپترها را نشان می‌دهد،
-هرکدام را که بخواهی تیک می‌زنی، و هر تکه یک ردیفِ کاملِ کتابخانه می‌شود — با
-تگ، کاور، متن آهنگ و شماره‌ی ترک.
-
-نامِ چپتر پارس می‌شود («۰۱. هنرمند - عنوان» → هنرمند و عنوان جدا)؛ اگر
-جداکننده‌ای نبود، هنرمندِ خودِ ویدیو می‌نشیند — حدسِ اشتباه بدتر از نداشتن است.
-تکه‌ی کوتاه‌تر از ۳۰ ثانیه (اینترو/تیتراژ) کنار می‌رود.
-
-میکس **یک بار** دانلود می‌شود و بعد با `ffmpeg -c copy` بریده می‌شود: نه
-ترنسکدِ دوباره، نه بیست بار دانلودِ همان فایل. فایلِ کاملِ میکس بعد از بریدن
-پاک می‌شود.
-
-### بات تلگرام
-
-اسم آهنگ یا لینک (اسپاتیفای/دیزر/اپل‌موزیک/یوتیوب/ساندکلاد) به بات بفرست، فایل
-برمی‌گردد. یک کلاینت تازه برای همون API است — نه مسیر یا منطق جدا در بک‌اند؛
-همون مسیرِ جستجو/دانلود/SSE که فرانت هم استفاده می‌کند.
-
-توکن رایگان از [@BotFather](https://t.me/BotFather) با `/newbot`، بعد در
-`server/.env`:
-
-```ini
-UNSTREAM_TELEGRAM_BOT_TOKEN=...
-```
-
-محلی، کنار سرور اصلی که باید بالا باشد:
-
-```bash
-cd server
-.venv/Scripts/python -m app.bot.run
-```
-
-با داکر (سرویس جدا، پیش‌فرض بالا نمی‌آید):
-
-```bash
-docker compose --profile bot up --build
-```
-
-ویس، فایل صوتی یا ویدیو هم قبول می‌کند: از روی خودِ صدا می‌شناسدش و بعد همان
-دکمه‌های انتخاب/دانلود را می‌دهد. برای ویسِ ضبط‌شده از بلندگو، توکنِ AudD لازم
-است — بالاتر، «شناسایی آهنگ از روی صدا».
-
-جستجو با اسم آهنگ دکمه‌های انتخاب می‌دهد (با بجِ منبع کنار هر کدام)؛ لینکِ
-تک‌آهنگ مستقیم می‌رود سراغ دانلود، و لینکِ صفحه‌ی هنرمند یا کاربر (پروفایلِ
-اسپاتیفای/دیزر/ساندکلاد و کانالِ یوتیوب) مرورگرِ پروفایل را باز می‌کند —
-همان‌جا که آلبوم‌ها و پلی‌لیست‌هایش دکمه می‌شوند. پیامِ وضعیت با نوار پیشرفتِ گرافیکی
-(`▓▓▓░░░░`) آپدیت می‌شود، فایل نهایی با کاور کوچک می‌رسد، و اگر متن آهنگ پیدا
-شده باشد یک `.lrc` جدا هم می‌آید. فایلی که از بات دانلود می‌شود دقیقاً مثل
-وب وارد همون کتابخانه‌ی مشترک هم می‌شود.
-
-سقفِ تلگرام برای `sendAudio` بدون Local Bot API Server پنجاه مگابایت است؛
-برای فایل بزرگ‌تر (عملاً فقط flac/اورجینالِ ترک‌های خیلی بلند)، بات به‌جای
-فایل، لینک مستقیم دانلودش را می‌فرستد.
-
-**دستورها** (منوی «/» کنار جعبه‌ی پیام هم همین‌ها را نشان می‌دهد):
-
-| دستور | کار |
-|---|---|
-| `/help` | راهنمای سریع |
-| `/quality` | کیفیت پیش‌فرض دانلود — همان هفت گزینه‌ی منوی کیفیتِ وب |
-| `/library [عبارت]` | دانلودهای قبلی؛ زدن روی هرکدام همان فایل را دوباره می‌فرستد — بدون دانلود دوباره، فوری |
-| `/follow <هنرمند یا لینک>` | دنبال‌کردنِ یک هنرمند؛ انتشارِ تازه خودکار با فایل و کاور می‌رسد |
-| `/unfollow` | لیستِ دنبال‌شده‌ها با دکمه‌ی حذف |
-| `/following` | لیستِ فعلیِ دنبال‌شده‌ها |
-| `/link <کد>` | وصل‌کردنِ این چت به نسخه‌ی وب — پایین‌تر |
-
-کیفیتِ انتخابی هر چت فقط تا وقتی بات بالاست دوام می‌آورد — ری‌استارت یعنی
-برگشت به ۳۲۰ (پیش‌فرض)؛ persistence اضافه نشده چون این قابلیت اختیاری همین
-اندازه کافی است.
-
-**دانلود دسته‌جمعی.** لینکِ آلبوم یا پلی‌لیست، علاوه بر دکمه‌های تک‌تکِ ترک‌ها،
-یک دکمه‌ی «⬇️ دانلود همه» هم می‌دهد که صفِ ترتیبی می‌سازد — هر ترک با پیامِ
-وضعیتِ خودش، تا سقفِ `MAX_BATCH_DOWNLOAD` (۳۰) تا برای جلوگیری از فلودِ تلگرام.
-
-**Inline mode.** با `@نام‌بات آهنگ` از هر چتی (بدون باز کردنِ پی‌وی بات) جستجو
-و ارسال می‌شود. اول باید نزد [@BotFather](https://t.me/BotFather) با
-`/setinline` فعالش کنی. برای اینکه نتیجه‌ی انتخاب‌شده خودِ فایلِ صوتی باشد (نه
-فقط یک لینک)، چون ادیتِ پیامِ inline فقط `file_id`/URL قبول می‌کند نه آپلودِ
-مستقیم، یک چت/کانالِ خصوصی که بات در آن ادمین است لازم است تا فایل یک‌بار
-آنجا برای گرفتنِ `file_id` فرستاده شود:
-
-```ini
-UNSTREAM_TELEGRAM_CACHE_CHAT_ID=-1001234567890
-```
-
-بدونش، نتیجه‌ی inline بعد از دانلود فقط لینکِ مستقیمِ فایل را نشان می‌دهد.
-
-**فرستادن از وب به تلگرام.** کنارِ هر آهنگ (نتایج جستجو، صفحه‌ی آلبوم/هنرمند،
-و منوی سه‌نقطه‌ی کتابخانه) و هر آلبوم (کارتِ نتایج و هدرِ صفحه‌ی آلبوم) یک
-دکمه‌ی تلگرام هست؛ زدنش همان فایلِ کامل — با کاور، تگ‌ها و `.lrc` — را به چتت
-می‌فرستد. آلبوم یعنی همه‌ی ترک‌هایش، ترتیبی، تا همان سقفِ ۳۰تاییِ بالا.
-
-اولین بار باید یک بار چتت را وصل کنی: دکمه پنجره‌ای با یک کدِ شش‌حرفی و یک
-لینکِ «باز کردن بات» می‌دهد. لینک را بزن و در تلگرام Start کن (یا خودت
-`/link <کد>` را در چتِ بات بفرست) — بعد از آن پنجره خودش بسته می‌شود و همان
-چیزی که اول خواسته بودی می‌رود. اتصال در فوترِ وب دیده می‌شود و همان‌جا هم
-قطع می‌شود.
-
-سرور توکنِ تلگرام ندارد و عمداً هم نباید داشته باشد: دکمه‌ی وب فقط یک ردیف در
-صفِ سرور می‌گذارد و پروسه‌ی بات با long-poll برش می‌دارد و همان مسیرِ همیشگیِ
-خودش را می‌رود. یعنی سرویسِ بات باید بالا باشد — نباشد، دکمه اصلاً نشان داده
-نمی‌شود. صف در دیتابیسِ سرور ماندگار است، پس کاری که موقع ری‌استارتِ بات در
-راه بوده گم نمی‌شود. کیفیت همان چیزی است که لحظه‌ی کلیک در منوی کیفیتِ وب
-انتخاب شده، نه کیفیتِ پیش‌فرضِ خودِ چت.
-
-**دنبال‌کردنِ هنرمند.** از دو جا می‌شود: دکمه‌ی «دنبال کردن» روی صفحه‌ی هنرمند
-در وب، یا `/follow` در بات. هر دو یک ردیف در جدول `follows` دیتابیسِ سرور
-می‌سازند و آخرین انتشارِ هنرمند را seed می‌کنند. یک حلقه‌ی پس‌زمینه در بات هر
-۳۰ دقیقه (`UNSTREAM_FOLLOW_POLL_INTERVAL`) همه‌ی ردیف‌ها را از `/api/follows`
-می‌خواند، صفحه‌ی هنرمند را دوباره resolve می‌کند، و اگر انتشارِ تازه‌ای بالای
-دیسکوگرافی نشسته باشد همان را خودکار می‌فرستد: خبر + کاورِ باکیفیت + لینکِ
-پلتفرم، بعد خودِ فایل‌ها (تک‌آهنگ یا کلِ آلبوم) با کیفیت `AUTO_QUALITY`.
-مقصد همیشه همان چتِ وصل‌شده‌ی تلگرام است (`telegram_chat`)؛ وب توکن ندارد،
-پس فقط ردیف می‌گذارد و بات تحویل می‌دهد. دیتابیسِ محلیِ بات
-(`UNSTREAM_BOT_DB`) دیگر نوشتن ندارد و فقط برای مهاجرتِ یک‌باره‌ی
-ردیف‌هایِ نسخه‌های قدیمی خوانده می‌شود.
-
-## معماری
-
-```
-src/                          فرانت — React 19 + Vite + Tailwind 4
-  lib/types.ts                قرارداد MusicApi
-  lib/api/{index,mock,http}   دو پیاده‌سازی پشت یک اینترفیس
-  lib/audioEngine.ts          دو دک صوتی: هم‌ترازی، اکولایزر، کراس‌فید
-  lib/offline.ts              سنجاق‌کردن ترک در Cache Storage
-  lib/artColor.ts             رنگِ غالبِ کاور برای تینتِ پخش‌کننده
-  store/{downloads,player,settings,toasts,offline,telegram,favorites}
-  components/
-
-server/app/                   بک‌اند — FastAPI
-  models.py                   آینه‌ی types.ts
-  db.py                       SQLite — جاب‌ها، کتابخانه، پخش‌ها و لایک‌ها
-  paths.py                    چیدمان پوشه‌ها و M3U داخل آرشیو
-  providers/itunes.py         iTunes Search API (بدون کلید)
-  providers/deezer.py         Deezer API (بدون کلید) — تنها منبع پلی‌لیستِ بی‌کلید
-  providers/spotify.py        Spotify Web API (Client Credentials، اختیاری)
-  providers/lrclib.py         متن آهنگ (بدون کلید، اولویت اول — هم‌زمان‌شده هم می‌دهد)
-  providers/genius.py         متن آهنگ (با کلید، جایگزین — فقط ساده)
-  providers/ytdlp.py          یوتیوب/ساندکلاد
-  identify.py                 فینگرپرینت آکوستیک — «این چه آهنگی بود؟»
-  loudness.py                 اندازه‌گیری بلندی (EBU R128) برای پخشِ هم‌تراز
-  split.py                    تکه‌کردنِ میکس بر اساس چپترها
-  catalog.py                  ترکیب provider ها، resolve کردن لینک
-  resolver.py                 امتیازدهی و انتخاب نسخه‌ی درست (+ browse برای انتخاب دستی)
-  downloader.py               دانلود، ترنسکد، تگ، متن، امبد کاور
-  verify.py                   تأیید فینگرپرینت با AcoustID (اختیاری)
-  jobs.py                     صف، همزمانی، SSE، پاک‌سازی دیسک
-  telegram.py                 کدِ وصل‌شدن، حضورِ بات، و بیدارباشِ صفِ «بفرست به تلگرام»
-  bot/                        بات تلگرام — کلاینتِ HTTP همین API، نه مسیرِ جدا
-  ydl.py                      گزینه‌های مشترک yt-dlp (کوکی، PO Token، JS runtime)
-server/tests/                 pytest
-public/sw-offline.js          سرو کردنِ فایل‌های سنجاق‌شده با پشتیبانی Range
-docker-compose.yml            فرانت + بک‌اند + سرور PO Token
-```
-
-هیچ کامپوننت فرانتی نمی‌داند داده از کجا می‌آید — همه‌چیز از `MusicApi` می‌گذرد.
-
-### اندپوینت‌ها
-
-| متد | مسیر | خروجی |
-|---|---|---|
-| GET | `/api/search?q=` | `SearchResults` |
-| GET | `/api/album?ref=` | `AlbumDetail` — ref می‌تواند id داخلی یا لینک باشد |
-| GET | `/api/artist?ref=` | `ArtistDetail` — ترک‌های محبوب + دیسکوگرافی؛ صفحه‌ی کاربر هم از همین‌جا می‌آید (`kind: "user"`) |
-| GET | `/api/library?q=` | `LibraryPage` — فایل‌های آماده روی دیسک |
-| DELETE | `/api/library/{id}` | حذف فایل و ردیفش |
-| PUT | `/api/library/{id}/favorite?favorite=` | لایک/برداشتنِ لایک |
-| GET | `/api/favorites` | لایک‌شده‌ها — `LibraryItem[]` |
-| POST | `/api/plays` | ثبتِ یک رویدادِ پخش (`{ jobId, seconds? }`) |
-| GET | `/api/stats?days=` | آمارِ بازه: شمارنده‌ها، بیشترین‌ها، تاریخچه |
-| GET | `/api/mix` | میکسِ روزانه — `{ source, items }`؛ `source: none` یعنی سیگنالی نیست |
-| POST | `/api/downloads` | `{ jobId, reused }` |
-| POST | `/api/candidates` | `CandidateOption[]` — نسخه‌های موجود برای انتخاب دستی |
-| GET | `/api/downloads/{id}/events` | SSE با `DownloadProgress` |
-| DELETE | `/api/downloads/{id}` | لغو کار |
-| GET | `/api/downloads/{id}/file` | فایل نهایی (attachment) |
-| GET | `/api/downloads/{id}/stream` | همان فایل برای `<audio>` — mime واقعی، با Range |
-| GET | `/api/downloads/{id}/lyrics` | فایل `.lrc` |
-| POST | `/api/downloads/zip` | `{ url, bytes, files }` — آرشیو را می‌سازد |
-| GET | `/api/downloads/zip/{token}` | خودِ آرشیو |
-| POST | `/api/identify` | `IdentifyResult` — فایل صوتی/ویدیویی بالا می‌رود، ترکِ شناسایی‌شده برمی‌گردد |
-| GET | `/api/chapters?ref=` | `ChaptersInfo` — چپترهای یک لینک (خالی یعنی ندارد) |
-| POST | `/api/downloads/split` | `SplitStatus` — تکه‌کردن را شروع می‌کند |
-| GET | `/api/downloads/split/{id}` | `SplitStatus` — پیشرفت و تکه‌های آماده |
-| GET | `/api/playlists` | `UserPlaylist[]` |
-| POST | `/api/playlists` | ساخت پلی‌لیست دستی یا هوشمند |
-| GET | `/api/playlists/{id}` | `UserPlaylistDetail` — قانونِ هوشمند همین‌جا اجرا می‌شود |
-| PATCH | `/api/playlists/{id}` | تغییر نام یا قانون |
-| DELETE | `/api/playlists/{id}` | حذف پلی‌لیست (نه فایل‌ها) |
-| POST | `/api/playlists/{id}/items` | افزودن چند jobId |
-| DELETE | `/api/playlists/{id}/items/{jobId}` | حذف یک عضو |
-| GET | `/api/telegram/status` | وصل هست؟ بات بالاست؟ |
-| POST | `/api/telegram/pair` | کدِ وصل‌شدن + لینکِ عمیق |
-| POST | `/api/telegram/pair/claim` | از سمتِ بات — کد را خرج می‌کند |
-| DELETE | `/api/telegram/link` | قطعِ اتصال |
-| POST | `/api/telegram/send` | یک ترک یا آلبومِ کامل را در صفِ بات می‌گذارد |
-| GET | `/api/telegram/sends/{id}` | وضعیتِ همان ارسال |
-| GET | `/api/telegram/outbox/next` | long-pollِ بات روی صف (خالی = `null`) |
-| POST | `/api/telegram/outbox/{id}/done` | گزارشِ بات از نتیجه |
-| GET | `/api/net` | وضعیتِ اینترنتِ بین‌الملل (فقط حافظه — خودش پروب نمی‌زند) |
-| POST | `/api/net/check` | پروبِ فوری + راه‌انداختنِ صفِ دانلودِ معوق |
-| GET | `/api/art/{sha}` | کاور از آینه‌ی محلی — بارِ اول از CDN می‌گیرد و نگه می‌دارد |
-| GET | `/api/health` | ffmpeg، احراز هویت، وضعیتِ اینترانت، و قابلیت‌های اختیاری |
-
-### چند تصمیم که ارزش دانستن دارند
-
-**دیتابیس منبع حقیقت است، حافظه فقط کش.** جاب تمام‌شده بعد از TTL از حافظه بیرون
-می‌رود ولی ردیفش می‌ماند؛ «کتابخانه» دقیقاً همان ردیف‌های موفق است. درصد پیشرفت
-عمداً ذخیره نمی‌شود — صدها نوشتن در ثانیه برای عددی که با ری‌استارت بی‌معنی است.
-
-**جابی که موقع خاموش شدن سرور نیمه‌کاره بوده، هیچ‌وقت خودش تمام نمی‌شود.** موقع
-بالا آمدن صریح شکست‌خورده اعلام می‌شود، وگرنه برای همیشه «در حال دانلود» می‌ماند.
-
-**همان ترک با همان کیفیت دوباره دانلود نمی‌شود.** «دانلود همه»ی آلبومی که نصفش
-را قبلاً گرفته‌ای، فقط بقیه‌اش را می‌گیرد. کیفیتِ متفاوت یعنی فایل متفاوت، پس
-بازاستفاده نمی‌شود.
-
-**فایل‌ها عمر دارند.** هر ۱۵ دقیقه یک sweep، فایل‌های منقضی (پیش‌فرض ۷ روز) و
-فایل‌های یتیم — آن‌هایی که هیچ ردیفی مالکشان نیست — را پاک می‌کند. مهلت یک‌ساعته
-برای یتیم‌ها هست تا دانلودِ در جریان قربانی نشود. `UNSTREAM_FILE_RETENTION=0`
-یعنی هرگز.
-
-**resolver لیست برمی‌گرداند، نه یک نتیجه.** «بهترین امتیاز» لزوماً «قابل دانلود»
-نیست — ممکن است گیت ضدربات بخورد، DRM داشته باشد یا لینکش مرده باشد. جاب تا
-اولین موفقیت پایین می‌رود. ولی سراغ منبع بعدی فقط وقتی می‌رود که تطابق
-قانع‌کننده‌ای نداشته باشد، وگرنه صد ثانیه‌ی جستجوی ساندکلاد روی هر ترک،
-«دانلود همه» را غیرقابل‌استفاده می‌کند.
-
-**فراخوانی‌های provider موازی‌اند.** iTunes سه اندپوینت جدا دارد و Deezer سه تا؛
-پشت‌سرهم زدنشان زمان جستجو را چند برابر می‌کند — به‌خصوص وقتی خودِ API بالادست
-کند است (اندازه‌گیری‌شده: ۲۸ ثانیه سریالی در برابر ۱۲ ثانیه موازی).
-
-**امتیازدهی روی مدت‌زمان تکیه می‌کند** چون جعل‌ناپذیرترین سیگنال است: اختلاف زیر
-۲ ثانیه ۳۰ امتیاز می‌گیرد، بالای ۳۰ ثانیه ۳۵ امتیاز منفی. کلمه‌هایی مثل
-live/cover/remix/کاور جریمه دارند — مگر اینکه در خود عنوان ترک باشند. نرمال‌سازی
-فارسی (ی/ک عربی، اعراب) هم انجام می‌شود. زیر آستانه‌ی ۳۵، ترجیح می‌دهیم شکست
-بخوریم تا اینکه فایل اشتباه تحویل بدهیم.
-
-**AcoustID فایل را رد نمی‌کند، فقط هشدار می‌دهد.** تنها سیگنالی است که واقعاً به
-صدا نگاه می‌کند، ولی پوششش روی موسیقی غیرغربی کامل نیست — پس تصمیم نهایی با کاربر
-است، نه با آن.
-
-**بلندی خام ذخیره می‌شود، نه تقویتِ حساب‌شده.** ستون‌های دیتابیس همان LUFS و
-اوجِ واقعی‌اند و «چند دسی‌بل کم/زیاد شود» موقع تحویل حساب می‌شود. اگر گِین را
-ذخیره می‌کردیم، عوض کردن هدفِ نرمال‌سازی یعنی اندازه‌گیریِ دوباره‌ی کلِ
-کتابخانه — درحالی‌که خودِ اندازه‌ی فایل هیچ‌وقت عوض نمی‌شود.
-
-**فرمت گزارش‌شده واقعی است، نه درخواستی.** اگر منبع ۱۲۸ باشد، ترنسکد به ۳۲۰ فقط
-حجم اضافه می‌کند؛ yt-dlp درست عمل می‌کند که رد کند. UI هم `mp3 ۱۲۸` نشان می‌دهد
-نه `۳۲۰`.
-
-**پخش و ذخیره دو اندپوینت جدا دارند.** `/file` با `content-disposition: attachment`
-می‌آید تا مرورگر ذخیره‌اش کند؛ همان پاسخ برای `<audio>` بد است، چون دانلودمنیجر
-وسط پخش می‌پرد و mime عمومی روی فایرفاکس اصلاً رمزگشایی نمی‌شود. `/stream` همان
-فایل را با mime واقعی و بدون آن هدر می‌دهد. Range را خودِ `FileResponse` جواب
-می‌دهد، پس جابه‌جایی روی نوار پخش کل فایل را دوباره نمی‌کشد.
-
-**ساختار پوشه در لحظه‌ی تحویل ساخته می‌شود، نه در لحظه‌ی ذخیره.** روی دیسک هر
-جاب پوشه‌ی خودش را دارد (بالاتر توضیح داده شد)؛ اگر همان‌جا `هنرمند/آلبوم/...`
-می‌ساختیم، دقیقاً همان برخوردِ دو کیفیتِ یک ترک برمی‌گشت که پوشه‌ی جدا برای
-بستنش هست. پس الگو موقع ساختن ZIP اعمال می‌شود — آنجا که کاربر واقعاً فایل را
-باز می‌کند، و تغییر الگو فایل‌های قدیمی را بی‌صاحب نمی‌کند.
-
-**`browse` سه فرق عمدی با `resolve` دارد**، و هر سه از یک جا می‌آیند: پای انتخاب
-دستی کسی نشسته که انتخاب خودکار را قبول نکرده. آستانه‌ی امتیاز ندارد (دقیقاً
-وقتی سراغش می‌روی که resolver همه را رد کرده باشد)، لینک مستقیمِ ترک‌های
-یوتیوب/ساندکلاد را دور می‌زند و واقعاً جستجو می‌کند، و منبع را صدازننده تعیین
-می‌کند تا صد ثانیه‌ی ساندکلاد هزینه‌ی پیش‌فرضِ باز کردن یک دیالوگ نباشد.
-
-**انتخاب دستی بازاستفاده نمی‌کند.** `find_ready` معمولاً درست است، ولی وقتی
-کاربر رفته نسخه را عوض کند، برگرداندن همان فایلِ قبلی از بیرون شبیه «دکمه کار
-نکرد» به نظر می‌رسد.
-
-**SSE وضعیت فعلی را موقع اتصال می‌فرستد** — بین `POST /downloads` و باز شدن
-`EventSource` یک شکاف هست و کار کوتاه ممکن است تمام شود قبل از اینکه کسی گوش دهد.
-
-**yt-dlp به extra ها نیاز دارد، نه اختیاری.** بک‌اند شبکه‌ی پیش‌فرضش (urllib) روی
-جستجوی یوتیوب `IncompleteRead` می‌دهد؛ `yt-dlp[default,curl-cffi]` حلش می‌کند.
-
-**ZIP دومرحله‌ای است، و باید باشد.** پاسخی که `content-disposition: attachment`
-دارد را مرورگر مستقیم به دانلود‌منیجر می‌دهد و `fetch()` هیچ بدنه‌ای نمی‌بیند —
-تجربه‌شده: ۲۰۴ با صفر بایت. پس `POST /downloads/zip` فقط آرشیو را می‌سازد و
-آدرسش را برمی‌گرداند، و کلاینت مرورگر را به آن آدرس می‌فرستد. دانلود بومی است،
-حافظه مصرف نمی‌کند و progress مرورگر را هم می‌گیرد. توکن هم تک‌مصرف نیست، چون
-دانلود‌منیجر همان URL را چند بار (با Range) می‌زند.
-
-**آرشیو روی دیسک ساخته می‌شود، نه در حافظه.** ساختِ استریمی روی یک `BytesIO`
-که بعد از هر فایل خالی شود کار نمی‌کند: `ZipFile` آفست‌ها را با `fp.tell()` ثبت
-می‌کند و عقب‌بردن بافر آن حسابداری را خراب می‌کند (خروجی: zip صفر بایت).
-
-## چه چیزی در UI کار می‌کند
-
-**زبان و جهت** — فارسی/انگلیسی با سوییچ در هدر؛ `dir` صفحه و ارقام (فارسی یا
-لاتین) با زبان عوض می‌شوند. انتخاب در localStorage می‌ماند.
-
-**جستجو** — با اسم، یا پیست لینک در هر جای صفحه. اگر ورودی لینک باشد برچسب دکمه
-از «جستجو» به «بازکن» عوض می‌شود. نتایج تب‌های فیلتردار با شمارش دارند
-(همه/آهنگ‌ها/هنرمندان/آلبوم‌ها/پلی‌لیست‌ها) به‌علاوه‌ی «نمایش همه» در هر سکشن.
-
-**صفحه‌ی آلبوم** — بج نوع (آلبوم/آهنگ/پلی‌لیست)، دکمه‌ی باز کردن منبع، شماره‌ی
-ترک، انتخاب تکی/همه، پیش‌نمایش ۳۰ ثانیه‌ای از `previewUrl` واقعی اپل، و
-**دانلود ZIP** از هرچه تا الان آماده شده.
-
-**صفحه‌ی هنرمند** — کارت هنرمند در نتایج حالا صفحه‌ی داخلی باز می‌کند: ترک‌های
-محبوب به‌علاوه‌ی دیسکوگرافی مرتب‌شده. عکس هنرمند از دیزر می‌آید (اپل نمی‌دهد)، و
-وقتی نبود کاور تازه‌ترین آلبوم جایش می‌نشیند.
-
-**صفحه‌ی کاربر** — لینکِ پروفایلِ کسی که هنرمند نیست و فقط پلی‌لیستِ عمومی دارد
-هم باز می‌شود: اسپاتیفای (`open.spotify.com/user/…`)، دیزر
-(`deezer.com/profile/…`)، پروفایلِ ساندکلاد و کانالِ یوتیوب. همان قالبِ صفحه‌ی
-هنرمند است با پلی‌لیست‌ها به‌جای دیسکوگرافی، و «دانلود همه» ترک‌های همه‌ی
-پلی‌لیست‌هایش را می‌گیرد. پلی‌لیست‌های اسپاتیفای اینجا از صفحه‌ی عمومیِ پروفایل
-خوانده می‌شوند نه Web API — آن اندپوینت‌ها روی توکنِ بدون‌کاربر ۴۰۳ می‌دهند —
-پس این یکی بدون کلید هم کار می‌کند. اپل‌موزیک صفحه‌ی عمومیِ کاربر روی وب ندارد،
-ولی پلی‌لیستِ به‌اشتراک‌گذاشته‌ی کاربرش خودش یک لینکِ پلی‌لیست است و از قبل کار
-می‌کند.
-
-**کتابخانه** — هرچه دانلود کرده‌ای، با جستجو، حجم، تاریخ، لینک `.lrc` و حذف تکی.
-فقط با بک‌اند واقعی کار می‌کند. هر ردیف دو دکمه‌ی تازه هم دارد: سنجاقِ آفلاین و
-افزودن به پلی‌لیست. تبِ دوم همان صفحه، پلی‌لیست‌های خودت است.
-
-**صف دانلود** — بر اساس «بچ» گروه‌بندی می‌شود، نه ترک‌به‌ترک: هر چیزی که ثبت
-کرده‌ای یک بلوک است با کاور، `۳ از ۱۲`، **زمان باقی‌مانده**، نوار پیشرفت و دکمه‌ی
-ZIP؛ ترک‌هایش زیرش می‌آیند با وضعیت جدا. چرخه‌ی
-`در صف → جستجو → دانلود ٪ → تگ‌گذاری → آماده`، لغو و تلاش دوباره، پروگرس روی
-خودِ ردیفِ آلبوم، پنل جمع‌شونده.
-
-**پخش‌کننده** — هرچه دانلود کرده‌ای همان‌جا پخش می‌شود، بدون ذخیره روی دیسک خودت.
-نوار پایین صفحه: پخش/مکث، قبلی/بعدی، جابه‌جایی، صدا، تکرار و شافل. کلیک روی هر
-ردیف کتابخانه از همان‌جا به بعد را صف می‌کند، «پخش همه» از اول. فاصله = پخش/مکث،
-کلیدهای رسانه‌ای سیستم‌عامل هم کار می‌کنند. آخرین ترک و ثانیه‌اش می‌ماند، پس بعد
-از رفرش از همان‌جا ادامه می‌دهد. پیش‌نمایش ۳۰ ثانیه‌ای و پخش‌کننده هم‌زمان صدا
-نمی‌دهند.
-
-**انتخاب دستی نسخه** — امتیازدهی گاهی اشتباه می‌کند. روی هر ترکِ شکست‌خورده،
-هر ترکی که AcoustID به آن مشکوک است، و هر ردیف کتابخانه یک دکمه هست که لیست
-کاندیدها را با عنوان، آپلودکننده، مدت‌زمان و امتیازشان نشان می‌دهد. هرکدام را
-بزنی همان دانلود می‌شود. ساندکلاد جدا و با درخواست صریح جستجو می‌شود.
-
-**شناسایی صوتی** — دکمه‌ی میکروفون در هدر: ضبط از میکروفون یا انتخاب فایل، و
-نتیجه همان ردیف‌های ترکِ آماده‌ی دانلود است.
-
-**تنظیم صدا** — هم‌ترازی بلندی، تقویتِ صدا، کراس‌فید، اکولایزر و تایمر خواب، از یک پاپ‌آور
-روی نوار پخش.
-
-**بقیه** — منوی کیفیت (mp3 ۱۲۸/۱۹۲/۳۲۰، m4a/opus/flac، اورجینال)، تم تیره‌-روشن،
-توست، میان‌بر `/`.
-
-## اپ اندروید (APK)
-
-پوسته‌ی نیتیو با [Capacitor](https://capacitorjs.com) ساخته می‌شود: کلِ رابط داخل
-خودِ APK بسته‌بندی است و فقط برای *داده* به سرور وصل می‌شود.
-
-```bash
-npm run android:apk       # دیباگ — برای نصبِ سریع روی گوشیِ خودت
-npm run android:release   # نسخه‌ی کوچک‌شده و امضاشده
-npm run android:bundle    # همان، به‌شکل .aab برای فروشگاه
-```
-
-خروجی‌ها در `android/app/build/outputs/` می‌نشینند. بار اول به Android SDK و جاوا
-نیاز دارد و مسیر SDK باید در `android/local.properties` باشد
-(`sdk.dir=C:/Users/<you>/AppData/Local/Android/Sdk`).
-
-بیلدِ release با ProGuard کوچک می‌شود و منابعِ بلااستفاده‌اش حذف: حدود **۱٫۴
-مگابایت** در برابر ۷٫۶ مگابایتِ دیباگ.
-
-**اولین اجرا آدرس سرور را می‌پرسد.** اپ خودش موزیک پیدا نمی‌کند؛ سرور آنستریم روی
-کامپیوترت این کار را می‌کند:
-
-- در شبکه‌ی خانه: `192.168.x.x:8080` (داکر) یا `192.168.x.x:5174` (دِوسرور)
-- از بیرون: همان آدرس `https://….trycloudflare.com` تونل
-
-دکمه‌ی «امتحان کن» قبل از ذخیره به `/api/health` می‌زند تا یک رقمِ اشتباهِ آی‌پی
-بعداً به‌شکلِ «هیچی کار نمی‌کند» ظاهر نشود. بعداً از منوی `⋯` → «آدرس سرور»
-قابل تغییر است.
-
-### امضا
-
-بدونِ کلید هم بیلدِ release ساخته می‌شود، ولی امضانشده می‌ماند و اندروید نصبش
-نمی‌کند. کلید یک‌بار ساخته می‌شود:
-
+To sign the release build, generate a keystore:
 ```bash
 keytool -genkeypair -v -keystore android/unstream.jks -keyalg RSA \
         -keysize 2048 -validity 10000 -alias unstream
 ```
-
-بعد `android/keystore.properties` (در `.gitignore` است و نباید کامیت شود):
-
+Then create `android/keystore.properties`:
 ```ini
 storeFile=unstream.jks
-storePassword=…
+storePassword=your_password
 keyAlias=unstream
-keyPassword=…
+keyPassword=your_password
 ```
 
-> فایلِ `.jks` را جایی امن نگه دار. با گم‌شدنش دیگر نمی‌شود *همین* اپ را آپدیت
-> کرد — اندروید آپدیتی را قبول می‌کند که با همان کلیدِ قبلی امضا شده باشد.
+---
 
-> ⚠ **کلیدِ اولین امضا، کلیدِ همیشگی است.** نسخه‌های ۱٫۰ و ۱٫۱ با کلیدِ **debug**
-> همین ماشین امضا شده بودند (`CN=Android Debug`)، و نسخه‌ی ۱٫۲ اولین بیلد با
-> `unstream.jks` است — پس کاربرهای قدیمی روی ۱٫۲ آپدیتِ درجا **نمی‌گیرند**
-> (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) و باید یک‌بار حذف و دوباره نصب کنند.
-> بنرِ داخلِ اپ (از `notes` در `latest.json`) همین را می‌گوید. از ۱٫۲ به بعد،
-> همه‌ی آپدیت‌ها درجا نصب می‌شوند.
+### 4. Progressive Web App (PWA) Mode
 
-> `scripts/android-release.mjs --publish` تا APK امضا نشده باشد جلو می‌گیرد و
-> چیزی روی سرور نمی‌ریزد — انتشارِ unsigned یعنی بنری که دانلودش بی‌فایده است.
-> اسکریپت قبل از gradlew خودش `android:sync` را اجرا می‌کند (با `--no-sync`
-> می‌شود رد کرد): بدونِ آن، APK از وب‌اپدیتِ دورِ قبل ساخته می‌شود و همه‌ی
-> تست‌ها سبز می‌مانند.
+If you prefer not to install the APK:
+1. Make sure your server is served over HTTPS (required for PWA service workers and microphone capture). A free Cloudflare Tunnel works instantly:
+   ```bash
+   docker compose --profile tunnel up -d
+   docker compose logs tunnel | grep trycloudflare
+   ```
+2. Open the resulting URL in mobile Safari or Chrome.
+3. Select **Add to Home Screen**.
 
-### انتشارِ نسخه
+---
 
-```bash
-UNSTREAM_RELEASE_NOTES="…" node scripts/android-release.mjs --apk --publish
-```
+## YouTube Extraction: The 3 Gates
 
-`release-out/` را می‌سازد (APK امضاشده + `latest.json` + `mapping.txt` برای
-رمزگشاییِ stacktraceها) و با `UNSTREAM_RELEASES_DIR` روی سرور می‌ریزد؛
-`GET /api/release` همان manifest را می‌دهد و بنرِ اپ تا دورِ بعدی خبر می‌دهد.
-نسخه‌های عمومی هم روی [Releases](https://github.com/mahan-mgn/Unstream/releases)
-هستند (v1.2 = اولینِ امضاشده با کلیدِ ثابت، v1.3 = فیکسِ کرشِ پخش در ریلیزِ R8).
+YouTube restricts automated audio extraction through three distinct barriers. Unstream handles all three:
 
-> نکته‌ی مهم برای ریلیز: R8 آنوتیشن‌هایِ `com.getcapacitor.annotation.*` را
-> می‌بلعد و `Bridge.getPermissionStates` روی نخِ پلاگین NPE می‌دهد (کرشِ
-> لحظه‌ی پخش، فقط در بیلدِ ریلیز). `android/app/proguard-rules.pro` این
-> آنوتیشن‌ها را keep می‌کند — حذفش ممنوع.
-
-### لایه‌ی نیتیو
-
-سه پلاگینِ سفارشی در `android/app/src/main/java/app/unstream/client/` نوشته
-شده‌اند، برای سه کاری که وب داخل WebView از پسشان برنمی‌آید:
-
-| پلاگین | کارش | چرا وب نمی‌توانست |
+| Gate | Symptom | Resolution in Unstream |
 |---|---|---|
-| `PlaybackService` + `PlaybackPlugin` | پخشِ پس‌زمینه، نوتیفیکیشنِ مدیا، صفحه‌ی قفل، دکمه‌های هدفون | `navigator.mediaSession` فقط در خودِ کروم به نوتیفیکیشن وصل است، نه در WebViewی که اپ میزبانش است — و بدونِ سرویسِ پیش‌زمینه، اندروید چند لحظه بعد از رفتنِ اپ به پس‌زمینه پروسه را می‌کشد |
-| `ShellPlugin` | حاشیه‌های امن (نوار وضعیت، نوار ناوبری، ناچ) و دریافتِ لینکِ اشتراک‌گذاری‌شده | `env(safe-area-inset-*)` در WebViewِ اندروید بسته به نسخه گاهی صفر برمی‌گرداند؛ و اینتنتِ `ACTION_SEND` اصلاً به `appUrlOpen` نمی‌رسد |
-| `DownloadsPlugin` | ذخیره‌ی ترک در `Music/Unstream` گوشی از راه `MediaStore` | فایلی که در حافظه‌ی خصوصیِ اپ بنشیند نه در موزیک‌پلیرِ گوشی دیده می‌شود، نه با حذفِ آنستریم می‌ماند |
+| **1. Anti-Bot Verification** | `Sign in to confirm you're not a bot` | Export cookies in Netscape format to `secrets/cookies.txt` or set `UNSTREAM_COOKIES_BROWSER=firefox`. |
+| **2. Proof of Origin (PO Token)** | Empty audio format list | Handled automatically by the bundled `bgutil-ytdlp-pot-provider` service in Docker or `setup_potoken.sh` locally. |
+| **3. JavaScript Signature Cipher** | `Signature solving failed` | Automatically handled via `yt-dlp-ejs` and the system JS runtime (`node`, `deno`, or `bun`). |
 
-صدا همچنان در WebView پخش می‌شود؛ `PlaybackService` خودش چیزی پخش نمی‌کند و فقط
-پروسه را زنده و نوتیفیکیشن را به‌روز نگه می‌دارد. منطقِ صف و شافل و تکرار و رادیو
-یک‌جا در `store/player.ts` می‌ماند و دکمه‌های نوتیفیکیشن هم به همان اکشن‌ها
-می‌رسند — نه به یک مسیرِ موازی که دیر یا زود واگرا می‌شود.
+You can inspect the active status of all three gates at any time via `GET /api/health`.
 
-بقیه‌ی قابلیت‌ها از پلاگین‌های رسمی می‌آیند و همه از یک دروازه‌ی واحد
-(`src/lib/native.ts`) رد می‌شوند که روی وب no-op است: اسپلش، نوار وضعیت،
-هپتیک، کیبورد، شبکه، اشتراک‌گذاری، و دکمه‌ی برگشتِ سخت‌افزاری.
+---
 
-### روی گوشی چه فرقی می‌کند
+## Environment Variables
 
-- **پخش بعد از بستنِ اپ ادامه دارد** و از نوتیفیکیشن و صفحه‌ی قفل کنترل می‌شود،
-  با کاور و نوار پیشرفت. دکمه‌های هدفون و بلوتوثِ ماشین هم کار می‌کنند.
-- **ناوبری پایین صفحه است** (خانه / جستجو / کتابخانه) — جایی که انگشتِ شست
-  می‌رسد، نه گوشه‌ی بالای صفحه.
-- **نمای کامل پخش با انگشت بسته می‌شود:** کشیدن به پایین، با کش‌آمدنِ لاستیکی و
-  تصمیم‌گیری بر اساس سرعتِ رهاکردن نه فقط مسافت.
-- **دکمه‌ی برگشت** اول لایه‌های روی صفحه را می‌بندد، بعد عقب می‌رود، و روی خانه
-  اپ را کوچک می‌کند نه می‌بندد — تا پخش با یک ضربه‌ی حواس‌پرت قطع نشود.
-- **اشتراک‌گذاری از اپ‌های دیگر:** لینکِ اسپاتیفای را از تلگرام به آنستریم
-  share کن، همان‌جا باز می‌شود.
-- **لبه‌تاـلبه** با نوارهای سیستمِ شفاف، و رنگِ آیکون‌های نوار وضعیت هماهنگ با تم.
-- **فونت داخلِ بسته است**، پس اپِ آفلاین هم با وزیرمتن بالا می‌آید نه با فونتِ
-  پیش‌فرضِ اندروید.
-
-### چه چیزی برای این پوسته لازم بود
-
-سه چیز که بدونشان اپ نصب می‌شد ولی کار نمی‌کرد، و هر سه در خودِ کد حل شده‌اند:
-
-- **آدرس‌های نسبی.** سرور برای فایل و استریم و متن آهنگ `/api/...` برمی‌گرداند.
-  در مرورگر درست است، ولی داخل اپ صفحه از `https://localhost` سرو می‌شود و آن
-  مسیر یعنی «خودِ اپ». `src/lib/server.ts` پاسخ‌های سرور را از یک بازنویس رد
-  می‌کند که فقط رشته‌های `/api/` را مطلق می‌کند و به کاورِ CDN و لینکِ منبع
-  دست نمی‌زند.
-- **CORS.** هر درخواستِ اپ cross-origin است. `UNSTREAM_ALLOWED_ORIGINS` اضافه شد و
-  `https://localhost` و `capacitor://localhost` پیش‌فرض مجازند. `Content-Range` و
-  `Accept-Ranges` هم expose می‌شوند، وگرنه جابه‌جایی روی نوار پخش کار نمی‌کند.
-- **صدای آلوده.** `createMediaElementSource` روی صدای cross-origin بدونِ
-  `crossOrigin="anonymous"` گراف Web Audio را tainted می‌کند و خروجی **سکوتِ
-  محض** می‌شود — پخش جلو می‌رود و هیچ صدایی نمی‌آید.
-
-### آیکون و اسپلش
-
-هر دو از همان `public/icon.svg` ساخته می‌شوند:
-
-```bash
-npm run android:assets     # خودش داخلِ android:sync هم صدا زده می‌شود
-```
-
-آیکونِ لانچر *تطبیقی* است (لایه‌ی جلو و پس‌زمینه‌ی جدا)، وگرنه ماسکِ گردِ
-لانچرها گوشه‌های لوگو را می‌برید. صفحه‌ی شروع هم از API خودِ اندروید ۱۲ استفاده
-می‌کند (`windowSplashScreenAnimatedIcon`)؛ بدونش سیستم آیکونِ لانچر را با قابِ
-گردگوشه‌اش وسط صفحه بزرگ می‌کرد.
-
-`android/` نتیجه‌ی `npx cap add android` است، ولی دیگر کاملاً بازتولیدشدنی نیست:
-پلاگین‌های سفارشی، منیفست، تم‌ها و تنظیمات امضا دستی ویرایش شده‌اند.
-`local.properties`، `keystore.properties`، کلیدها و خروجی بیلد در `.gitignore`
-هستند.
-
-## گوشی بدون لپ‌تاپ — بک‌اند روی خودِ گوشی
-
-اپ اندروید به‌تنهایی *داده* ندارد؛ جستجو و دانلود و کتابخانه همه از بک‌اند
-FastAPI می‌آیند. اگر بک‌اند را روی خودِ گوشی بالا بیاوری، گوشی به هیچ دستگاهِ
-دیگری نیاز ندارد — همان همه‌چیز، روی گوشی، بدون لپ‌تاپ.
-
-```bash
-# یک‌بار، داخل Termux
-bash /storage/emulated/0/Download/unstream/scripts/phone-server.sh
-```
-
-بعد در اپ: **«روی این گوشی»**. تمام.
-
-کتابخانه‌ها عمداً جدا می‌مانند: بک‌اندِ گوشی دیتابیس و فایل‌هایش را در
-`~/unstream/` گوشی می‌نویسد و فقط روی `127.0.0.1` گوش می‌دهد. هیچ مسیری بین
-آرشیوِ گوشی و آرشیوِ لپ‌تاپ نیست — نه همگام‌سازی، نه هم‌نام‌سازی. دو کتابخانه‌ی
-کاملاً مستقل، با یک کد.
-
-### چرا Termux و نه جاسازیِ پایتون داخل APK
-
-راهِ تمیزتر این بود که خودِ بک‌اند داخل APK بسته‌بندی شود (با
-[Chaquopy](https://chaquo.com/chaquopy)) و کاربر هیچ ترمینالی نبیند. نشد، و
-دلیلش یک وابستگیِ واحد است:
-
-**`pydantic-core` موتورِ Rustِ فست‌ای‌پی‌ای، برای اندروید هیچ ویلِ آماده‌ای ندارد** —
-نه روی PyPI (نسخه‌ی ۲٫۴۸٫۰ صفر ویلِ android دارد) و نه در مخزنِ ۱۳۴تاییِ ویل‌های
-Chaquopy. فست‌ای‌پی‌ای بدون آن بالا نمی‌آید.
-
-بقیه‌ی بک‌اند پایتونِ خالص است و مشکلی نداشت: `uvicorn` با h11، `httpx`،
-`yt-dlp`، `mutagen`. تنها چیزی که مانده بود همین یکی.
-
-ساختن `pydantic-core` برای bionic در Termux ممکن است (خودش `rust` دارد) و در
-بیلدِ داخل APK هم نظری شدنی است، ولی هزینه‌اش باقیِ ماجرا نبود:
-
-| | Termux | حذفِ pydantic از مسیر HTTP |
+| Variable | Default | Description |
 |---|---|---|
-| تغییر در بک‌اند | **صفر** | ۴۶ route + ۴۲ مدل + ۸۸ فراخوانی |
-| کدِ گوشی vs لپ‌تاپ | یکی | دو بک‌اندِ واگرا |
-| ریسک باگِ رفتاری | ندارد | بالا |
-| تجربه‌ی کاربر | یک‌بار ترمینال | APKِ تمیز |
+| `UNSTREAM_PORT` | `8080` | Host port for the Docker web proxy. |
+| `UNSTREAM_DATA_DIR` | `server/data` | Directory for SQLite DB, catalog cache, and local cover art mirror. |
+| `UNSTREAM_DOWNLOAD_DIR` | `server/downloads` | Directory where downloaded audio files are temporarily staged. |
+| `UNSTREAM_FILE_RETENTION` | `604800` (7 days) | Retention period in seconds for cached downloads (`0` = keep forever). |
+| `UNSTREAM_CONCURRENCY` | `3` | Maximum concurrent download and transcode jobs. |
+| `UNSTREAM_PROXY` | *None* | Global proxy for all outbound requests (e.g. `socks5h://127.0.0.1:1080`). |
+| `UNSTREAM_YTDLP_PROXY` | *None* | Dedicated proxy for audio extraction only. |
+| `UNSTREAM_POT_BASE_URL` | *None* | HTTP URL of `bgutil-ytdlp-pot-provider` (e.g. `http://localhost:4416`). |
+| `UNSTREAM_COOKIES_BROWSER` | *None* | Browser to extract YouTube cookies from (`firefox` on Windows). |
+| `UNSTREAM_COOKIES_FILE` | *None* | File path to exported Netscape format cookies. |
+| `UNSTREAM_SPOTIFY_CLIENT_ID` | *None* | Spotify Developer Application Client ID. |
+| `UNSTREAM_SPOTIFY_CLIENT_SECRET`| *None* | Spotify Developer Application Client Secret. |
+| `UNSTREAM_GENIUS_ACCESS_TOKEN` | *None* | Genius API Client Access Token. |
+| `UNSTREAM_GEMINI_API_KEY` | *None* | Google Gemini API key for natural language vibe playlist generation. |
+| `UNSTREAM_ACOUSTID_KEY` | *None* | AcoustID client application API key. |
+| `UNSTREAM_AUDD_TOKEN` | *None* | AudD API token for microphone song recognition. |
+| `UNSTREAM_TELEGRAM_BOT_TOKEN` | *None* | Telegram bot token from @BotFather. |
+| `UNSTREAM_LOUDNESS` | `1` | Enable EBU R128 loudness measurement (`1` = on, `0` = off). |
+| `UNSTREAM_LOUDNESS_TARGET` | `-14` | Target loudness in LUFS for playback gain calculation. |
+| `UNSTREAM_ART_MIRROR` | `1` | Cache cover art on server disk for intranet offline mode. |
+| `UNSTREAM_CATALOG_CACHE` | `1` | Cache metadata search and entities for offline browsing. |
+| `UNSTREAM_DEFER_DOWNLOADS` | `1` | Defer failed downloads during outages and auto-resume. |
 
-شرطِ اصلیِ این پروژه «دقیقاً همان رابط و همان رفتار» بود، و شاخه‌شدنِ بک‌اند
-دقیقاً همان شرط را می‌شکست. پس Termux — با این هزینه که یک‌بار باید ترمینال باز
-کنی.
+---
 
-### اسکریپتِ گوشی
+## API Reference
 
-`scripts/phone-server.sh` همه‌ی کارِ کثیف را می‌کند:
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/search?q={query}` | Search tracks, albums, artists, and playlists across catalogs. |
+| `GET` | `/api/album?ref={id_or_url}` | Fetch detailed album metadata, tracklist, and preview audio. |
+| `GET` | `/api/artist?ref={id_or_url}` | Fetch artist biography, top songs, and full discography. |
+| `GET` | `/api/library?q={query}` | List all downloaded tracks stored in the library. |
+| `DELETE`| `/api/library/{id}` | Delete a downloaded audio file and its database record. |
+| `PUT` | `/api/library/{id}/favorite` | Toggle favorite / like status on a library track. |
+| `GET` | `/api/favorites` | List all favorited tracks. |
+| `POST` | `/api/plays` | Log a track play event (`{ jobId, seconds }`). |
+| `GET` | `/api/stats?days={7\|30\|365}` | Fetch playback metrics, top artists, and top tracks. |
+| `GET` | `/api/mix` | Get the personalized Daily Mix based on acoustic mood profile. |
+| `POST` | `/api/downloads` | Queue a track for resolution and download (`{ track, quality }`). |
+| `POST` | `/api/candidates` | Fetch candidate audio sources for manual selection (`browse`). |
+| `GET` | `/api/downloads/{id}/events` | Server-Sent Events (SSE) stream for real-time download progress. |
+| `GET` | `/api/downloads/{id}/file` | Download the finalized audio file with ID3 tags and artwork. |
+| `GET` | `/api/downloads/{id}/stream`| Stream the audio file with HTTP `206 Partial Content` support. |
+| `GET` | `/api/downloads/{id}/lyrics`| Fetch synchronized `.lrc` lyrics file. |
+| `POST` | `/api/downloads/zip` | Generate an organized ZIP archive of multiple tracks. |
+| `GET` | `/api/downloads/zip/{token}` | Download generated ZIP archive with M3U playlist. |
+| `POST` | `/api/identify` | Audio fingerprint identification from uploaded snippet or mic file. |
+| `GET` | `/api/chapters?ref={url}` | Retrieve chapter markers for long audio/video links. |
+| `POST` | `/api/downloads/split` | Split a long mix into individual tagged library tracks. |
+| `GET` | `/api/playlists` | Fetch all user-created playlists (manual and smart). |
+| `POST` | `/api/playlists` | Create a new manual or mood-based smart playlist. |
+| `POST` | `/api/vibe` | Generate a curated playlist using natural language mood prompt (Gemini). |
+| `GET` | `/api/telegram/status` | Check if Telegram bot is online and linked. |
+| `POST` | `/api/telegram/send` | Queue a track or album to be delivered via Telegram chat. |
+| `GET` | `/api/net` | Inspect current international network reachability status. |
+| `POST` | `/api/net/check` | Trigger an immediate network reachability probe. |
+| `GET` | `/api/art/{sha}` | Fetch locally mirrored cover artwork. |
+| `GET` | `/api/health` | Comprehensive system health check (ffmpeg, YouTube gates, storage). |
 
-```bash
-phone-server.sh                 # نصب + شروع
-phone-server.sh start|stop|restart|status|log
-phone-server.sh boot            # با روشن‌شدنِ گوشی خودکار بالا بیاید
-phone-server.sh cookies <مسیر>  # کوکی یوتیوب
-phone-server.sh proxy <آدرس>    # برای شبکه‌ی فیلترشده
-phone-server.sh spotify <id> <secret>   # اسپاتیفای در نتایج جستجو
-phone-server.sh loudness-target <lufs>  # بلندیِ هدفِ هم‌ترازی (پیش‌فرض ۱۴-)
-```
+---
 
-اسپاتیفای تنها کاتالوگی است که APIاش کلید می‌خواهد؛ بدونِ آن در جستجو غایب
-می‌ماند (بقیه‌ی منابع کلید نمی‌خواهند). همان جفتِ `server/.env` لپ‌تاپ را بده.
+## Testing
 
-- پکیج‌های Termux را می‌گیرد: `python`، `ffmpeg`، `nodejs`، `rust`،
-  `python-numpy`، `python-brotli`، `python-pycryptodomex`.
-- `pydantic-core` را یک‌بار از سورس می‌سازد (چند دقیقه طول می‌کشد).
-- سورس را به `~/unstream/src` **کپی** می‌کند، نه symlink — پوشه‌ی shared
-  storage اندروید موقع خوابِ دستگاه ناپدید می‌شود و SQLite روی آن قفل‌گذاریِ
-  درست ندارد.
-- `termux-wake-lock` را می‌گیرد؛ بدونش اندروید وسطِ ترنسکدِ ffmpeg پروسه را یخ
-  می‌زند.
-- قبل از «بالا آمد» جواب نمی‌دهد: `/api/health` را واقعاً چک می‌کند، چون
-  «پروسه شروع شد» با «پروسه شروع شد و دو ثانیه بعد مُرد» یکی نیست.
-
-### چه چیزی روی گوشی فرق می‌کند
-
-**حذف‌شدگانِ اجباری** — این‌ها C-extension‌اند و روی bionic ساخته نمی‌شوند:
-
-| تنظیم | به‌جایش |
-|---|---|
-| `uvicorn[standard]` (uvloop, httptools) | uvicorn با h11 — روی یک دستگاهِ تک‌کاربره تفاوتی حس نمی‌شود |
-| `yt-dlp[curl-cffi]` | httpx؛ دلیلِ لازم‌بودنش یک `IncompleteRead` با urllib بود |
-| `librosa` (اگر ساخته نشد) | `UNSTREAM_MOOD=0` — شافل تصادفیِ ساده می‌شود، چیزی نمی‌شکند |
-
-**یوتیوب** همان سه گیت را دارد و هیچ‌کدام حذف نشده: `ffmpeg` و `node` در Termux
-هستند، کوکی را با `phone-server.sh cookies` می‌دهی، و PO-Token با
-`yt-dlp-ejs` کار می‌کند. ولی یک چیز را صادقانه بگویم: **IP موبایل و IP ایران
-هر دو به‌شدت by-flag می‌خورند** و ممکن است یوتیوب روی گوشی «Sign in to confirm
-you're not a bot» بدهد در حالی که همان کوکی روی لپ‌تاپ کار می‌کند. این محدودیتِ
-خودِ یوتیوب است نه کدِ ما. ساندکلاد معمولاً بی‌دردسرتر است.
-
-**بات تلگرام** روی گوشی اجرا نمی‌شود — یک پروسه‌ی جدا می‌خواهد که عمرش مستقل از
-اپ باشد. بقیه‌ی APIهای تلگرام (`/api/telegram/*`) کار می‌کنند.
-
-### اگر گوشی سرور را پیدا نکرد
-
-اپ می‌گوید «نرسیدم». از داخل Termux:
-
-```bash
-bash /storage/emulated/0/Download/unstream/scripts/phone-server.sh status
-```
-
-سه دلیلِ رایج:
-
-1. **Termux بسته شده.** اندروید (مخصوصاً شیائومی/OnePlus) پروسه‌های پس‌زمینه را
-   می‌کشد. `phone-server.sh boot` + Termux:Boot حلش می‌کند؛ روی ROMهای چینی
-   باید «battery optimization» را هم دستی خاموش کنی.
-2. **سرورِ یتیم روی پورت مانده.** اندروید شلِ Termux را می‌کشد ولی پایتون زنده
-   می‌ماند و پورت را نگه داشته است. `start` خودش این را از روی *خودِ پورت*
-   تشخیص می‌دهد (نه از `/api/health` — سروری که گیر کرده پورت را دارد ولی جواب
-   نمی‌دهد)، می‌کُشَدش و تازه بالا می‌آورد. `status` هم صریح می‌گوید.
-   `pkill` در Termux نیست، پس کشتن از روی `/proc` و با پایتون انجام می‌شود.
-3. **پورت واقعاً توسط چیزِ دیگری گرفته شده.** با `UNSTREAM_PHONE_PORT=8123`
-   عوضش کن و همان آدرس را دستی در «آدرس سرور» بنویس.
-
-## اجرا روی گوشی
-
-### ۱. اپ را جایی بالا بیاور که گوشی ببیندش
-
-ساده‌ترین حالت — همان داکر، و گوشی روی همان وای‌فای:
+Unstream maintains strict test suites covering frontend logic, audio streaming, API contracts, resolver heuristics, and database integrity.
 
 ```bash
-docker compose up --build -d
+# Run Frontend Unit & DOM Tests (Vitest)
+npm test
+
+# Run Backend Server Tests (Pytest)
+cd server
+pytest
 ```
 
-بعد آی‌پیِ کامپیوتر را در شبکه‌ی محلی پیدا کن و از گوشی همان را باز کن:
+---
 
-```powershell
-# ویندوز — دنبال IPv4 Address زیر آداپتور وای‌فای بگرد
-ipconfig
-```
+## Contributing & License
 
-```bash
-# لینوکس / مک
-ip addr | grep 'inet '        # یا: ipconfig getifaddr en0
-```
+Contributions are welcome! Please feel free to open issues or submit pull requests.
 
-بعد روی گوشی: `http://192.168.1.23:8080` (عدد را با آی‌پیِ خودت عوض کن).
-
-اگر باز نشد، تقریباً همیشه فایروالِ ویندوز است؛ یک‌بار روی همان پورت اجازه بده:
-
-```powershell
-New-NetFirewallRule -DisplayName "Unstream" -Direction Inbound -LocalPort 8080 -Protocol TCP -Action Allow
-```
-
-برای حالت توسعه (بدون داکر) `npm run dev` هم حالا روی کلِ شبکه گوش می‌دهد و
-خودش آدرسِ `Network:` را چاپ می‌کند — همان را روی گوشی باز کن. بک‌اند هم باید
-جدا بالا باشد (بخش «محلی» بالاتر).
-
-### ۲. برای نصبِ واقعیِ PWA به HTTPS نیاز داری
-
-روی `http://` ساده، مرورگر صفحه را «امن» حساب نمی‌کند و سه چیز خاموش می‌مانند:
-نصبِ PWA، پخشِ آفلاین (سرویس‌ورکر)، و شناساییِ آهنگ با میکروفون. بقیه‌ی اپ —
-جستجو، دانلود، پخش، کتابخانه، تلگرام — روی HTTP هم کامل کار می‌کند.
-
-ساده‌ترین راهِ گرفتنِ HTTPS بدون دامنه و بدون حساب، تونلِ کلودفلر است که در
-`docker-compose.yml` به‌صورت یک پروفایل اختیاری هست:
-
-```bash
-docker compose --profile tunnel up -d
-docker compose logs tunnel | grep trycloudflare
-```
-
-آدرسِ `https://….trycloudflare.com` که چاپ می‌شود را روی گوشی باز کن. از همان
-آدرس بیرون از خانه هم کار می‌کند.
-
-> این آدرس عمومی است و رمز ندارد — هرکس لینک را داشته باشد به همین دانلودر
-> دسترسی دارد. بعد از کارت با `docker compose stop tunnel` خاموشش کن.
-
-### ۳. نصب
-
-بعد از یک بار باز کردن سایت روی گوشی، مرورگر «افزودن به صفحه‌ی اصلی»/«نصب» را
-پیشنهاد می‌دهد (اندروید/کروم خودکار، آیفون از منوی Share). بعد از نصب:
-
-- بدون نوار آدرس مرورگر باز می‌شود، مثل یک اپ جدا.
-- پخش با قفل‌شدن صفحه یا رفتن به پس‌زمینه ادامه پیدا می‌کند و از صفحه‌ی قفل
-  کنترل می‌شود (پخش/مکث/قبلی/بعدی/جابه‌جایی).
-- شِلِ اپ آفلاین هم بالا می‌آید (خودِ جستجو/دانلود به اینترنت نیاز دارد).
-- ترک‌هایی که سنجاق کرده‌ای بدون اینترنت هم پخش می‌شوند — با جابه‌جایی روی نوار،
-  چون سرویس‌ورکر خودش `Range` را جواب می‌دهد (بالاتر، «کتابخانه‌ی آفلاین»).
-
-آنچه PWA *نمی‌دهد*: ادامه‌ی پخش بعد از بستن کامل اپ یا force-quit مرورگر، ژست‌های
-لمسی‌ای که با سرعتِ انگشت کار کنند، و ذخیره‌ی فایل در کتابخانه‌ی موسیقیِ خودِ
-گوشی. هر سه در APK هست — بالاتر، «اپ اندروید».
-
-نسخه‌ی جدید را خودش پس‌زمینه دانلود می‌کند و با یک toast خبر می‌دهد؛ رفرش صفحه
-فعالش می‌کند. آیکون‌ها از `public/icon.svg` با `npm run generate-pwa-assets`
-دوباره ساخته می‌شوند، اگر لوگو عوض شد.
+This project is licensed under the [MIT License](LICENSE).

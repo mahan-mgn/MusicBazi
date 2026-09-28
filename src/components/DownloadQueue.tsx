@@ -20,6 +20,7 @@ import SourcePicker from './SourcePicker'
 import {
   CheckDrawIcon,
   ChevronIcon,
+  ClockPendingIcon,
   CloseIcon,
   DownloadIcon,
   RetryIcon,
@@ -86,9 +87,8 @@ function TrackLine({ job, queue }: { job: Job; queue: PlayItem[] }) {
         ) : active ? (
           <Spinner className="size-3.5 text-accent" />
         ) : waiting ? (
-          // نه اسپینر: چیزی در جریان نیست و اسپینرِ ساکن، «گیر کرده» معنی
-          // می‌دهد. نقطه‌ی روشن یعنی «هست، ولی منتظر».
-          <span className="size-1.5 rounded-full bg-accent/60" />
+          // ساعتِ انتظار (BitChord Clock): چیزی در جریان نیست، در صف است
+          <ClockPendingIcon className="size-3.5 text-accent/70" />
         ) : (
           <span className="size-1.5 rounded-full bg-muted-2" />
         )}

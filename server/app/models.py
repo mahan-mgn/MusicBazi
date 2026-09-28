@@ -46,6 +46,7 @@ class Track(BaseModel):
     # آدرسِ صفحه‌ی این ترک در پلتفرمِ مبدأ — کلیدِ ناوبریِ فرانت به صفحه‌ی
     # آرتیست: از روی همین شناسه، URL صفحه‌ی آرتیست ساخته می‌شود
     artistId: str | None = None
+    artistArtworkUrl: str | None = None
     # حس‌وحالِ صوتیِ تحلیل‌شده بعد از دانلود — غمگین↔شاد و آرام↔پرشور، هرکدام
     # در [0, 1]. فقط برای ترک‌های کتابخانه پر می‌شود؛ برای نتیجه‌ی جستجو که
     # هنوز دانلود نشده None است. شافلِ فرانت‌اند برای نپریدن ناگهانی بین
@@ -66,6 +67,9 @@ class Artist(BaseModel):
     # صفحه‌ی هنرمند است — فقط به‌جای دیسکوگرافی، پلی‌لیست دارد — و فرانت با
     # همین فیلد تصمیم می‌گیرد کدام برچسب را بگذارد.
     kind: Literal["artist", "user"] = "artist"
+    # فقط وقتی پلتفرم صریح می‌گوید حساب تأیید شده است. ساندکلاد `verified`
+    # می‌دهد؛ بقیه در API فعلی ندارند و False می‌مانند — فرانت بج جعلی نمی‌سازد.
+    verified: bool = False
 
 
 class Album(BaseModel):
@@ -81,6 +85,11 @@ class Album(BaseModel):
     # به صفحه‌ی آرتیستِ همین منبع می‌رود
     artistId: str | None = None
     artistArtworkUrl: str | None = None
+    # دسته‌ی انتشار برای فیلتر دیسکوگرافی. دیزر در فهرست آلبوم تعداد ترک
+    # نمی‌دهد و بدون این فیلد سینگل و آلبوم قاطی می‌شدند. نبودنش یعنی
+    # کاتالوگ قدیمی / منبعی که نوع را نمی‌داند.
+    releaseType: Literal["album", "single", "ep", "compilation"] | None = None
+    releaseDate: str | None = None
 
 
 class Playlist(BaseModel):
@@ -114,13 +123,28 @@ class AlbumDetail(Album):
         if not self.tracks or any(t.album != self.title for t in self.tracks):
             return self
 
+        # پلی‌لیست‌ها حتی اگر همه‌ی ترک‌هایشان هم‌نامِ پلی‌لیست باشند، آلبوم نیستند
+        is_playlist = ":playlist:" in self.id and self.releaseType not in ("album", "ep", "compilation")
+        if is_playlist:
+            return self
+
+        # کاورِ آلبوم باید روی همه‌ی ترک‌های آلبوم بنشیند — حتی ترکی که قبلاً
+        # سینگل بوده و آرت‌ورکِ جداگانه داشته، در بسترِ آلبوم کاورِ آلبوم را می‌گیرد
+        if self.artworkUrl:
+            for t in self.tracks:
+                t.artworkUrl = self.artworkUrl
+        elif self.tracks and self.tracks[0].artworkUrl:
+            self.artworkUrl = self.tracks[0].artworkUrl
+            for t in self.tracks:
+                t.artworkUrl = self.artworkUrl
+
         for t in self.tracks:
             if t.albumArtist is None and self.artist:
                 t.albumArtist = self.artist
             # فقط شناسه‌ای که واقعاً آلبوم است: تک‌آهنگ و پلی‌لیست هم AlbumDetail
             # برمی‌گردند و شناسه‌شان به‌عنوان albumId، گروه‌بندیِ کتابخانه را
             # به‌هم می‌ریخت
-            if t.albumId is None and ":album:" in self.id:
+            if t.albumId is None:
                 t.albumId = self.id
 
         # شماره‌ی ترک را هر کاتالوگی نمی‌دهد — ساندکلاد و یوتیوب هیچ‌وقت.
@@ -196,6 +220,8 @@ class TrackRef(BaseModel):
     discNumber: int | None = None
     year: int | None = None
     genre: str | None = None
+    source: str | None = None
+    quality: str | None = None
 
 
 class DownloadRequest(TrackRef):
@@ -343,6 +369,18 @@ class SongInfo(BaseModel):
     url: str | None = None
 
 
+class VibeTurn(BaseModel):
+    """
+    یک نوبتِ گفتگو برای حافظه‌ی چندتوره — «نه، آروم‌تر» بدونِ این بی‌معناست.
+
+    `role` عمداً str است نه Literal: یک تاریخچه‌ی خراب نباید کل درخواست را
+    ۴۰۰/۴۲۲ کند. `_contents` نقش‌های مجاز را فیلتر می‌کند.
+    """
+
+    role: str
+    text: str
+
+
 class VibeRequest(BaseModel):
     """ورودیِ چت‌بات پیشنهاد پلی‌لیست. حداقل یکی از این دو باید پر باشد."""
 
@@ -351,8 +389,21 @@ class VibeRequest(BaseModel):
     # کلیدِ یکی از VIBES (مثلاً "sad") — کلیک روی چیپ، بدون نیاز به تفسیر متن
     vibe: str | None = None
     # شناسه‌ی ترک‌هایی که فرانت قبلاً در همین گفتگو نشان داده — برای پرهیز از
-    # تکرارِ همان آهنگ‌ها در پیشنهادِ بعدی
-    excludeIds: list[str] = Field(default_factory=list)
+    # تکرارِ همان آهنگ‌ها در پیشنهادِ بعدی. سقفِ ۲۰۰ با برشِ فرانت (۲۰۰ تا)
+    # یکی است؛ اندپوینت بی‌احراز هویت است و نباید لیستِ بی‌نهایت بپذیرد.
+    excludeIds: list[str] = Field(default_factory=list, max_length=200)
+    # چند نوبتِ آخرِ همین گفتگو (فرانت کوتاهشان می‌کند). بدونش هر پیام از صفر
+    # شروع می‌شود و «همین حال ولی ایرانی» کار نمی‌کرد.
+    history: list[VibeTurn] = Field(default_factory=list, max_length=32)
+
+
+class VibeReady(BaseModel):
+    """ترکی که کاربر از قبل در کتابخانه دارد — پخشش دانلودِ دوباره نمی‌خواهد."""
+
+    jobId: str
+    streamUrl: str
+    lyricsUrl: str | None = None
+    gainDb: float | None = None
 
 
 class VibeSuggestion(BaseModel):
@@ -362,6 +413,10 @@ class VibeSuggestion(BaseModel):
     label: str
     reply: str
     tracks: list[Track] = Field(default_factory=list)
+    # «چرا این‌ها؟» — یک خطِ توضیح. None وقتی از مسیرِ کلیدواژه آمده و توضیحی نیست
+    reason: str | None = None
+    # شناسه‌ی ترک -> فایلِ آماده‌ی کتابخانه. کلیدهایش زیرمجموعه‌ی tracks است
+    ready: dict[str, VibeReady] = Field(default_factory=dict)
 
 
 class ZipRequest(BaseModel):

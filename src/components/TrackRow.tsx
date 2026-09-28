@@ -1,3 +1,4 @@
+import { api } from '../lib/api'
 import {
   duration as fmtDuration,
   percent as fmtPercent,
@@ -9,7 +10,11 @@ import {
 import { useI18n } from '../lib/i18n'
 import type { Track } from '../lib/types'
 import { isActive, useDownloads, useTrackJob } from '../store/downloads'
+import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
+import { useToasts } from '../store/toasts'
+import { toPlayItem } from '../lib/stream'
+import { useRowSwipe } from '../lib/useRowSwipe'
 import Artwork from './Artwork'
 import SendToTelegram from './SendToTelegram'
 import SourceBadge from './SourceBadge'
@@ -52,7 +57,13 @@ export default function TrackRow({
   const job = useTrackJob(track.id, quality)
   const { enqueue, cancel, retry } = useDownloads()
   const { t, lang } = useI18n()
-  const playing = playingId === track.id
+
+  const currentTrackId = usePlayer((s) => s.queue[s.index]?.track?.id)
+  const isPlayerPlaying = usePlayer((s) => s.playing)
+  const isCurrent = Boolean(
+    (playingId && playingId === track.id) || (currentTrackId && currentTrackId === track.id),
+  )
+  const playing = isCurrent && isPlayerPlaying
 
   const busy = job ? isActive(job.status) : false
   const fill = job?.status === 'downloading' ? job.percent : 0
@@ -75,10 +86,30 @@ export default function TrackRow({
 
   const filename = `${safeFilename(`${track.artist} - ${track.title}`)}.${fileExt(job?.format)}`
 
+  const handleSwipeToQueue = () => {
+    const playItem = toPlayItem(track, job, quality)
+    usePlayer.getState().enqueue([playItem])
+    useToasts.getState().push(t.queueAdded(track.title), 'info')
+  }
+
+  const rowRef = useRowSwipe<HTMLDivElement>({
+    onStartToEnd: handleSwipeToQueue,
+    onEndToStart: handleSwipeToQueue,
+    enabled: !selectable,
+  })
+
   return (
     <div
+      ref={rowRef}
+      onMouseEnter={() => {
+        if (!job) void api.prefetchStream?.(track)
+      }}
       className={`group relative flex items-center gap-2 overflow-hidden rounded-lg px-1.5 py-2 transition sm:gap-3 sm:px-2 ${
-        selected ? 'bg-accent-dim' : 'hover:bg-panel-2'
+        selected
+          ? 'bg-accent-dim'
+          : isCurrent
+            ? 'bg-accent/8 border border-accent/20'
+            : 'border border-transparent hover:bg-panel-2'
       }`}
     >
       {/* پروگرس به‌صورت پُرشدنِ پس‌زمینه‌ی خودِ ردیف */}
@@ -115,16 +146,46 @@ export default function TrackRow({
         </span>
       )}
 
-      <Artwork
-        src={track.artworkUrl}
-        alt={track.album ?? track.title}
-        seed={track.albumId ?? track.id}
-        className="relative size-10 shrink-0"
-      />
+      <button
+        type="button"
+        onClick={() => onTogglePlay(track)}
+        aria-label={playing ? t.pause : t.playTrack(track.title)}
+        className="group/art relative size-10 shrink-0 overflow-hidden rounded-lg shadow-sm border border-white/10 text-start"
+      >
+        <Artwork
+          src={track.artworkUrl}
+          alt={track.album ?? track.title}
+          seed={track.albumId ?? track.id}
+          className="size-full object-cover transition duration-200 group-hover/art:scale-105"
+        />
+        <span
+          className={`absolute inset-0 grid place-items-center bg-black/45 transition-opacity ${
+            isCurrent ? 'opacity-100' : 'opacity-0 group-hover/art:opacity-100'
+          }`}
+        >
+          {playing ? (
+            <PauseIcon className="size-4 text-white" />
+          ) : (
+            <PlayIcon className="size-4 text-white ms-0.5" />
+          )}
+        </span>
+      </button>
 
       <div className="relative min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="bidi truncate text-sm">{track.title}</p>
+          <button
+            type="button"
+            onClick={() => onTogglePlay(track)}
+            className="bidi truncate text-start text-sm font-medium transition-colors hover:text-accent"
+          >
+            <span
+              className={`truncate ${
+                isCurrent ? 'font-bold text-accent' : 'text-fg/95 group-hover:text-fg'
+              }`}
+            >
+              {track.title}
+            </span>
+          </button>
           {showSource && <SourceBadge source={track.source} />}
         </div>
         <p className="bidi truncate text-xs text-muted">{track.artist}</p>
@@ -148,9 +209,10 @@ export default function TrackRow({
 
         <button
           onClick={() => onTogglePlay(track)}
-          aria-label={playing ? t.stopPreview : t.preview}
+          aria-label={playing ? t.pause : t.play}
+          title={playing ? t.pause : t.play}
           className={`grid size-8 place-items-center rounded-md transition hover:bg-panel-2 sm:size-7 ${
-            playing ? 'text-accent' : 'text-muted hover:text-fg'
+            isCurrent ? 'text-accent' : 'text-muted hover:text-fg'
           }`}
         >
           {playing ? <PauseIcon className="size-4" /> : <PlayIcon className="size-4" />}

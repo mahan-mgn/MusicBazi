@@ -35,9 +35,11 @@ export interface PlayItem {
 
 /**
  * jobId واقعیِ سرور برای ثبتِ پخش. ردیف‌های کتابخانه خودشان jobId هستند؛
- * ترک‌های رادیو شناسه‌ی `radio-…` دارند و jobId از streamUrl استخراج می‌شود.
+ * ترک‌های رادیو شناسه‌ی `radio-…` دارند و jobId از streamUrl استخراج می‌شود؛
+ * ترک‌های استریم آنلاین شناسه‌ی `stream:…` دارند و هرگز جاب دیتابیسی ندارند.
  */
 export function jobIdOf(item: PlayItem): string | null {
+  if (item.id.startsWith('stream:')) return null
   if (!item.id.startsWith('radio-')) return item.id
   const m = item.streamUrl.match(/\/downloads\/([^/]+)\/stream/)
   return m?.[1] ?? null
@@ -121,6 +123,8 @@ interface PlayerState {
   sleepAt: number | null
 
   play: (items: PlayItem[], startIndex?: number) => void
+  /** به عنوان ترک‌های بعدی صف درج می‌کند تا بلافاصله پس از ترک جاری پخش شوند */
+  playNext: (items: PlayItem[]) => void
   /** به صفِ فعلی اضافه می‌کند بدون قطعِ پخش — برای پرشدنِ تدریجیِ پلی‌لیستِ چت‌بات وایب */
   enqueue: (items: PlayItem[]) => void
   toggle: () => void
@@ -132,6 +136,7 @@ interface PlayerState {
   toggleMute: () => void
   cycleRepeat: () => void
   toggleShuffle: () => void
+  setShuffle: (shuffle: boolean) => void
   toggleSmartShuffle: () => void
   toggleRadio: () => void
   /** خاموشیِ خودکار بعد از این تعداد دقیقه؛ null یعنی لغو */
@@ -162,6 +167,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
   // اینکه آن آدرس کدام ردیفِ صف بود را همین‌جا نگه می‌داریم، وگرنه بعد از
   // شروعِ فید معلوم نبود شمارنده‌ی صف کجا برود (به‌خصوص با شافل).
   let pendingNext: number | null = null
+
+  // تاریخچه‌ی ایندکس‌های پخش‌شده برای بازگشتِ درستِ دکمه‌ی «قبلی» در حالتِ شافل
+  let historyStack: number[] = []
 
   /*
    * آخرین باری که وضعیت به نوتیفیکیشنِ اندروید رفت.
@@ -272,6 +280,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
     pendingNext = target
     const item = target === null ? undefined : get().queue[target]
     engine.setNext(item?.streamUrl ?? null, item?.gainDb ?? 0)
+    if (item?.id.startsWith('stream:') && item?.track) {
+      void api.prefetchStream?.(item.track).catch(() => {})
+    }
   }
 
   /**
@@ -283,6 +294,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
     const target = pendingNext
     const item = get().queue[target]
     if (!item) return
+
+    const prevIdx = get().index
+    if (prevIdx !== target) {
+      historyStack.push(prevIdx)
+      if (historyStack.length > 50) historyStack.shift()
+    }
 
     set({ index: target, position: 0, failed: false })
     mediaSession(item)
@@ -420,9 +437,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (queue.length <= 1) return repeat === 'all' ? index : null
     if (shuffle) {
       if (smartShuffle) return pickShuffleIndex(queue, index)
-      let candidate = index
-      while (candidate === index) candidate = Math.floor(Math.random() * queue.length)
-      return candidate
+      const offset = 1 + Math.floor(Math.random() * (queue.length - 1))
+      return (index + offset) % queue.length
     }
     if (index + 1 < queue.length) return index + 1
     return repeat === 'all' ? 0 : null
@@ -502,8 +518,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
       const item = items[index]
       const same = current()?.id === item.id
 
-      // صفِ تازه یعنی جلسه‌ی رادیوی قبلی هم تازه شود — وگرنه نتیجه‌ی یک fetch
-      // درحالِ‌پرواز از صفِ قبلی می‌توانست به این یکی اضافه شود
+      // صفِ تازه یعنی جلسه‌ی رادیوی قبلی و تاریخچه‌ی پخش هم تازه شوند
+      historyStack = []
       radioToken++
       radioSeen = new Set(items.map((i) => radioKey(i.track)))
       set({ queue: items, index, radioLoading: false })
@@ -515,6 +531,23 @@ export const usePlayer = create<PlayerState>((set, get) => {
       }
       // بعد از رفرش، همان ترک از همان‌جا ادامه می‌دهد
       load(item, { at: same ? get().position : 0 })
+    },
+
+    playNext: (items) => {
+      if (!items.length) return
+      const { queue, index } = get()
+      if (!queue.length) {
+        get().play(items, 0)
+        return
+      }
+      const insertIndex = Math.min(index + 1, queue.length)
+      const nextQueue = [
+        ...queue.slice(0, insertIndex),
+        ...items,
+        ...queue.slice(insertIndex),
+      ]
+      set({ queue: nextQueue })
+      scheduleNext()
     },
 
     enqueue: (items) => {
@@ -553,6 +586,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
         stopAtEnd()
         return
       }
+      const currentIdx = get().index
+      if (currentIdx !== target) {
+        historyStack.push(currentIdx)
+        if (historyStack.length > 50) historyStack.shift()
+      }
       set({ index: target })
       load(get().queue[target])
     },
@@ -564,6 +602,15 @@ export const usePlayer = create<PlayerState>((set, get) => {
         return
       }
       const { index, queue, repeat } = get()
+      // در حالت شافل یا در صورت وجود تاریخچه، اولویت با آهنگی است که کاربر قبل از این واقعاً شنیده
+      while (historyStack.length > 0) {
+        const candidate = historyStack.pop()!
+        if (candidate >= 0 && candidate < queue.length && candidate !== index) {
+          set({ index: candidate })
+          load(queue[candidate])
+          return
+        }
+      }
       if (index === 0 && repeat !== 'all') {
         engine.seek(0)
         return
@@ -616,6 +663,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     toggleShuffle: () => {
       set({ shuffle: !get().shuffle })
+      scheduleNext()
+    },
+
+    setShuffle: (shuffle: boolean) => {
+      if (get().shuffle === shuffle) return
+      set({ shuffle })
       scheduleNext()
     },
 
@@ -690,4 +743,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
 /** آیا همین ترک الان روی پخش‌کننده است (و در حال پخش؟) */
 export function usePlayingId(): string | null {
   return usePlayer((s) => s.queue[s.index]?.track.id ?? null)
+}
+
+/** آیتم جاری در صف پخش */
+export function useCurrentItem(): PlayItem | null {
+  return usePlayer((s) => s.queue[s.index] ?? null)
 }

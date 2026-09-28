@@ -96,6 +96,22 @@ class TestQualifiers:
         assert q.old == old
         assert q.persian_only == persian_only
 
+    def test_qualifiers_persist_across_history(self):
+        # «قدیمی ایرانی» در نوبتِ اول، پیامِ دوم فقط «آروم‌تر» — قید باید بماند
+        from app.models import VibeTurn
+
+        history = [VibeTurn(role="user", text="غمگین ایرانی قدیمی"), VibeTurn(role="model", text="بفرما")]
+        q = vibe.detect_qualifiers("نه آروم‌تر", history)
+        assert q.old and q.persian_only
+
+    def test_qualifiers_ignore_model_turns_in_history(self):
+        # مدل ممکن است اسمِ یک آهنگِ قدیمی را بگوید؛ این قیدِ کاربر نیست
+        from app.models import VibeTurn
+
+        history = [VibeTurn(role="model", text="مثلاً فرهاد مهراد قدیمی")]
+        q = vibe.detect_qualifiers("یه چیز شاد", history)
+        assert not q.old
+
     def test_old_filters_to_classic_persian_artists(self):
         picks = list(vibe.VIBES["sad"].picks)
         filtered = vibe._filter_picks(picks, vibe.Qualifiers(old=True))
@@ -170,6 +186,11 @@ def _gemini_text(text: str) -> dict:
     return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
 
 
+def _req(**kw) -> VibeRequest:
+    """VibeRequestِ خالیِ مناسبِ _call_llm (که تاریخچه را از req می‌خواند)."""
+    return VibeRequest(**kw)
+
+
 class TestCallLlm:
     @pytest.fixture(autouse=True)
     def key(self, monkeypatch):
@@ -179,7 +200,7 @@ class TestCallLlm:
         monkeypatch.setattr(vibe, "GEMINI_API_KEY", None)
         client = _FakeClient(lambda *a: (_ for _ in ()).throw(AssertionError("should not connect")))
 
-        assert asyncio.run(vibe._call_llm(client, "ناراحتم")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "ناراحتم")) is None
 
     def test_successful_response_is_parsed(self):
         body = _gemini_text(
@@ -189,7 +210,7 @@ class TestCallLlm:
         )
         client = _FakeClient(lambda *a: _response(200, json_body=body))
 
-        result = asyncio.run(vibe._call_llm(client, "خیلی ناراحتم"))
+        result = asyncio.run(vibe._call_llm(client, _req(), "خیلی ناراحتم"))
 
         assert result is not None
         assert result.vibe == "sad"
@@ -205,47 +226,47 @@ class TestCallLlm:
         )
         client = _FakeClient(lambda *a: _response(200, json_body=body))
 
-        result = asyncio.run(vibe._call_llm(client, "خوشحالم"))
+        result = asyncio.run(vibe._call_llm(client, _req(), "خوشحالم"))
 
         assert result is not None
         assert result.vibe == "happy"
 
     def test_http_error_returns_none(self):
         client = _FakeClient(lambda *a: _response(500))
-        assert asyncio.run(vibe._call_llm(client, "متن")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "متن")) is None
 
     def test_malformed_json_returns_none(self):
         body = _gemini_text("not json at all")
         client = _FakeClient(lambda *a: _response(200, json_body=body))
-        assert asyncio.run(vibe._call_llm(client, "متن")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "متن")) is None
 
     def test_unknown_vibe_in_response_is_rejected(self):
         body = _gemini_text('{"vibe": "mysterious", "reply": "x", "picks": [{"title": "A", "artist": "B"}]}')
         client = _FakeClient(lambda *a: _response(200, json_body=body))
-        assert asyncio.run(vibe._call_llm(client, "متن")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "متن")) is None
 
     def test_empty_picks_is_rejected(self):
         body = _gemini_text('{"vibe": "sad", "reply": "x", "picks": []}')
         client = _FakeClient(lambda *a: _response(200, json_body=body))
-        assert asyncio.run(vibe._call_llm(client, "متن")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "متن")) is None
 
     def test_network_exception_returns_none(self):
         class Boom:
             async def post(self, *a, **kw):
                 raise httpx.ConnectError("down")
 
-        assert asyncio.run(vibe._call_llm(Boom(), "متن")) is None
+        assert asyncio.run(vibe._call_llm(Boom(), _req(), "متن")) is None
 
     def test_blocked_prompt_falls_back_instead_of_crashing(self):
         """۲۰۰ با promptFeedback.blockReason — متن‌های خشم/غم گاهی سانسور می‌شوند."""
         body = {"promptFeedback": {"blockReason": "SAFETY"}, "candidates": []}
         client = _FakeClient(lambda *a: _response(200, json_body=body))
-        assert asyncio.run(vibe._call_llm(client, "خیلی عصبانیم")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "خیلی عصبانیم")) is None
 
     def test_empty_candidates_returns_none(self):
         """۲۰۰ ولی بی‌candidate (مثلاً MAX_TOKENS) — نباید KeyError بدهد."""
         client = _FakeClient(lambda *a: _response(200, json_body={"candidates": []}))
-        assert asyncio.run(vibe._call_llm(client, "متن")) is None
+        assert asyncio.run(vibe._call_llm(client, _req(), "متن")) is None
 
     def test_request_carries_schema_and_key_in_header(self):
         """
@@ -261,7 +282,7 @@ class TestCallLlm:
                 '{"vibe": "calm", "reply": "باشه.", "picks": [{"title": "A", "artist": "B"}]}'
             ))
 
-        asyncio.run(vibe._call_llm(_FakeClient(handler), "دلم آرامش میخواد"))
+        asyncio.run(vibe._call_llm(_FakeClient(handler), _req(), "دلم آرامش میخواد"))
 
         assert vibe.GEMINI_MODEL in captured["url"]
         assert captured["headers"]["x-goog-api-key"] == "test-key"
@@ -273,9 +294,109 @@ class TestCallLlm:
             "artist",
         }
         assert config["responseSchema"]["properties"]["vibe"]["enum"] == list(vibe.VIBES)
+        assert "reason" in config["responseSchema"]["properties"]
         # systemInstruction/contents به سبکِ generateContent، نه messages/system
         assert "systemInstruction" in captured["body"]
         assert captured["body"]["contents"][0]["parts"][0]["text"] == "دلم آرامش میخواد"
+
+    def test_history_is_sent_as_prior_turns(self):
+        """
+        حافظه‌ی چندتوره: «نه آروم‌تر» فقط وقتی معنا دارد که پیامِ قبلی هم به
+        مدل رسیده باشد. ترتیب و roleها همان قراردادِ generateContent است.
+        """
+        captured: dict = {}
+
+        def handler(url, body, headers, timeout):
+            captured["body"] = body
+            return _response(200, json_body=_gemini_text(
+                '{"vibe": "calm", "reply": "باشه.", "reason": "r", "picks": [{"title": "A", "artist": "B"}]}'
+            ))
+
+        req = _req(
+            history=[
+                {"role": "user", "text": "غمگینم"},
+                {"role": "model", "text": "این‌ها رو گذاشتم"},
+            ]
+        )
+        asyncio.run(vibe._call_llm(_FakeClient(handler), req, "نه آروم‌تر"))
+
+        turns = captured["body"]["contents"]
+        assert [(t["role"], t["parts"][0]["text"]) for t in turns] == [
+            ("user", "غمگینم"),
+            ("model", "این‌ها رو گذاشتم"),
+            ("user", "نه آروم‌تر"),
+        ]
+
+    def test_history_is_truncated_to_the_latest_turns(self):
+        """سقفِ توکن: فقط HISTORY_TURNSِ آخر می‌روند، و همیشه پیامِ جاری ته‌اش."""
+        captured: dict = {}
+
+        def handler(url, body, headers, timeout):
+            captured["body"] = body
+            return _response(200, json_body=_gemini_text(
+                '{"vibe": "calm", "reply": "x", "reason": "r", "picks": [{"title": "A", "artist": "B"}]}'
+            ))
+
+        req = _req(history=[{"role": "user", "text": f"m{i}"} for i in range(20)])
+        asyncio.run(vibe._call_llm(_FakeClient(handler), req, "آخری"))
+
+        texts = [t["parts"][0]["text"] for t in captured["body"]["contents"]]
+        assert len(texts) == vibe.HISTORY_TURNS + 1
+        assert texts[-1] == "آخری"
+        assert texts[0] == "m14"  # ۲۰ تا بود، ۶ تای آخر مانده
+
+    def test_blank_and_unknown_roles_are_dropped_from_history(self):
+        """
+        تاریخچه‌ی خراب نباید چت را ۴۰۰/۴۲۲ کند: نوبتِ خالی و role ناشناس
+        حذف می‌شوند و پیامِ جاری همیشه می‌ماند.
+        """
+        req = _req(history=[{"role": "system", "text": "hacker"}, {"role": "user", "text": "   "}])
+        assert vibe._contents(req, "سلام") == [{"role": "user", "parts": [{"text": "سلام"}]}]
+
+    def test_taste_profile_reaches_the_system_prompt(self, monkeypatch):
+        """چت باید سلیقه‌ی خودِ کاربر را بداند — وگرنه «خاص» بودنش حرفی است."""
+        captured: dict = {}
+
+        def handler(url, body, headers, timeout):
+            captured["body"] = body
+            return _response(200, json_body=_gemini_text(
+                '{"vibe": "sad", "reply": "x", "reason": "r", "picks": [{"title": "A", "artist": "B"}]}'
+            ))
+
+        monkeypatch.setattr(vibe, "library_digest", lambda: "User's liked artists: شادمهر عقیلی")
+        asyncio.run(vibe._call_llm(_FakeClient(handler), _req(), "ناراحتم"))
+
+        assert "User's liked artists: شادمهر عقیلی" in captured["body"]["systemInstruction"]["parts"][0]["text"]
+
+    def test_no_taste_profile_leaves_system_prompt_clean(self, monkeypatch):
+        captured: dict = {}
+
+        def handler(url, body, headers, timeout):
+            captured["body"] = body
+            return _response(200, json_body=_gemini_text(
+                '{"vibe": "sad", "reply": "x", "reason": "r", "picks": [{"title": "A", "artist": "B"}]}'
+            ))
+
+        monkeypatch.setattr(vibe, "library_digest", lambda: None)
+        asyncio.run(vibe._call_llm(_FakeClient(handler), _req(), "ناراحتم"))
+
+        assert "Taste profile" not in captured["body"]["systemInstruction"]["parts"][0]["text"]
+
+    def test_reason_is_parsed(self):
+        body = _gemini_text(
+            '{"vibe": "sad", "reply": "x", "reason": "چون لایک‌هات سمتِ پاپِ آرامه",'
+            ' "picks": [{"title": "A", "artist": "B"}]}'
+        )
+        client = _FakeClient(lambda *a: _response(200, json_body=body))
+        result = asyncio.run(vibe._call_llm(client, _req(), "ناراحتم"))
+        assert result is not None and result.reason == "چون لایک‌هات سمتِ پاپِ آرامه"
+
+    def test_missing_reason_does_not_void_an_otherwise_good_answer(self):
+        """schema آن را required می‌کند ولی مدلِ قدیمی ممکن است حذفش کند."""
+        body = _gemini_text('{"vibe": "sad", "reply": "x", "picks": [{"title": "A", "artist": "B"}]}')
+        client = _FakeClient(lambda *a: _response(200, json_body=body))
+        result = asyncio.run(vibe._call_llm(client, _req(), "ناراحتم"))
+        assert result is not None and result.reason is None
 
 
 class TestSuggestWithLlm:
@@ -288,7 +409,7 @@ class TestSuggestWithLlm:
             vibe="calm", label=vibe.VIBES["calm"].label, reply="آروم باش.", picks=[("A", "B")]
         )
 
-        async def fake_llm(client, text):
+        async def fake_llm(client, req, text):
             return fake_result
 
         monkeypatch.setattr(vibe, "_call_llm", fake_llm)
@@ -297,7 +418,7 @@ class TestSuggestWithLlm:
         assert result is fake_result
 
     def test_llm_failure_falls_back_to_keywords(self, monkeypatch):
-        async def fake_llm(client, text):
+        async def fake_llm(client, req, text):
             return None
 
         monkeypatch.setattr(vibe, "_call_llm", fake_llm)
@@ -305,14 +426,37 @@ class TestSuggestWithLlm:
         result = asyncio.run(vibe.suggest(None, VibeRequest(message="خیلی عصبانیم")))
         assert result.vibe == "angry"
 
-    def test_chip_click_skips_llm_entirely(self, monkeypatch):
-        async def fail_if_called(client, text):
-            raise AssertionError("LLM نباید صدا زده شود وقتی چیپ زده شده")
+    def test_chip_click_goes_through_the_llm(self, monkeypatch):
+        """
+        چیپ دیگر LLM را دور نمی‌زند: برچسبش به‌عنوانِ پیام می‌رود تا انتخاب‌ها
+        با سلیقه و تاریخچه قاطی شوند. (قبلاً همیشه همان ریپلایِ ثابت بود.)
+        """
+        captured: dict = {}
+        fake_result = vibe.VibeResult(
+            vibe="romantic", label=vibe.VIBES["romantic"].label, reply="عشق!", picks=[("A", "B")], reason="r"
+        )
 
-        monkeypatch.setattr(vibe, "_call_llm", fail_if_called)
+        async def fake_llm(client, req, text):
+            captured["text"] = text
+            return fake_result
+
+        monkeypatch.setattr(vibe, "_call_llm", fake_llm)
+
+        result = asyncio.run(vibe.suggest(None, VibeRequest(vibe="romantic")))
+        assert result is fake_result
+        assert captured["text"] == vibe.VIBES["romantic"].label
+
+    def test_chip_falls_back_to_its_own_vibe_when_llm_is_silent(self, monkeypatch):
+        """بدونِ کلید/با خطای Gemini، چیپ باید همان وایبِ خودش را بدهد نه حدسِ متن."""
+
+        async def fake_llm(client, req, text):
+            return None
+
+        monkeypatch.setattr(vibe, "_call_llm", fake_llm)
 
         result = asyncio.run(vibe.suggest(None, VibeRequest(vibe="romantic")))
         assert result.vibe == "romantic"
+        assert result.reply == vibe.VIBES["romantic"].reply
 
 
 class TestResolveTracks:
@@ -536,6 +680,94 @@ class TestBuildPlaylist:
         result = asyncio.run(vibe.build_playlist(None, VibeRequest(vibe="happy")))
 
         assert [t.title for t in result.tracks] == ["Fallback Song"]
+
+
+class TestLibraryAwareness:
+    """
+    چت باید سلیقه‌ی خودِ کاربر را بداند و بداند کدام پیشنهاد را از قبل دارد.
+    بدون این دو، «وایب چت» فقط یک جستجوی قشنگ است.
+    """
+
+    def test_digest_names_liked_artists_and_their_center(self, fresh_db, track):
+        import time
+
+        fresh_db.insert_job("j1", track, "320", "ready", time.time())
+        fresh_db.update_job("j1", status="ready", path="x", bytes=10, valence=0.2, energy=0.3)
+        fresh_db.set_favorite("j1", True)
+
+        digest = vibe.library_digest()
+
+        assert digest is not None and track.artist in digest
+        assert "valence 0.20" in digest and "energy 0.30" in digest
+
+    def test_digest_is_none_for_an_empty_library(self, fresh_db):
+        assert vibe.library_digest() is None
+
+    def test_owned_tracks_come_back_ready_without_a_download(self, fresh_db, track):
+        import time
+
+        fresh_db.insert_job("j1", track, "320", "ready", time.time())
+        fresh_db.update_job("j1", status="ready", path="x", bytes=10)
+
+        owned = vibe._owned_files([track])
+
+        assert owned[track.id].jobId == "j1"
+        assert owned[track.id].streamUrl.endswith(f"/api/downloads/j1/stream")
+
+    def test_tracks_not_in_the_library_are_not_marked_ready(self, fresh_db, track):
+        assert vibe._owned_files([track]) == {}
+
+    def test_two_qualities_pick_the_bigger_file(self, fresh_db, track):
+        import time
+
+        fresh_db.insert_job("j-low", track, "128", "ready", time.time())
+        fresh_db.update_job("j-low", status="ready", path="x", bytes=100)
+        fresh_db.insert_job("j-high", track, "320", "ready", time.time())
+        fresh_db.update_job("j-high", status="ready", path="x", bytes=900)
+
+        assert vibe._owned_files([track])[track.id].jobId == "j-high"
+
+    def test_build_playlist_reports_reason_and_ready(self, monkeypatch, fresh_db, track):
+        async def fake_suggest(client, req):
+            return vibe.VibeResult(
+                vibe="sad", label=vibe.VIBES["sad"].label, reply="r", picks=[("x", "y")], reason="چون دلتنگی"
+            )
+
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+            return []
+
+        async def fake_resolve(client, picks, exclude=frozenset()):
+            return [track]
+
+        monkeypatch.setattr(vibe, "_search_playlists", fake_search_playlists)
+        monkeypatch.setattr(vibe, "resolve_tracks", fake_resolve)
+        monkeypatch.setattr(vibe, "suggest", fake_suggest)
+
+        import time
+
+        fresh_db.insert_job("j1", track, "320", "ready", time.time())
+        fresh_db.update_job("j1", status="ready", path="x", bytes=10)
+
+        result = asyncio.run(vibe.build_playlist(None, VibeRequest(message="غمگینم")))
+
+        assert result.reason == "چون دلتنگی"
+        assert result.ready[track.id].jobId == "j1"
+
+    def test_keyword_path_has_no_reason(self, monkeypatch):
+        """مسیرِ کلیدواژه توضیحی نمی‌سازد — «چرا اینا؟» فقط با مدل."""
+        monkeypatch.setattr(vibe, "GEMINI_API_KEY", None)
+
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+            return []
+
+        async def fake_resolve(client, picks, exclude=frozenset()):
+            return [_track("x", "y")]
+
+        monkeypatch.setattr(vibe, "_search_playlists", fake_search_playlists)
+        monkeypatch.setattr(vibe, "resolve_tracks", fake_resolve)
+
+        result = asyncio.run(vibe.build_playlist(None, VibeRequest(message="خیلی ناراحتم")))
+        assert result.reason is None and result.ready == {}
 
 
 class TestSamplePicks:

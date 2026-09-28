@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import App from './App'
+import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 import { setupNative } from './lib/native'
 import { installErrorReporting } from './lib/telemetry'
@@ -21,9 +22,20 @@ void setupNative()
 // مهم‌ترین خط است) رد می‌شود. بی‌صداست: فقط یک fetchِ keepalive.
 installErrorReporting()
 
+// مقداردهی اولیه تلگرام مینی‌اپ در صورت باز شدن درون تلگرام
+try {
+  const tg = (window as unknown as { Telegram?: { WebApp?: { ready: () => void; expand: () => void } } }).Telegram?.WebApp
+  tg?.ready?.()
+  tg?.expand?.()
+} catch {
+  // بدون خطا در محیط‌های عادی مرورگر یا PWA
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )
 

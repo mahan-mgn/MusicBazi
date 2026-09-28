@@ -66,6 +66,8 @@ export interface Track {
    * آرتیست. نبودنش یعنی این پلتفرم صفحه‌ی آرتیست نمی‌دهد.
    */
   artistId?: string
+  /** عکس پروفایل پلتفرمِ هنرمند */
+  artistArtworkUrl?: string | null
   /**
    * حس‌وحالِ صوتیِ تحلیل‌شده بعد از دانلود — غمگین↔شاد و آرام↔پرشور، هرکدام
    * در [0, 1]. فقط ترک‌های کتابخانه دارندش؛ نتیجه‌ی جستجو که هنوز دانلود
@@ -89,6 +91,8 @@ export interface Artist {
    * برچسب‌هایش فرق می‌کنند. نبودنش یعنی هنرمند.
    */
   kind?: 'artist' | 'user'
+  /** فقط وقتی پلتفرم صریح گفته حساب تأیید شده است — وگرنه بج جعلی نشان نده */
+  verified?: boolean
 }
 
 export interface Album {
@@ -103,6 +107,12 @@ export interface Album {
   /** شناسه و آواتارِ آرتیستِ آلبوم از همان پلتفرم — کلیک روی نام به صفحه‌اش می‌رود */
   artistId?: string
   artistArtworkUrl?: string | null
+  /**
+   * دسته‌ی انتشار برای فیلتر دیسکوگرافی. دیزر در فهرست آلبوم تعداد ترک
+   * نمی‌دهد؛ بدون این فیلد سینگل و آلبوم قاطی می‌شدند. نبودنش یعنی کش قدیمی.
+   */
+  releaseType?: 'album' | 'single' | 'ep' | 'compilation'
+  releaseDate?: string | null
 }
 
 export interface Playlist {
@@ -132,6 +142,13 @@ export interface ArtistDetail extends Artist {
   /** فقط ساندکلاد پر می‌کند — تبِ Likes/Reposts خودِ کاربر */
   likedTracks: Track[]
   repostedTracks: Track[]
+  /**
+   * هنرمندانِ مشابه — فقط دیزر دارد (`/artist/{id}/related`). بقیه‌ی پلتفرم‌ها
+   * خالی می‌فرستند و بخشش رندر نمی‌شود.
+   */
+  related: Artist[]
+  /** رادیوی هنرمند — فقط دیزر (`/artist/{id}/radio`). بقیه خالی. */
+  radio?: Track[]
 }
 
 export interface SearchResults {
@@ -285,6 +302,26 @@ export interface VibeInput {
   vibe?: string
   /** شناسه‌ی ترک‌هایی که همین گفتگو قبلاً دیده — برای پرهیز از تکرار */
   excludeIds?: string[]
+  /**
+   * چند نوبتِ آخرِ گفتگو — تا «نه آروم‌تر» و «همین حال ولی ایرانی» معنا
+   * داشته باشند. سرور خودش کوتاهشان می‌کند، ولی فرانت هم سقف می‌گذارد که
+   * بدنه‌ی درخواست با طولِ گفتگو بزرگ نشود.
+   */
+  history?: VibeTurn[]
+}
+
+/** یک نوبتِ گفتگو برای حافظه‌ی چندتوره */
+export interface VibeTurn {
+  role: 'user' | 'model'
+  text: string
+}
+
+/** ترکی که از قبل در کتابخانه است — پخشش دانلودِ دوباره نمی‌خواهد */
+export interface VibeReady {
+  jobId: string
+  streamUrl: string
+  lyricsUrl?: string
+  gainDb?: number
 }
 
 /** پاسخِ چت‌بات: یک حس‌وحالِ تشخیص‌داده‌شده به‌همراه پلی‌لیستِ پیشنهادی */
@@ -293,6 +330,10 @@ export interface VibeSuggestion {
   label: string
   reply: string
   tracks: Track[]
+  /** «چرا این‌ها؟» — فقط وقتی مدل جواب داده هست */
+  reason?: string | null
+  /** شناسه‌ی ترک -> فایلِ آماده‌ی کتابخانه */
+  ready?: Record<string, VibeReady>
 }
 
 /** یک حدسِ شناساییِ صوتی */
@@ -515,6 +556,8 @@ export interface MusicApi {
   followState(chatId: number, artistId: string, signal?: AbortSignal): Promise<FollowState>
   follow(chatId: number, req: FollowRequest): Promise<FollowState>
   unfollow(chatId: number, artistId: string): Promise<void>
+  /** پری‌فچ فایل استریم برای ترک بعدی صف در پس‌زمینه */
+  prefetchStream?(track: Track): Promise<void>
 }
 
 /**

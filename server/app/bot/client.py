@@ -12,20 +12,26 @@ from collections.abc import AsyncIterator
 
 import httpx
 
-from ..config import API_BASE_URL
+from ..config import API_BASE_URL, PROXY, TELEGRAM_PROXY
 from ..models import (
     AlbumDetail,
     ArtistDetail,
+    ChaptersInfo,
+    DailyMix,
     DownloadProgress,
     Follow,
     FollowRequest,
     FollowState,
     IdentifyResult,
+    LibraryItem,
     LibraryPage,
     SearchResults,
     SongInfo,
+    SplitStatus,
     TelegramJob,
     Track,
+    VibeSuggestion,
+    ZipReady,
 )
 
 
@@ -44,9 +50,22 @@ def _detail(res: httpx.Response, fallback: str) -> str:
 
 
 class ApiClient:
-    def __init__(self, base_url: str = API_BASE_URL) -> None:
+    def __init__(self, base_url: str = API_BASE_URL, proxy: str | None = None) -> None:
         self._base = base_url.rstrip("/")
-        self._http = httpx.AsyncClient(base_url=self._base, timeout=30.0)
+        proxy_url = proxy or TELEGRAM_PROXY or PROXY
+        mounts: dict[str, httpx.AsyncBaseTransport] = {}
+        if proxy_url:
+            # درخواست‌های محلی به بک‌اند باید مستقیم و بدون پروکسی بروند
+            if "localhost" in self._base or "127.0.0.1" in self._base:
+                mounts["http://localhost"] = httpx.AsyncHTTPTransport()
+                mounts["http://127.0.0.1"] = httpx.AsyncHTTPTransport()
+            mounts["all://"] = httpx.AsyncHTTPTransport(proxy=proxy_url)
+        self._http = httpx.AsyncClient(
+            base_url=self._base,
+            timeout=httpx.Timeout(60.0, connect=15.0),
+            follow_redirects=True,
+            mounts=mounts if mounts else None,
+        )
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -56,10 +75,41 @@ class ApiClient:
         res.raise_for_status()
         return SearchResults.model_validate(res.json())
 
+    async def vibe(self, text: str) -> VibeSuggestion:
+        """پیشنهاد پلی‌لیست و موزیک بر اساس حال‌وهوا (جمینای/کلیدواژه)."""
+        res = await self._http.post("/api/vibe", json={"text": text}, timeout=45.0)
+        res.raise_for_status()
+        return VibeSuggestion.model_validate(res.json())
+
     async def resolve_ref(self, ref: str) -> AlbumDetail:
         res = await self._http.get("/api/album", params={"ref": ref})
         res.raise_for_status()
         return AlbumDetail.model_validate(res.json())
+
+    async def chapters(self, ref: str) -> ChaptersInfo | None:
+        """بررسی چپترهای یک ویدیو یا میکس (مثلاً در یوتیوب). None در صورت عدم وجود یا خطا."""
+        try:
+            res = await self._http.get("/api/chapters", params={"ref": ref}, timeout=30.0)
+            if res.status_code == 200:
+                return ChaptersInfo.model_validate(res.json())
+        except Exception:
+            pass
+        return None
+
+    async def create_split(
+        self, url: str, quality: str = "320", indexes: list[int] | None = None
+    ) -> SplitStatus:
+        """شروع بریدن و تفکیک میکس به قطعات مجزا."""
+        body = {"url": url, "quality": quality, "indexes": indexes or []}
+        res = await self._http.post("/api/downloads/split", json=body, timeout=60.0)
+        res.raise_for_status()
+        return SplitStatus.model_validate(res.json())
+
+    async def split_status(self, task_id: str) -> SplitStatus:
+        """دریافت وضعیت پیشرفت بریدن میکس."""
+        res = await self._http.get(f"/api/downloads/split/{task_id}", timeout=15.0)
+        res.raise_for_status()
+        return SplitStatus.model_validate(res.json())
 
     async def artist(self, ref: str) -> ArtistDetail | None:
         """صفحه‌ی هنرمند — برای `/follow` و چک‌کردنِ دوره‌ایِ انتشار تازه."""
@@ -78,6 +128,8 @@ class ApiClient:
             "title": track.title,
             "artist": track.artist,
             "album": track.album,
+            "albumId": track.albumId,
+            "albumArtist": track.albumArtist,
             "durationMs": track.durationMs,
             "artworkUrl": track.artworkUrl,
             "trackNumber": track.trackNumber,
@@ -151,6 +203,41 @@ class ApiClient:
         res = await self._http.get("/api/library", params={"q": query, "limit": 8})
         res.raise_for_status()
         return LibraryPage.model_validate(res.json())
+
+    async def favorites(self) -> list[LibraryItem]:
+        """لیست آهنگ‌های مورد علاقه (لایک‌شده) در کتابخانه."""
+        res = await self._http.get("/api/favorites")
+        res.raise_for_status()
+        return [LibraryItem.model_validate(x) for x in res.json()]
+
+    async def set_favorite(self, job_id: str, favorite: bool) -> bool:
+        """تغییر وضعیت لایکِ یک ترک در کتابخانه."""
+        res = await self._http.put(f"/api/library/{job_id}/favorite", params={"favorite": favorite})
+        res.raise_for_status()
+        return bool(res.json().get("favorite"))
+
+    async def daily_mix(self, limit: int = 15) -> DailyMix:
+        """دریافت میکس روزانه بر اساس علایق و تاریخچه گوش دادن."""
+        res = await self._http.get("/api/mix", params={"limit": limit})
+        res.raise_for_status()
+        return DailyMix.model_validate(res.json())
+
+    async def create_zip(self, job_ids: list[str], name: str = "musicbazi") -> ZipReady:
+        """ساخت آرشیو فشرده ZIP از چندین قطعه."""
+        res = await self._http.post("/api/downloads/zip", json={"jobIds": job_ids, "name": name})
+        res.raise_for_status()
+        return ZipReady.model_validate(res.json())
+
+    async def zip_bytes_by_url(self, relative_url: str) -> bytes | None:
+        """دانلود بایت‌های فایل زیپ ساخته‌شده."""
+        res = await self._http.get(relative_url)
+        if res.status_code != 200:
+            return None
+        return res.content
+
+    def full_zip_url(self, relative_url: str) -> str:
+        """آدرس کامل دانلود مستقیم فایل زیپ."""
+        return f"{self._base}{relative_url}"
 
     async def identify(self, data: bytes, filename: str) -> IdentifyResult:
         """
@@ -268,8 +355,8 @@ class ApiClient:
         دو کار کافی است؛ نیازی به کلاینتِ جدا نیست.
         """
         try:
-            res = await self._http.get(url)
-        except httpx.HTTPError:
+            res = await self._http.get(url, timeout=30.0, follow_redirects=True)
+        except Exception:
             return None
         if res.status_code != 200:
             return None
