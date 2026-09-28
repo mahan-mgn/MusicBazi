@@ -125,7 +125,15 @@ step() { printf '\n%s==>%s %s\n' "$C_OK" "$C_OFF" "$*"; }
 # traceback که کاربرِ گوشی با آن هیچ کاری نمی‌تواند بکند.
 find_src() {
   local guess
+  local script_repo
+  script_repo="$(cd "$(dirname "$SCRIPT_PATH")/.." 2>/dev/null && pwd)" || script_repo=""
   for guess in "${FROM_ARG:-}" "${UNSTREAM_SRC:-}" \
+               "$script_repo" \
+               "$PWD" \
+               "$HOME/Download/MusicBazi" \
+               "$HOME/Downloads/MusicBazi" \
+               "$HOME/MusicBazi" \
+               "$HOME/unstream" \
                "/storage/emulated/0/Download/unstream" \
                "/storage/emulated/0/Download/MusicBazi" \
                "/storage/emulated/0/Documents/unstream"; do
