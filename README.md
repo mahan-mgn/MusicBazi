@@ -229,19 +229,25 @@ You can run the entire Unstream backend on your Android device without needing a
 
 #### Setup Steps:
 1. Install **Termux** from [F-Droid](https://f-droid.org/packages/com.termux/) (do not use the obsolete Google Play version).
-2. Download or clone this repository onto your phone's storage.
-3. Open Termux and execute:
+2. Open Termux and clone the repository:
    ```bash
    pkg update && pkg install git
-   git clone https://github.com/mahan-mgn/Unstream.git ~/unstream-repo
-   bash ~/unstream-repo/scripts/phone-server.sh
+   git clone https://github.com/mahan-mgn/Unstream.git ~/MusicBazi
+   cd ~/MusicBazi
+   bash scripts/phone-server.sh
    ```
-4. The script will:
+   > **Note on Storage:** If you downloaded or unpacked the source into Android's shared Download folder instead of cloning inside Termux, grant storage permission first and pass `from=<path>`:
+   > ```bash
+   > termux-setup-storage
+   > bash ~/MusicBazi/scripts/phone-server.sh from=/storage/emulated/0/Download/MusicBazi
+   > ```
+
+3. The script will:
    - Install required system packages (`python`, `ffmpeg`, `nodejs`, `rust`, `python-numpy`).
    - Compile `pydantic-core` for Android.
    - Configure background execution with `termux-wake-lock`.
    - Start the FastAPI server on `http://127.0.0.1:8000`.
-5. Open the Unstream APK, choose **"On This Device"**, and enjoy!
+4. Open the Unstream APK, choose **"On This Device"**, and enjoy!
 
 #### CLI Server Management on Android:
 ```bash
@@ -251,6 +257,7 @@ phone-server.sh boot                 # Automatically start on device boot
 phone-server.sh cookies <path>       # Set YouTube cookies
 phone-server.sh proxy <url>          # Set SOCKS5 / HTTP proxy
 phone-server.sh spotify <id> <sec>   # Configure Spotify credentials
+phone-server.sh from=<path>          # Specify custom source directory
 ```
 
 ---
