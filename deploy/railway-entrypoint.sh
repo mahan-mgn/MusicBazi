@@ -29,6 +29,7 @@ mkdir -p /data/downloads /data/db
 
 # --- nginx: فرانت + پروکسی /api ---
 # Railway پورت را با env می‌دهد؛ nginx داینامیک نمی‌فهمد، پس جای‌گذاری می‌شود
-sed -i "s/^listen .*/listen ${PORT:-8080};/" /etc/nginx/conf.d/default.conf
+# (الگو فضای خالی ابتدای خط را هم می‌خورد چون کانفیک listen را با ایندنت دارد)
+sed -i "s/^[[:space:]]*listen .*/    listen ${PORT:-8080};/" /etc/nginx/conf.d/default.conf
 
 exec nginx -g 'daemon off;'
