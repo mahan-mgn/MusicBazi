@@ -1,15 +1,15 @@
 """
 توزیعِ نسخه‌ی اندروید — نسخه‌ی APKeای که سرور میزبانی می‌کند.
 
-چرا روی سرور و نه Play Store: توزیعِ اصلیِ آنستریم خودمیزبان است (APK روی
+چرا روی سرور و نه Play Store: توزیعِ اصلیِ موزیک بازی خودمیزبان است (APK روی
 تلگرام/سایت). بدونِ این، کاربرِ روی نسخه‌ی قدیمی هیچ‌وقت نمی‌فهمد چیزی جا
 انداخته — هیچ کانالی برای «بروزرسانی هست» وجود ندارد.
 
 دو چیز لازم است و هر دو در `DATA_DIR/releases/` می‌نشینند:
 
     latest.json   {"versionCode": 3, "versionName": "1.2", "notes": "...",
-                   "file": "unstream-1.2.apk"}
-    unstream-1.2.apk
+                   "file": "musicbazi-1.2.apk"}
+    musicbazi-1.2.apk
 
 `file` اختیاری است؛ نبودنش یعنی نامِ فایل از `versionName` ساخته می‌شود
 (همان قالبی که `scripts/android-release.mjs` تولید می‌کند).
@@ -58,7 +58,7 @@ def current() -> Release | None:
         return None
 
     name = str(data.get("versionName") or "")
-    apk_name = str(data.get("file") or (f"unstream-{name}.apk" if name else ""))
+    apk_name = str(data.get("file") or (f"musicbazi-{name}.apk" if name else ""))
     apk = RELEASES_DIR / Path(apk_name).name
     return Release(
         version_code=_as_int(data.get("versionCode")),

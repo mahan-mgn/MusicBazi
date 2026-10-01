@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
 /**
- * پوسته‌ی اندرویدِ آنستریم.
+ * پوسته‌ی اندرویدِ موزیک بازی.
  *
  * کلِ رابط داخل خودِ APK بسته‌بندی می‌شود (`webDir: dist`) و فقط برای *داده*
  * به سرور وصل می‌شود — یعنی باز شدنِ اپ به شبکه وابسته نیست، ولی جستجو و
@@ -9,8 +9,8 @@ import type { CapacitorConfig } from '@capacitor/cli'
  * (`src/lib/server.ts`)، پس اینجا هیچ آی‌پیِ سفت‌شده‌ای نیست.
  */
 const config: CapacitorConfig = {
-  appId: 'app.unstream.client',
-  appName: 'آنستریم',
+  appId: 'app.musicbazi.client',
+  appName: 'موزیک بازی',
   webDir: 'dist',
   android: {
     /*

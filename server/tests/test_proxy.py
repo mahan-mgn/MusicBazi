@@ -70,8 +70,8 @@ def test_health_reports_absence_as_false(with_proxy):
 
 def test_ytdlp_proxy_falls_back_to_the_general_one(monkeypatch):
     """یک متغیر باید برای حالت رایج کافی باشد."""
-    monkeypatch.setenv("UNSTREAM_PROXY", "socks5h://127.0.0.1:1080")
-    monkeypatch.delenv("UNSTREAM_YTDLP_PROXY", raising=False)
+    monkeypatch.setenv("MUSICBAZI_PROXY", "socks5h://127.0.0.1:1080")
+    monkeypatch.delenv("MUSICBAZI_YTDLP_PROXY", raising=False)
 
     from app import config
 
@@ -81,5 +81,5 @@ def test_ytdlp_proxy_falls_back_to_the_general_one(monkeypatch):
     finally:
         # ماژول‌های دیگر مقدارها را در زمان ایمپورت گرفته‌اند؛ بدون برگرداندن،
         # تست‌های بعدی به یک config دستکاری‌شده نگاه می‌کنند
-        monkeypatch.delenv("UNSTREAM_PROXY")
+        monkeypatch.delenv("MUSICBAZI_PROXY", raising=False)
         importlib.reload(config)

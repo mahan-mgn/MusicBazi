@@ -34,8 +34,8 @@ export default defineConfig({
       // می‌کند و همان ۴۰۴ دوباره تکرار می‌شد
       includeAssets: ['icon.png', 'apple-touch-icon-180x180.png'],
       manifest: {
-        name: 'آنستریم — Unstream',
-        short_name: 'آنستریم',
+        name: 'موزیک بازی — Music Bazi',
+        short_name: 'موزیک بازی',
         description: 'دانلودر و پخش‌کننده‌ی موزیک، آلبوم و پلی‌لیست',
         lang: 'fa',
         dir: 'rtl',

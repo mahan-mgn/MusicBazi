@@ -49,20 +49,20 @@ const FIELDS: {
 }[] = [
   {
     id: 'spotify',
-    group: ['UNSTREAM_SPOTIFY_CLIENT_ID', 'UNSTREAM_SPOTIFY_CLIENT_SECRET'],
+    group: ['MUSICBAZI_SPOTIFY_CLIENT_ID', 'MUSICBAZI_SPOTIFY_CLIENT_SECRET'],
     label: (t) => t.setupSpotify,
     hint: (t) => t.setupSpotifyHint,
     url: 'https://developer.spotify.com/dashboard',
   },
   {
     id: 'proxy',
-    group: ['UNSTREAM_PROXY'],
+    group: ['MUSICBAZI_PROXY'],
     label: (t) => t.setupProxy,
     hint: (t) => t.setupProxyHint,
   },
   {
     id: 'telegram',
-    group: ['UNSTREAM_TELEGRAM_BOT_TOKEN'],
+    group: ['MUSICBAZI_TELEGRAM_BOT_TOKEN'],
     label: (t) => t.setupTelegram,
     hint: (t) => t.setupTelegramHint,
     url: 'https://t.me/BotFather',
@@ -70,7 +70,7 @@ const FIELDS: {
   },
   {
     id: 'gemini',
-    group: ['UNSTREAM_GEMINI_API_KEY'],
+    group: ['MUSICBAZI_GEMINI_API_KEY'],
     label: (t) => t.setupGemini,
     hint: (t) => t.setupGeminiHint,
     url: 'https://aistudio.google.com/apikey',
@@ -78,7 +78,7 @@ const FIELDS: {
   },
   {
     id: 'genius',
-    group: ['UNSTREAM_GENIUS_ACCESS_TOKEN'],
+    group: ['MUSICBAZI_GENIUS_ACCESS_TOKEN'],
     label: (t) => t.setupGenius,
     hint: (t) => t.setupGeniusHint,
     url: 'https://genius.com/api-clients',
@@ -86,14 +86,14 @@ const FIELDS: {
   },
   {
     id: 'acoustid',
-    group: ['UNSTREAM_ACOUSTID_KEY'],
+    group: ['MUSICBAZI_ACOUSTID_KEY'],
     label: (t) => t.setupAcoustid,
     hint: (t) => t.setupAcoustidHint,
     url: 'https://acoustid.org/new-application',
   },
   {
     id: 'audd',
-    group: ['UNSTREAM_AUDD_TOKEN'],
+    group: ['MUSICBAZI_AUDD_TOKEN'],
     label: (t) => t.setupAudd,
     hint: (t) => t.setupAuddHint,
     url: 'https://dashboard.audd.io',
@@ -373,7 +373,7 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
               {f.group.map((key) => (
                 <label key={key} className="mt-2 block">
                   <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-muted-2" dir="ltr">
-                    {key.replace('UNSTREAM_', '')}
+                    {key.replace('MUSICBAZI_', '')}
                   </span>
                   <div className="flex gap-2">
                     <input

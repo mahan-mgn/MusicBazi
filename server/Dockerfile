@@ -1,4 +1,4 @@
-# بک‌اند آنستریم — FastAPI + yt-dlp + ffmpeg
+# بک‌اند موزیک بازی — FastAPI + yt-dlp + ffmpeg
 FROM python:3.12-slim
 
 # ffmpeg      → ترنسکد و امبد کاور، بدونش هیچ دانلودی کامل نمی‌شود
@@ -21,9 +21,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 # دیتابیس و فایل‌ها روی volume می‌نشینند، وگرنه با هر بازسازی ایمیج می‌پرند
-ENV UNSTREAM_DOWNLOAD_DIR=/data/downloads \
-    UNSTREAM_DATA_DIR=/data/db \
-    UNSTREAM_JS_RUNTIME=node \
+ENV MUSICBAZI_DOWNLOAD_DIR=/data/downloads \
+    MUSICBAZI_DATA_DIR=/data/db \
+    MUSICBAZI_JS_RUNTIME=node \
     PYTHONUNBUFFERED=1
 VOLUME ["/data"]
 

@@ -121,4 +121,12 @@ describe('shuffle and history navigation in usePlayer', () => {
 
     vi.restoreAllMocks()
   })
+
+  it('setSleepTimer supports track_end mode', () => {
+    usePlayer.getState().setSleepTimer('track_end')
+    expect(usePlayer.getState().sleepAt).toBe('track_end')
+
+    usePlayer.getState().setSleepTimer(null)
+    expect(usePlayer.getState().sleepAt).toBeNull()
+  })
 })

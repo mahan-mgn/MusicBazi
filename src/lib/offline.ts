@@ -13,7 +13,7 @@ import type { LibraryItem } from './types'
  * Cache API اینجا هم در دسترس است و رفت‌وبرگشتِ پیام با سرویس‌ورکر چیزی اضافه
  * نمی‌کرد.
  */
-const CACHE = 'unstream-offline-v1'
+const CACHE = 'musicbazi-offline-v1'
 
 export function supported(): boolean {
   return typeof caches !== 'undefined'

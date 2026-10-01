@@ -12,20 +12,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-_TMP = Path(tempfile.mkdtemp(prefix="unstream-tests-"))
-os.environ.setdefault("UNSTREAM_DATA_DIR", str(_TMP / "data"))
-os.environ.setdefault("UNSTREAM_DOWNLOAD_DIR", str(_TMP / "downloads"))
-os.environ.setdefault("UNSTREAM_DB", str(_TMP / "data" / "test.db"))
-
-# سرویس‌های بیرونی در تست باید خاموش باشند. بدون این، `server/.env` توسعه‌دهنده
-# خوانده می‌شد و تستی که به شناسایی دست می‌زند با کلیدِ واقعی به AcoustID/AudD
-# وصل می‌شد — کند، شکننده، و روی سهمیه‌ی کسی حساب می‌شد.
-#
-# دو لایه لازم است: `UNSTREAM_ENV_NO_FILES` جلوی *خواندنِ فایل* را می‌گیرد
-# (config.py هیچ .envی نمی‌بیند)، و مقدارهای خالی جلوی ارث‌بری از محیطِ شل.
-os.environ.setdefault("UNSTREAM_ENV_NO_FILES", "1")
-for _off in ("UNSTREAM_ACOUSTID_KEY", "UNSTREAM_AUDD_TOKEN", "UNSTREAM_FPCALC"):
-    os.environ.setdefault(_off, "")
+_TMP = Path(tempfile.mkdtemp(prefix="musicbazi-tests-"))
+os.environ.setdefault("MUSICBAZI_DATA_DIR", str(_TMP / "data"))
+os.environ.setdefault("MUSICBAZI_DOWNLOAD_DIR", str(_TMP / "downloads"))
+os.environ.setdefault("MUSICBAZI_DB", str(_TMP / "data" / "test.db"))
+os.environ.setdefault("MUSICBAZI_ENV_NO_FILES", "1")
+for _off in ("ACOUSTID_KEY", "AUDD_TOKEN", "FPCALC"):
+    os.environ.setdefault(f"MUSICBAZI_{_off}", "")
 
 # تست‌ها از ریشه‌ی server/ اجرا می‌شوند
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -90,7 +83,7 @@ def fresh_db(tmp_path, monkeypatch):
     from app import db
 
     db.close()
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "unstream.db")
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "musicbazi.db")
     db.connect()
     yield db
     db.close()

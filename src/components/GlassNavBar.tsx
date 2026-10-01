@@ -215,7 +215,7 @@ function GlassNavBar({ active, onHome, onLibrary, onStats, onSearch }: Props) {
 
   // Expand full player
   const expandPlayer = useCallback(() => {
-    window.dispatchEvent(new Event('unstream:expand-player'))
+    window.dispatchEvent(new Event('musicbazi:expand-player'))
   }, [])
 
   const total = duration || (track?.durationMs ? track.durationMs / 1000 : 0)

@@ -15,7 +15,7 @@ import Shortcuts from './components/Shortcuts'
 import TabBar, { type Tab } from './components/TabBar'
 import { AlbumSkeleton, ArtistSkeleton, ResultsSkeleton } from './components/Skeletons'
 import EmptyState from './components/EmptyState'
-import { RetryIcon, WarnIcon } from './components/icons'
+import { RetryIcon, Spinner, WarnIcon } from './components/icons'
 import TelegramLink from './components/TelegramLink'
 import Toaster from './components/Toaster'
 import { api, API_MODE } from './lib/api'
@@ -41,6 +41,7 @@ import { findBestJob, toPlayItem } from './lib/stream'
 import { isDone, useDownloads } from './store/downloads'
 import { usePlayer } from './store/player'
 import { usePreview } from './lib/usePreview'
+import { usePullToRefresh } from './lib/usePullToRefresh'
 import { useRecent } from './store/recent'
 import { useSearchHistory } from './store/searchHistory'
 import { useSettings } from './store/settings'
@@ -179,6 +180,18 @@ export default function App() {
   // ویوِ بدون‌داده بتواند EmptyStateِ «تلاش دوباره»دار نشان بدهد
   const [detailError, setDetailError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+
+  const handleRefresh = useCallback(async () => {
+    if (view.kind === 'home') {
+      window.dispatchEvent(new Event('musicbazi:refresh-home'))
+    } else if (view.kind === 'library') {
+      window.dispatchEvent(new Event('musicbazi:refresh-library'))
+    } else {
+      setReloadKey((k) => k + 1)
+    }
+  }, [view.kind])
+
+  const { pullDistance, refreshing } = usePullToRefresh(handleRefresh)
   // مودالِ شناسایی اینجا زندگی می‌کند نه در هدر، چون نتیجه‌اش همان ردیف‌های
   // ترک است و آن‌ها به پیش‌نمایشِ مشترکِ همین صفحه نیاز دارند
   const [identifying, setIdentifying] = useState(() =>
@@ -328,15 +341,15 @@ export default function App() {
   // «برو به کتابخانه»ی توستِ پایانِ دانلود. رویداد است نه ایمپورت، چون
   // فرستنده‌اش یک استورِ بی‌خبر از ناوبری است
   useEffect(() => {
-    window.addEventListener('unstream:open-library', goLibrary)
-    return () => window.removeEventListener('unstream:open-library', goLibrary)
+    window.addEventListener('musicbazi:open-library', goLibrary)
+    return () => window.removeEventListener('musicbazi:open-library', goLibrary)
   }, [goLibrary])
 
   // قلبِ نوارِ پخش → «لایک‌ها». همان الگوی رویداد: PlayerBar استوری است بی‌خبر
   // از ناوبری، پس به‌جای prop گرفتن، فقط اعلام می‌کند و App مسیر را عوض می‌کند
   useEffect(() => {
-    window.addEventListener('unstream:open-liked', goLiked)
-    return () => window.removeEventListener('unstream:open-liked', goLiked)
+    window.addEventListener('musicbazi:open-liked', goLiked)
+    return () => window.removeEventListener('musicbazi:open-liked', goLiked)
   }, [goLiked])
 
   /*
@@ -354,12 +367,12 @@ export default function App() {
     const apply = (route: ShortcutRoute) => {
       if (!route) return
       if (route === 'search') {
-        window.dispatchEvent(new Event('unstream:focus-search'))
+        window.dispatchEvent(new Event('musicbazi:focus-search'))
       } else if (route === 'liked') {
         goLiked()
       } else {
         // resume: نوارِ پخش را باز می‌کند؛ اگر چیزی در صف نباشد همان خانه می‌ماند
-        window.dispatchEvent(new Event('unstream:expand-player'))
+        window.dispatchEvent(new Event('musicbazi:expand-player'))
       }
     }
     const off = onShortcut(apply)
@@ -519,11 +532,11 @@ export default function App() {
       }
     }
 
-    window.addEventListener('unstream:open-artist', onOpenArtist)
-    window.addEventListener('unstream:open-album', onOpenAlbum)
+    window.addEventListener('musicbazi:open-artist', onOpenArtist)
+    window.addEventListener('musicbazi:open-album', onOpenAlbum)
     return () => {
-      window.removeEventListener('unstream:open-artist', onOpenArtist)
-      window.removeEventListener('unstream:open-album', onOpenAlbum)
+      window.removeEventListener('musicbazi:open-artist', onOpenArtist)
+      window.removeEventListener('musicbazi:open-album', onOpenAlbum)
     }
   }, [navigate])
 
@@ -551,7 +564,7 @@ export default function App() {
   useEffect(() => onBackButton(() => backHandler.current()), [])
 
   /*
-   * «اشتراک‌گذاری» از تلگرام یا مرورگر به آنستریم.
+   * «اشتراک‌گذاری» از تلگرام یا مرورگر به موزیک بازی.
    *
    * متنِ اشتراک‌گذاری‌شده معمولاً لینکِ خالی نیست («این آهنگو گوش کن
    * https://...»)، پس اولین آدرسِ داخلش بیرون کشیده می‌شود. اگر آدرسی نبود،
@@ -643,6 +656,31 @@ export default function App() {
       {/* بنرِ «نسخه‌ی تازه هست» — فقط روی اندروید و فقط وقتی سرور نسخه‌ی
           تازه‌تری از نصبِ فعلی اعلام کرده باشد */}
       <UpdateBanner />
+
+      {/* نشانگر Pull-to-Refresh در بالای صفحه */}
+      {(pullDistance > 0 || refreshing) && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed top-[calc(var(--header-h)+0.5rem)] inset-x-0 z-40 flex justify-center transition-transform"
+          style={{ transform: `translateY(${Math.min(pullDistance, 48)}px)` }}
+        >
+          <div className="grid size-8 place-items-center rounded-full border border-line bg-panel/95 text-accent shadow-lg backdrop-blur-md">
+            {refreshing ? (
+              <Spinner className="size-4" />
+            ) : (
+              <span
+                className="text-xs transition-transform duration-100"
+                style={{
+                  transform: `rotate(${Math.min(180, (pullDistance / 64) * 180)}deg)`,
+                  opacity: Math.max(0.4, pullDistance / 64),
+                }}
+              >
+                ↓
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* 5xl نه 6xl: در ۱۴۴۰ پیکسل، ستونِ ۱۱۵۲ پیکسلی دو سویِ ردیف‌های آلبوم/
           هنرمند خلاِ مرده می‌ساخت؛ ۱۰۲۴ تراکمِ سالمی به ردیف‌ها می‌دهد */}

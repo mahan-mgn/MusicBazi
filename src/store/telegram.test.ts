@@ -56,7 +56,7 @@ const status = (over: Partial<{ connected: boolean; linked: boolean }> = {}) => 
   connected: true,
   linked: true,
   chatTitle: 'پیوی من',
-  botUsername: 'unstream_bot',
+  botUsername: 'musicbazi_bot',
   ...over,
 })
 

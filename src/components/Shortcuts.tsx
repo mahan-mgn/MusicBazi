@@ -140,7 +140,7 @@ export default function Shortcuts() {
         case 'f':
         case 'F':
           // نمای کامل مالِ نوار پخش است؛ همان‌جا گوش می‌دهد
-          window.dispatchEvent(new CustomEvent('unstream:expand-player'))
+          window.dispatchEvent(new CustomEvent('musicbazi:expand-player'))
           break
       }
     }

@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# بک‌اند آنستریم روی خودِ گوشی — داخل Termux اجرا می‌شود.
+# بک‌اند موزیک بازی روی خودِ گوشی — داخل Termux اجرا می‌شود.
 #
 # چرا Termux و نه جاسازیِ پایتون داخل APK:
 # FastAPI روی `pydantic-core` می‌دود و آن یک افزونه‌ی Rust است. برای اندروید هیچ
@@ -9,7 +9,7 @@
 # کامپایل می‌شود — و در عوض *هیچ خطی* از بک‌اند عوض نمی‌شود. همان کدِ لپ‌تاپ،
 # روی گوشی.
 #
-# کتابخانه‌ها چرا جدا می‌مانند: دیتابیس و فایل‌ها در `$HOME/unstream/` گوشی
+# کتابخانه‌ها چرا جدا می‌مانند: دیتابیس و فایل‌ها در `$HOME/musicbazi/` گوشی
 # می‌نشینند و سرور فقط روی `127.0.0.1` گوش می‌دهد. هیچ مسیری بین آرشیوِ گوشی و
 # آرشیوِ لپ‌تاپ وجود ندارد — نه همگام‌سازی، نه هم‌نام‌سازی. دو کتابخانه‌ی مستقل.
 #
@@ -24,9 +24,9 @@
 #   3. در Termux:
 #
 #        termux-setup-storage      # اجازه‌ی خواندنِ Download
-#        bash /storage/emulated/0/Download/unstream/scripts/phone-server.sh
+#        bash /storage/emulated/0/Download/MusicBazi/scripts/phone-server.sh
 #
-#   4. در اپ آنستریم: «روی این گوشی».
+#   4. در اپ موزیک بازی: «روی این گوشی».
 #
 # ---------------------------------------------------------------------------
 # فرمان‌ها:
@@ -49,14 +49,14 @@ set -euo pipefail
 # نمی‌آید.
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-PREFIX="$HOME/unstream"
+PREFIX="$HOME/musicbazi"
 PKG_DIR="$PREFIX/app"        # کپیِ پکیجِ app روی گوشی
 DATA_DIR="$PREFIX/data"
 DOWNLOAD_DIR="$PREFIX/downloads"
 PID_FILE="$PREFIX/server.pid"
 LOG_FILE="$PREFIX/server.log"
 ENV_FILE="$PREFIX/env.sh"       # تنظیماتِ کاربر (کوکی، پروکسی، …)
-PORT="${UNSTREAM_PHONE_PORT:-8000}"
+PORT="${MUSICBAZI_PHONE_PORT:-8000}"
 
 # پکیج‌های Termux. دو دسته‌اند و دلیلِ جدا بودنشان متفاوت است:
 #
@@ -127,16 +127,14 @@ find_src() {
   local guess
   local script_repo
   script_repo="$(cd "$(dirname "$SCRIPT_PATH")/.." 2>/dev/null && pwd)" || script_repo=""
-  for guess in "${FROM_ARG:-}" "${UNSTREAM_SRC:-}" \
+  for guess in "${FROM_ARG:-}" "${MUSICBAZI_SRC:-}" \
                "$script_repo" \
                "$PWD" \
                "$HOME/Download/MusicBazi" \
                "$HOME/Downloads/MusicBazi" \
                "$HOME/MusicBazi" \
-               "$HOME/unstream" \
-               "/storage/emulated/0/Download/unstream" \
                "/storage/emulated/0/Download/MusicBazi" \
-               "/storage/emulated/0/Documents/unstream"; do
+               "/storage/emulated/0/Documents/MusicBazi"; do
     if [ -n "$guess" ] && [ -f "$guess/server/app/main.py" ]; then
       printf '%s\n' "$guess/server"
       return 0
@@ -160,7 +158,7 @@ install() {
   local src
   src="$(find_src)" || die "پوشه‌ی پروژه روی گوشی پیدا نشد.
   سورس را با from=<مسیر> بده، مثلاً:
-    bash phone-server.sh from=/storage/emulated/0/Download/unstream
+    bash phone-server.sh from=/storage/emulated/0/Download/MusicBazi
   (اول «termux-setup-storage» را زده باشی.)"
 
   # اجرای دوباره نباید همه‌چیز را از نو بکشد. `pkg install` و به‌ویژه
@@ -193,7 +191,7 @@ install() {
   # ناپدید می‌شود، و SQLite روی آن قفل‌گذاریِ درست ندارد.
   #
   # فقط `app/` — نه کلِ پوشه‌ی server. کپیِ کلِ آن یعنی `.venv` صدهامگابایتی،
-  # `data/unstream.db` و `downloads/` لپ‌تاپ هم روی گوشی بنشینند: هم فضا را
+  # `data/musicbazi.db` و `downloads/` لپ‌تاپ هم روی گوشی بنشینند: هم فضا را
   # می‌خورند، هم دقیقاً همان چیزی را که این طرح باید جدا نگه دارد با گوشی
   # می‌کنند. سرور برای بالا آمدن جز `app/` به چیزی نیاز ندارد.
   cp -r "$src/app" "$PKG_DIR"
@@ -226,7 +224,7 @@ install() {
       pkg install -y "${MOOD_PKGS[@]}" >/dev/null 2>&1 || true
       pip install --no-cache-dir librosa >/dev/null 2>&1 \
         && ok "librosa نصب شد — شافلِ هم‌حس‌وحال فعال" \
-        || warn "librosa ساخته نشد — شافل تصادفیِ ساده می‌ماند (UNSTREAM_MOOD=0)"
+        || warn "librosa ساخته نشد — شافل تصادفیِ ساده می‌ماند (MUSICBAZI_MOOD=0)"
     else
       warn "numpy در دسترس نیست — تحلیل حس‌وحال خاموش می‌ماند"
     fi
@@ -239,17 +237,17 @@ install() {
 #
 # کوکی یوتیوب: «phone-server.sh cookies <مسیر>» می‌نویسدش. بدونش یوتیوب با
 # «Sign in to confirm you're not a bot» رد می‌شود (ساندکلاد کار می‌کند).
-export UNSTREAM_COOKIES_FILE="$HOME/unstream/cookies.txt"
+export MUSICBAZI_COOKIES_FILE="$HOME/musicbazi/cookies.txt"
 #
 # پروکسی — برای شبکه‌ای که یوتیوب/کاتالوگ‌ها مستقیم درنمی‌آیند. socks5h یعنی
 # DNS هم آن‌طرف حل شود؛ روی شبکه‌ی فیلترشده معمولاً همین تنها حالتِ کاری است.
 # «phone-server.sh proxy socks5h://127.0.0.1:1080»
-# export UNSTREAM_PROXY=
+# export MUSICBAZI_PROXY=
 #
 # اسپاتیفای/دیزر/اپل‌موزیک برای متادیتا لازم‌اند ولی اختیاری‌اند؛ کلیدِ اسپاتیفای
 # را همین‌جا بگذار تا لینک‌هایش دقیق خوانده شوند.
-# export UNSTREAM_SPOTIFY_CLIENT_ID=
-# export UNSTREAM_SPOTIFY_CLIENT_SECRET=
+# export MUSICBAZI_SPOTIFY_CLIENT_ID=
+# export MUSICBAZI_SPOTIFY_CLIENT_SECRET=
 ENV
   ok "$ENV_FILE"
 
@@ -292,7 +290,7 @@ finally:
 PY
 }
 
-# کشتنِ هر سرورِ آنستریم، از روی /proc.
+# کشتنِ هر سرورِ موزیک بازی، از روی /proc.
 #
 # چرا نه `pkill`: در Termux نیست و `|| true` شکستش را بی‌صدا می‌بلعید — یعنی
 # یتیم سرِ جایش می‌ماند و اسکریپت همان bind error را می‌دید. چرا نه PID فایل:
@@ -378,21 +376,21 @@ start() {
 
   . "$ENV_FILE" 2>/dev/null || true
 
-  # مسیرها همه محلی‌اند. UNSTREAM_DATA_DIR را config.py برای DB هم استفاده
-  # می‌کند، پس UNSTREAM_DB لازم نیست.
-  export UNSTREAM_DOWNLOAD_DIR="$DOWNLOAD_DIR"
-  export UNSTREAM_DATA_DIR="$DATA_DIR"
+  # مسیرها همه محلی‌اند. MUSICBAZI_DATA_DIR را config.py برای DB هم استفاده
+  # می‌کند، پس MUSICBAZI_DB لازم نیست.
+  export MUSICBAZI_DOWNLOAD_DIR="$DOWNLOAD_DIR"
+  export MUSICBAZI_DATA_DIR="$DATA_DIR"
 
-  # UNSTREAM_FFMPEG *پوشه* است نه مسیر خودِ فایل: config.py آن را به
+  # MUSICBAZI_FFMPEG *پوشه* است نه مسیر خودِ فایل: config.py آن را به
   # `shutil.which("ffmpeg", path=...)` می‌دهد. اگر فایل بدهیم، which آن را به‌عنوان
   # پوشه جست‌وجو می‌کند، چیزی پیدا نمی‌کند و به fallbackِ PATH می‌افتد — که در
   # Termux تصادفاً همان نتیجه را می‌دهد، ولی اگر ffmpeg روزی بیرونِ PATH باشد
   # (نصبِ دستی) فقط حالتِ پوشه‌ای کار می‌کند. همان چیزی که خودِ config.py در
   # خطِ `FFMPEG_LOCATION` می‌سازد، اینجا هم می‌سازیم.
   if command -v ffmpeg >/dev/null 2>&1; then
-    export UNSTREAM_FFMPEG="$(dirname "$(command -v ffmpeg)")"
+    export MUSICBAZI_FFMPEG="$(dirname "$(command -v ffmpeg)")"
   fi
-  export UNSTREAM_JS_RUNTIME="$(command -v node 2>/dev/null || true)"
+  export MUSICBAZI_JS_RUNTIME="$(command -v node 2>/dev/null || true)"
   export PYTHONUNBUFFERED=1
 
   # ۱۲۷.۰.۰.1 عمدی است نه 0.0.0.0: سرورِ گوشی نباید روی وای‌فای عمومی هم
@@ -483,10 +481,10 @@ set_proxy() {
     phone-server.sh proxy socks5h://127.0.0.1:1080"
   mkdir -p "$PREFIX"
   touch "$ENV_FILE"
-  # خطِ قبلی را عوض می‌کنیم نه اینکه اضافه‌اش کنیم: دو exportِ UNSTREAM_PROXY
+  # خطِ قبلی را عوض می‌کنیم نه اینکه اضافه‌اش کنیم: دو exportِ MUSICBAZI_PROXY
   # یعنی دومی برنده است و کاربر هیچ‌وقت نمی‌فهمد اولی کجا رفته.
-  grep -v '^ *#\? *export UNSTREAM_PROXY=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
-  printf 'export UNSTREAM_PROXY=%s\n' "\"$url\"" >> "$ENV_FILE.tmp"
+  grep -v '^ *#\? *export MUSICBAZI_PROXY=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+  printf 'export MUSICBAZI_PROXY=%s\n' "\"$url\"" >> "$ENV_FILE.tmp"
   mv "$ENV_FILE.tmp" "$ENV_FILE"
   ok "پروکسی ست شد: $url"
   warn "ری‌استارت کن: phone-server.sh restart"
@@ -498,15 +496,15 @@ set_spotify() {
     phone-server.sh spotify 4c5f1e… <secret>
 
   ساخت: developer.spotify.com/dashboard → Create app. یا همان جفتی که روی
-  لپ‌تاپ در server/.env داری (UNSTREAM_SPOTIFY_CLIENT_ID / SECRET)."
+  لپ‌تاپ در server/.env داری (MUSICBAZI_SPOTIFY_CLIENT_ID / SECRET)."
   mkdir -p "$PREFIX"
   touch "$ENV_FILE"
   # secret داخلِ این فایل می‌نشیند؛ همان قاعده‌ی کوکی‌ها
   chmod 600 "$ENV_FILE"
-  grep -v '^ *#\? *export UNSTREAM_SPOTIFY_CLIENT_ID=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
-  printf 'export UNSTREAM_SPOTIFY_CLIENT_ID=%s\n' "\"$cid\"" >> "$ENV_FILE.tmp"
-  grep -v '^ *#\? *export UNSTREAM_SPOTIFY_CLIENT_SECRET=' "$ENV_FILE.tmp" > "$ENV_FILE" || true
-  printf 'export UNSTREAM_SPOTIFY_CLIENT_SECRET=%s\n' "\"$secret\"" >> "$ENV_FILE"
+  grep -v '^ *#\? *export MUSICBAZI_SPOTIFY_CLIENT_ID=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+  printf 'export MUSICBAZI_SPOTIFY_CLIENT_ID=%s\n' "\"$cid\"" >> "$ENV_FILE.tmp"
+  grep -v '^ *#\? *export MUSICBAZI_SPOTIFY_CLIENT_SECRET=' "$ENV_FILE.tmp" > "$ENV_FILE" || true
+  printf 'export MUSICBAZI_SPOTIFY_CLIENT_SECRET=%s\n' "\"$secret\"" >> "$ENV_FILE"
   rm -f "$ENV_FILE.tmp"
   ok "اعتبارنامه‌ی اسپاتیفای ست شد"
   warn "ری‌استارت کن: phone-server.sh restart"
@@ -527,8 +525,8 @@ sys.exit(0 if -24 <= v <= 0 else 1)
 PY
   mkdir -p "$PREFIX"
   touch "$ENV_FILE"
-  grep -v '^ *#\? *export UNSTREAM_LOUDNESS_TARGET=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
-  printf 'export UNSTREAM_LOUDNESS_TARGET=%s\n' "\"$lufs\"" >> "$ENV_FILE.tmp"
+  grep -v '^ *#\? *export MUSICBAZI_LOUDNESS_TARGET=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+  printf 'export MUSICBAZI_LOUDNESS_TARGET=%s\n' "\"$lufs\"" >> "$ENV_FILE.tmp"
   mv "$ENV_FILE.tmp" "$ENV_FILE"
   ok "بلندیِ هدف ست شد: $lufs LUFS"
   say "  آهنگ‌های تازه‌دانلود با همین بلندی پخش می‌شوند؛ در اپ هم از تنظیم‌های
@@ -538,7 +536,7 @@ PY
 enable_boot() {
   command -v termux-wake-lock >/dev/null 2>&1 || warn "Termux:Boot نصب نیست؛ فایل آماده می‌شود ولی خودکار بالا نمی‌آید."
   mkdir -p "$HOME/.termux/boot"
-  cat > "$HOME/.termux/boot/unstream-server.sh" <<BOOT
+  cat > "$HOME/.termux/boot/musicbazi-server.sh" <<BOOT
 #!/data/data/com.termux/files/usr/bin/bash
 termux-wake-lock
 # مکث، نه بی‌موردی: بعد از روشن‌شدنِ گوشی شبکه هنوز بالا نیامده و سرورِ بی‌شبکه
@@ -546,9 +544,9 @@ termux-wake-lock
 sleep 20
 bash $SCRIPT_PATH start
 BOOT
-  chmod +x "$HOME/.termux/boot/unstream-server.sh"
-  ok "شروعِ خودکار فعال شد — \$HOME/.termux/boot/unstream-server.sh"
-  say "${C_DIM}برای لغو: rm ~/.termux/boot/unstream-server.sh${C_OFF}"
+  chmod +x "$HOME/.termux/boot/musicbazi-server.sh"
+  ok "شروعِ خودکار فعال شد — \$HOME/.termux/boot/musicbazi-server.sh"
+  say "${C_DIM}برای لغو: rm ~/.termux/boot/musicbazi-server.sh${C_OFF}"
 }
 
 # ------------------------------------------------------------------ ورودی --

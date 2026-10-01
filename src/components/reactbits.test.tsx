@@ -43,7 +43,7 @@ describe('PillNav', () => {
   ]
 
   it('هر دو مقصد را با href واقعی رندر می‌کند', () => {
-    const html = renderToStaticMarkup(<PillNav items={items} logoAlt="آنستریم" />)
+    const html = renderToStaticMarkup(<PillNav items={items} logoAlt="موزیک بازی" />)
     expect(html).toContain('href="/?library=1"')
     expect(html).toContain('خانه')
     expect(html).toContain('کتابخانه')

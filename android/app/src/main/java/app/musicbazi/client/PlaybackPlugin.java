@@ -1,4 +1,4 @@
-package app.unstream.client;
+package app.musicbazi.client;
 
 import android.Manifest;
 import android.content.Intent;

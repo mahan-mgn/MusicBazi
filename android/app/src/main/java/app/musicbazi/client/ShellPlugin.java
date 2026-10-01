@@ -1,4 +1,4 @@
-package app.unstream.client;
+package app.musicbazi.client;
 
 import android.content.Context;
 import android.content.Intent;
@@ -65,10 +65,10 @@ public class ShellPlugin extends Plugin {
      */
     private String pendingRoute;
 
-    /** مقدارِ `unstream.route` از اینتنتِ میان‌بُر (res/xml/shortcuts.xml) */
+    /** مقدارِ `musicbazi.route` از اینتنتِ میان‌بُر (res/xml/shortcuts.xml) */
     private void readRoute(Intent intent) {
         if (intent == null) return;
-        String route = intent.getStringExtra("unstream.route");
+        String route = intent.getStringExtra("musicbazi.route");
         if (route != null && !route.trim().isEmpty()) pendingRoute = route.trim();
     }
 

@@ -17,7 +17,7 @@
 
 احراز هویت عمداً ندارد (تصمیمِ کاربر: پروژه‌ی شخصی/دوستانه). روی شبکه‌ای که
 غریبه به این پورت دسترسی دارد، هر بازدیدکننده‌ای می‌تواند کلیدها را عوض کند —
-آن‌جا یا پورت را ببند یا از `UNSTREAM_ALLOWED_ORIGINS` و یک پروکسیِ احراز هویت‌دار
+آن‌جا یا پورت را ببند یا از `MUSICBAZI_ALLOWED_ORIGINS` و یک پروکسیِ احراز هویت‌دار
 استفاده کن.
 """
 
@@ -50,23 +50,23 @@ ENV_PATH = DATA_DIR / ".env"
 COOKIES_PATH = DATA_DIR / "cookies.txt"
 
 # هر چیزی که ویزارد اجازه دارد بنویسد. این مجموعه عمداً تنگ است: `PATH` یا
-# `UNSTREAM_DATA_DIR` یا `PYTHONPATH` اگر باز بودند، یک درخواستِ HTTP می‌توانست
+# `MUSICBAZI_DATA_DIR` یا `PYTHONPATH` اگر باز بودند، یک درخواستِ HTTP می‌توانست
 # مسیرِ دیتابیس را عوض کند یا باینریِ دلخواه اجرا کند.
 ALLOWED_KEYS = frozenset(
     {
-        "UNSTREAM_SPOTIFY_CLIENT_ID",
-        "UNSTREAM_SPOTIFY_CLIENT_SECRET",
-        "UNSTREAM_GENIUS_ACCESS_TOKEN",
-        "UNSTREAM_ACOUSTID_KEY",
-        "UNSTREAM_AUDD_TOKEN",
-        "UNSTREAM_GEMINI_API_KEY",
-        "UNSTREAM_TELEGRAM_BOT_TOKEN",
-        "UNSTREAM_SOUNDCLOUD_CLIENT_ID",
-        "UNSTREAM_PROXY",
-        "UNSTREAM_YTDLP_PROXY",
-        "UNSTREAM_COOKIES_FILE",
-        "UNSTREAM_COOKIES_BROWSER",
-        "UNSTREAM_SETUP_DONE",
+        "MUSICBAZI_SPOTIFY_CLIENT_ID",
+        "MUSICBAZI_SPOTIFY_CLIENT_SECRET",
+        "MUSICBAZI_GENIUS_ACCESS_TOKEN",
+        "MUSICBAZI_ACOUSTID_KEY",
+        "MUSICBAZI_AUDD_TOKEN",
+        "MUSICBAZI_GEMINI_API_KEY",
+        "MUSICBAZI_TELEGRAM_BOT_TOKEN",
+        "MUSICBAZI_SOUNDCLOUD_CLIENT_ID",
+        "MUSICBAZI_PROXY",
+        "MUSICBAZI_YTDLP_PROXY",
+        "MUSICBAZI_COOKIES_FILE",
+        "MUSICBAZI_COOKIES_BROWSER",
+        "MUSICBAZI_SETUP_DONE",
     }
 )
 
@@ -96,7 +96,7 @@ def _set_map() -> dict[str, str]:
 
 
 #: پرچمِ «کاربر ویزارد را دیده» — تنها چیزی که با آن دروازه باز می‌ماند
-_DONE_FLAG = "UNSTREAM_SETUP_DONE"
+_DONE_FLAG = "MUSICBAZI_SETUP_DONE"
 
 
 def _setup_done(values: dict[str, str | None]) -> bool:
@@ -105,7 +105,7 @@ def _setup_done(values: dict[str, str | None]) -> bool:
 
     دو راهِ «بله»:
 
-      ۱. کاربر خودش ویزارد را رد یا تمام کرده (`UNSTREAM_SETUP_DONE=1`).
+      ۱. کاربر خودش ویزارد را رد یا تمام کرده (`MUSICBAZI_SETUP_DONE=1`).
       ۲. نصب **از قبل** تنظیم است. این حالت همان چیزی است که کاربرِ قدیمی را
          پشتِ یک صفحه‌ی خالی می‌نشاند: `server/.env` پر از کلید از قبل بوده،
          ولی چون هیچ‌وقت ویزارد ندیده، پرچمِ ۱ هیچ‌جا ست نشده — و اپی که کاملاً
@@ -194,8 +194,8 @@ class TestRequest(BaseModel):
 
 
 async def _test_spotify(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    cid = v.get("UNSTREAM_SPOTIFY_CLIENT_ID", "").strip()
-    secret = v.get("UNSTREAM_SPOTIFY_CLIENT_SECRET", "").strip()
+    cid = v.get("MUSICBAZI_SPOTIFY_CLIENT_ID", "").strip()
+    secret = v.get("MUSICBAZI_SPOTIFY_CLIENT_SECRET", "").strip()
     if not cid or not secret:
         return False, "هر دو فیلد لازم است"
     res = await client.post(
@@ -212,7 +212,7 @@ async def _test_spotify(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[b
 
 
 async def _test_genius(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    token = v.get("UNSTREAM_GENIUS_ACCESS_TOKEN", "").strip()
+    token = v.get("MUSICBAZI_GENIUS_ACCESS_TOKEN", "").strip()
     if not token:
         return False, "کلید خالی است"
     res = await client.get(
@@ -229,7 +229,7 @@ async def _test_genius(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bo
 
 
 async def _test_acoustid(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    key = v.get("UNSTREAM_ACOUSTID_KEY", "").strip()
+    key = v.get("MUSICBAZI_ACOUSTID_KEY", "").strip()
     if not key:
         return False, "کلید خالی است"
     res = await client.get(
@@ -249,7 +249,7 @@ async def _test_acoustid(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[
 
 
 async def _test_audd(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    token = v.get("UNSTREAM_AUDD_TOKEN", "").strip()
+    token = v.get("MUSICBAZI_AUDD_TOKEN", "").strip()
     if not token:
         return False, "توکن خالی است"
     # بدونِ فایل می‌فرستیم: سرویس برای توکنِ درست می‌گوید «فایل لازم است» و برای
@@ -268,7 +268,7 @@ async def _test_audd(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool
 
 
 async def _test_gemini(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    key = v.get("UNSTREAM_GEMINI_API_KEY", "").strip()
+    key = v.get("MUSICBAZI_GEMINI_API_KEY", "").strip()
     if not key:
         return False, "کلید خالی است"
     # کوچک‌ترین درخواستِ ممکن: maxOutputTokens=1 تا سهمیه‌ی رایگان با یک
@@ -298,7 +298,7 @@ async def _test_gemini(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bo
 
 
 async def _test_telegram(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    token = v.get("UNSTREAM_TELEGRAM_BOT_TOKEN", "").strip()
+    token = v.get("MUSICBAZI_TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         return False, "توکن خالی است"
     res = await client.get(f"https://api.telegram.org/bot{token}/getMe", timeout=15.0)
@@ -312,7 +312,7 @@ async def _test_telegram(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[
 
 
 async def _test_proxy(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    proxy = v.get("UNSTREAM_PROXY", "").strip()
+    proxy = v.get("MUSICBAZI_PROXY", "").strip()
     if not proxy:
         return False, "آدرس خالی است"
     if "://" not in proxy:
@@ -477,8 +477,8 @@ async def setup_state() -> dict:
             "ffmpeg": bool(cfg.FFMPEG_LOCATION),
             "jsRuntime": cfg.JS_RUNTIME or None,
             "potoken": bool(cfg.POT_BASE_URL or cfg.POT_SERVER_HOME),
-            "cookies": bool(values.get("UNSTREAM_COOKIES_FILE"))
-            or bool(values.get("UNSTREAM_COOKIES_BROWSER")),
+            "cookies": bool(values.get("MUSICBAZI_COOKIES_FILE"))
+            or bool(values.get("MUSICBAZI_COOKIES_BROWSER")),
             "proxy": bool(cfg.PROXY),
             "internet": reach.snapshot()["online"],
             "container": _in_container(),
@@ -508,7 +508,7 @@ async def setup_save(req: SaveRequest) -> dict:
     unknown = set(req.values) - ALLOWED_KEYS
     if unknown:
         raise HTTPException(400, "کلیدِ مجاز نیست")
-    # مقدارِ چندخطی یعنی تزریق: `UNSTREAM_PROXY=a\nUNSTREAM_DB=/evil` یک خط
+    # مقدارِ چندخطی یعنی تزریق: `MUSICBAZI_PROXY=a\nMUSICBAZI_DB=/evil` یک خط
     # مجاز می‌نویسد و خطِ دومِ دلخواه را کنارش، بیرونِ allowlist. این اندپوینت
     # احراز هویت ندارد، پس تنها دفاع همین است.
     for k, v in req.values.items():
@@ -516,7 +516,7 @@ async def setup_save(req: SaveRequest) -> dict:
             raise HTTPException(400, f"مقدارِ {k} نباید چند خط باشد")
     values = {k: v.strip() for k, v in req.values.items()}
     if req.done:
-        values["UNSTREAM_SETUP_DONE"] = "1"
+        values["MUSICBAZI_SETUP_DONE"] = "1"
     changed = write_env(values)
     # مقدارهای تازه را در همین فرایند هم می‌نشینیم تا `restartNeeded` و
     # `GET /api/setup` بی‌ری‌استارت هم درست جواب بدهند؛ ماژول‌های مصرف‌کننده
@@ -545,7 +545,7 @@ async def setup_save(req: SaveRequest) -> dict:
 @router.post("/api/setup/cookies")
 async def setup_cookies(file: UploadFile = File(...)) -> dict:
     """
-    کوکیِ یوتیوب. فایل را روی دیسک می‌نشاند و `UNSTREAM_COOKIES_FILE` را ست می‌کند.
+    کوکیِ یوتیوب. فایل را روی دیسک می‌نشاند و `MUSICBAZI_COOKIES_FILE` را ست می‌کند.
 
     اعتبارسنجی فقط قالب است، نه اعتبارِ کوکی — فهمیدنِ اینکه کوکی منقضی شده
     یک استخراجِ واقعی از یوتیوب می‌خواهد (چند ثانیه و گاهی «not a bot»). قالبِ
@@ -572,8 +572,8 @@ async def setup_cookies(file: UploadFile = File(...)) -> dict:
 
     COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
     COOKIES_PATH.write_bytes(raw)
-    changed = write_env({"UNSTREAM_COOKIES_FILE": str(COOKIES_PATH)})
-    os.environ["UNSTREAM_COOKIES_FILE"] = str(COOKIES_PATH)
+    changed = write_env({"MUSICBAZI_COOKIES_FILE": str(COOKIES_PATH)})
+    os.environ["MUSICBAZI_COOKIES_FILE"] = str(COOKIES_PATH)
     return {
         "ok": True,
         "path": str(COOKIES_PATH),

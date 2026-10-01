@@ -1,4 +1,4 @@
-package app.unstream.client;
+package app.musicbazi.client;
 
 import android.graphics.Color;
 import android.os.Build;

@@ -36,7 +36,7 @@ export default function AudioSettings() {
 
   // شمارشِ معکوسِ تایمر باید زنده باشد، ولی فقط وقتی دیده می‌شود
   useEffect(() => {
-    if (!open || sleepAt === null) return
+    if (!open || typeof sleepAt !== 'number') return
     const id = setInterval(() => tick((n) => n + 1), 1000)
     return () => clearInterval(id)
   }, [open, sleepAt])
@@ -148,7 +148,9 @@ export default function AudioSettings() {
               </span>
               {sleepAt !== null && (
                 <span className="text-[11px] text-accent">
-                  {t.sleepIn(digits(remaining(sleepAt), lang))}
+                  {sleepAt === 'track_end'
+                    ? t.sleepEndOfTrack
+                    : t.sleepIn(digits(remaining(sleepAt), lang))}
                 </span>
               )}
             </div>
@@ -163,6 +165,17 @@ export default function AudioSettings() {
                 }`}
               >
                 {t.sleepOff}
+              </button>
+              <button
+                onClick={() => setSleepTimer(sleepAt === 'track_end' ? null : 'track_end')}
+                aria-pressed={sleepAt === 'track_end'}
+                className={`rounded-full border px-2.5 py-1 text-[11px] transition ${
+                  sleepAt === 'track_end'
+                    ? 'border-accent bg-accent font-semibold text-accent-fg'
+                    : 'border-line text-muted hover:text-fg'
+                }`}
+              >
+                {t.sleepEndOfTrack}
               </button>
               {SLEEP_CHOICES.map((minutes) => (
                 <button

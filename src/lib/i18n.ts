@@ -10,7 +10,7 @@ export type Lang = 'fa' | 'en'
  */
 const DICT = {
   fa: {
-    brand: 'آنستریم',
+    brand: 'موزیک بازی',
     quality: 'کیفیت',
     qualityOriginal: 'اورجینال',
     qualityMp3: 'ام‌پی‌تری',
@@ -24,7 +24,7 @@ const DICT = {
     heroLine1: 'دانلود موزیک،',
     heroLine2: 'آلبوم و پلی‌لیست',
     heroBody:
-      'لینک اسپاتیفای، دیزر، اپل‌موزیک، یوتیوب یا ساندکلاد رو بچسبون — یا همه‌ی کاتالوگ‌ها رو یک‌جا جستجو کن. آنستریم فایل صوتی رو پیدا می‌کند و هر MP3 را برایت تگ می‌زند. بدون حساب کاربری، بدون کلید.',
+      'لینک اسپاتیفای، دیزر، اپل‌موزیک، یوتیوب یا ساندکلاد رو بچسبون — یا همه‌ی کاتالوگ‌ها رو یک‌جا جستجو کن. موزیک بازی فایل صوتی رو پیدا می‌کند و هر MP3 را برایت تگ می‌زند. بدون حساب کاربری، بدون کلید.',
     homeSearchCta: 'جستجو یا چسباندن لینک',
     heroActionIdentify: 'شناسایی با صدا',
     heroActionIdentifyHint: 'شناسایی آهنگ در حال پخش با میکروفون',
@@ -306,7 +306,7 @@ const DICT = {
     intranetPageMissing: 'این صفحه ذخیره نشده بود — بدون اینترنت بین‌الملل باز نمی‌شود.',
     intranetDownload: 'رفت به صفِ انتظار — با برگشتن اینترنت خودش دانلود می‌شود',
     intranetDeferredCount: (n: number) => `${fa(n)} کار منتظر اینترنت است`,
-    saveToPhoneDone: 'در پوشه‌ی Music/Unstream گوشی ذخیره شد',
+    saveToPhoneDone: 'در پوشه‌ی Music/MusicBazi گوشی ذخیره شد',
     saveToPhoneFailed: 'ذخیره در گوشی نشد',
     libraryEmpty: 'هنوز چیزی دانلود نکرده‌ای. هرچه بگیری اینجا می‌ماند.',
     libraryUnavailable: 'کتابخانه فقط با بک‌اند واقعی کار می‌کند — در مود دمو فایلی روی دیسک نیست.',
@@ -424,7 +424,7 @@ const DICT = {
     identifyPick: 'انتخاب فایل',
     identifyWorking: 'دارم گوش می‌دم…',
     identifyNoMatch:
-      'نشناختمش. شناساییِ رایگان (AcoustID) فقط فایلِ کاملِ آهنگ را می‌شناسد — نه صدایی که با میکروفون از بلندگو ضبط شده و نه یک تکه‌ی کوتاه. برای آن حالت باید UNSTREAM_AUDD_TOKEN روی سرور تنظیم شود.',
+      'نشناختمش. شناساییِ رایگان (AcoustID) فقط فایلِ کاملِ آهنگ را می‌شناسد — نه صدایی که با میکروفون از بلندگو ضبط شده و نه یک تکه‌ی کوتاه. برای آن حالت باید MUSICBAZI_AUDD_TOKEN روی سرور تنظیم شود.',
     identifyConfidence: (n: number) => `اطمینان ${fa(n)}٪`,
     identifyMatches: 'حدس‌های دیگر',
     identifyResults: 'نسخه‌های قابل دانلود',
@@ -451,6 +451,7 @@ const DICT = {
     sleepTimer: 'تایمر خواب',
     sleepOff: 'خاموش',
     sleepMinutes: (n: number) => `${fa(n)} دقیقه`,
+    sleepEndOfTrack: 'پایان همین قطعه',
     sleepIn: (m: string) => `تا ${m} دیگر خاموش می‌شود`,
     sleepCancel: 'لغو تایمر',
     audioGraphMissing: 'مرورگر این تنظیم‌ها را پشتیبانی نمی‌کند',
@@ -544,9 +545,9 @@ const DICT = {
     moreMenu: 'گزینه‌های بیشتر',
 
     // ---------- آدرس سرور (فقط در اپ اندروید) ----------
-    serverTitle: 'آنستریم روی کدام کامپیوتر است؟',
+    serverTitle: 'موزیک بازی روی کدام کامپیوتر است؟',
     serverBody:
-      'اپ خودش موزیک را پیدا نمی‌کند — سرور آنستریم روی کامپیوترت این کار را می‌کند. آدرسش را اینجا بده.',
+      'اپ خودش موزیک را پیدا نمی‌کند — سرور موزیک بازی روی کامپیوترت این کار را می‌کند. آدرسش را اینجا بده.',
     serverLabel: 'آدرس سرور',
     serverPlaceholder: '192.168.0.183:8080',
     serverHint: 'اگر با داکر بالا آورده‌ای پورت ۸۰۸۰ است. آدرس تونل هم قبول است.',
@@ -557,10 +558,14 @@ const DICT = {
     serverSave: 'ذخیره و ادامه',
     serverChange: 'آدرس سرور',
     serverCurrent: (url: string) => `الان: ${url}`,
+    serverAutoScan: 'اسکن خودکار وای‌فای',
+    serverScanning: 'در حال جستجو در شبکه…',
+    serverScanNotFound: 'سروری در شبکه پیدا نشد',
+    serverSwitchTo: (url: string) => `سوئیچ سریع به ${url}`,
 
     // ---------- سرورِ روی خودِ گوشی ----------
     serverLocal: 'روی این گوشی',
-    serverLocalTitle: 'آنستریم روی خودِ گوشی',
+    serverLocalTitle: 'موزیک بازی روی خودِ گوشی',
     serverLocalBody:
       'همه‌ی قابلیت‌ها — جستجو، دانلود، کتابخانه — روی همین گوشی کار می‌کنند و کتابخانه‌اش از کامپیوتر جداست. یک‌بار باید بک‌اند را در Termux بالا بیاوری.',
     serverLocalHow: 'چطور روی گوشی بالا بیاورم؟',
@@ -569,7 +574,7 @@ const DICT = {
       '۲. پوشه‌ی پروژه را به گوشی ببر (مثلاً در Download).\n' +
       '۳. در Termux:\n' +
       '   termux-setup-storage\n' +
-      '   bash /storage/emulated/0/Download/unstream/scripts/phone-server.sh\n' +
+      '   bash /storage/emulated/0/Download/MusicBazi/scripts/phone-server.sh\n' +
       '۴. برگرد اینجا و «روی این گوشی» را بزن.',
     serverLocalHint:
       'وقتی سرورِ گوشی روشن است، همین دکمه کافی است. اگر «نرسیدم» گفت، در Termux بزن: phone-server.sh status',
@@ -578,7 +583,7 @@ const DICT = {
     // ---------- ویزاردِ راه‌اندازی (مرورگر) ----------
     setupTitle: 'چند قدم تا کامل شدن',
     setupBody:
-      'آنستریم بی‌هیچ کلیدی هم کار می‌کند — جستجو، دانلود و کتابخانه از همین حالا در دسترس‌اند. این صفحه آن‌چه کم است را نشان می‌دهد و هر کلیدی که بدهی را همان‌جا با سرویسِ خودش امتحان می‌کند تا معلوم شود درست کار می‌کند یا نه.',
+      'موزیک بازی بی‌هیچ کلیدی هم کار می‌کند — جستجو، دانلود و کتابخانه از همین حالا در دسترس‌اند. این صفحه آن‌چه کم است را نشان می‌دهد و هر کلیدی که بدهی را همان‌جا با سرویسِ خودش امتحان می‌کند تا معلوم شود درست کار می‌کند یا نه.',
     setupEnvTitle: 'وضعیتِ این سرور',
     setupEnvLoading: 'در حال بررسی…',
     setupEnvUnavailable:
@@ -658,7 +663,7 @@ const DICT = {
   },
 
   en: {
-    brand: 'Unstream',
+    brand: 'Music Bazi',
     quality: 'Quality',
     qualityOriginal: 'Original',
     qualityMp3: 'MP3',
@@ -672,7 +677,7 @@ const DICT = {
     heroLine1: 'Your music library,',
     heroLine2: 'as files.',
     heroBody:
-      'Paste a Spotify, Deezer, Apple Music, YouTube or SoundCloud link — or search every catalog at once. Unstream finds the audio and tags every mp3 for you. No accounts, no keys.',
+      'Paste a Spotify, Deezer, Apple Music, YouTube or SoundCloud link — or search every catalog at once. Music Bazi finds the audio and tags every mp3 for you. No accounts, no keys.',
     homeSearchCta: 'Search or paste a link',
     heroActionIdentify: 'Identify song',
     heroActionIdentifyHint: 'Listen and identify playing music with microphone',
@@ -950,7 +955,7 @@ const DICT = {
     intranetPageMissing: 'This page was never cached — it needs international internet.',
     intranetDownload: 'Queued — it will download once the internet is back',
     intranetDeferredCount: (n: number) => `${n} waiting for internet`,
-    saveToPhoneDone: 'Saved to Music/Unstream on your phone',
+    saveToPhoneDone: 'Saved to Music/MusicBazi on your phone',
     saveToPhoneFailed: 'Could not save to phone',
     libraryEmpty: 'Nothing downloaded yet. Whatever you grab stays here.',
     libraryUnavailable: 'The library needs the real backend — demo mode has no files on disk.',
@@ -1062,7 +1067,7 @@ const DICT = {
     identifyPick: 'Choose a file',
     identifyWorking: 'Listening…',
     identifyNoMatch:
-      'No match. The free path (AcoustID) only recognises a complete audio file — not sound recorded through a microphone, and not a short excerpt. That case needs UNSTREAM_AUDD_TOKEN set on the server.',
+      'No match. The free path (AcoustID) only recognises a complete audio file — not sound recorded through a microphone, and not a short excerpt. That case needs MUSICBAZI_AUDD_TOKEN set on the server.',
     identifyConfidence: (n: number) => `${n}% confident`,
     identifyMatches: 'Other guesses',
     identifyResults: 'Downloadable versions',
@@ -1089,6 +1094,7 @@ const DICT = {
     sleepTimer: 'Sleep timer',
     sleepOff: 'Off',
     sleepMinutes: (n: number) => `${n} min`,
+    sleepEndOfTrack: 'End of track',
     sleepIn: (m: string) => `Stops in ${m}`,
     sleepCancel: 'Cancel timer',
     audioGraphMissing: 'This browser does not support these controls',
@@ -1182,9 +1188,9 @@ const DICT = {
     moreMenu: 'More options',
 
     // ---------- server address (Android app only) ----------
-    serverTitle: 'Which computer runs Unstream?',
+    serverTitle: 'Which computer runs Music Bazi?',
     serverBody:
-      'The app does not find music by itself — the Unstream server on your computer does. Point it there.',
+      'The app does not find music by itself — the Music Bazi server on your computer does. Point it there.',
     serverLabel: 'Server address',
     serverPlaceholder: '192.168.0.183:8080',
     serverHint: 'Port 8080 if you started it with Docker. A tunnel URL works too.',
@@ -1194,10 +1200,14 @@ const DICT = {
     serverFailed: "Could not reach it — is the computer on and are you on the same Wi-Fi?",
     serverSave: 'Save and continue',
     serverChange: 'Server address',
+    serverAutoScan: 'Scan Wi-Fi for server',
+    serverScanning: 'Scanning local network…',
+    serverScanNotFound: 'No server found on network',
+    serverSwitchTo: (url: string) => `Switch to ${url}`,
 
     // ---------- server on this phone ----------
     serverLocal: 'On this phone',
-    serverLocalTitle: 'Unstream on this phone',
+    serverLocalTitle: 'Music Bazi on this phone',
     serverLocalBody:
       'Everything — search, download, library — runs on this phone, and its library is separate from your computer. You start the backend in Termux once.',
     serverLocalHow: 'How do I start it on the phone?',
@@ -1206,7 +1216,7 @@ const DICT = {
       '2. Copy the project folder to the phone (e.g. into Download).\n' +
       '3. In Termux:\n' +
       '   termux-setup-storage\n' +
-      '   bash /storage/emulated/0/Download/unstream/scripts/phone-server.sh\n' +
+      '   bash /storage/emulated/0/Download/MusicBazi/scripts/phone-server.sh\n' +
       '4. Come back here and tap "On this phone".',
     serverLocalHint:
       'If the phone server is running, this button is all you need. If it says "could not reach", run: phone-server.sh status',
@@ -1216,7 +1226,7 @@ const DICT = {
     // ---------- setup wizard (browser) ----------
     setupTitle: 'A few steps to full power',
     setupBody:
-      'Unstream works with no keys at all — search, download and the library are already available. This page shows what is missing and tests every key you enter against its own service, right before saving it.',
+      'Music Bazi works with no keys at all — search, download and the library are already available. This page shows what is missing and tests every key you enter against its own service, right before saving it.',
     setupEnvTitle: 'This server',
     setupEnvLoading: 'Checking…',
     setupEnvUnavailable:

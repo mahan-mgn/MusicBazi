@@ -98,9 +98,9 @@ describe('NowPlaying component', () => {
     expect(host.textContent).toContain('High Altitude')
   })
 
-  it('dispatches unstream:open-artist event when clicking the artist name', () => {
+  it('dispatches musicbazi:open-artist event when clicking the artist name', () => {
     const artistListener = vi.fn()
-    window.addEventListener('unstream:open-artist', artistListener)
+    window.addEventListener('musicbazi:open-artist', artistListener)
 
     act(() => {
       root.render(<NowPlaying onClose={vi.fn()} />)
@@ -119,12 +119,12 @@ describe('NowPlaying component', () => {
     const customEvent = artistListener.mock.calls[0][0] as CustomEvent
     expect(customEvent.detail).toEqual({ ref: 'Alborz' })
 
-    window.removeEventListener('unstream:open-artist', artistListener)
+    window.removeEventListener('musicbazi:open-artist', artistListener)
   })
 
-  it('dispatches unstream:open-album event when clicking the album name', () => {
+  it('dispatches musicbazi:open-album event when clicking the album name', () => {
     const albumListener = vi.fn()
-    window.addEventListener('unstream:open-album', albumListener)
+    window.addEventListener('musicbazi:open-album', albumListener)
 
     act(() => {
       root.render(<NowPlaying onClose={vi.fn()} />)
@@ -143,7 +143,7 @@ describe('NowPlaying component', () => {
     const customEvent = albumListener.mock.calls[0][0] as CustomEvent
     expect(customEvent.detail).toEqual({ ref: 'album-1' })
 
-    window.removeEventListener('unstream:open-album', albumListener)
+    window.removeEventListener('musicbazi:open-album', albumListener)
   })
 
   it('toggles fullscreen mode when clicking fullscreen button', async () => {
@@ -178,7 +178,7 @@ describe('NowPlaying component', () => {
     })
 
     const artistListener = vi.fn()
-    window.addEventListener('unstream:open-artist', artistListener)
+    window.addEventListener('musicbazi:open-artist', artistListener)
 
     act(() => {
       root.render(<NowPlaying onClose={vi.fn()} />)
@@ -199,7 +199,7 @@ describe('NowPlaying component', () => {
       }),
     )
 
-    window.removeEventListener('unstream:open-artist', artistListener)
+    window.removeEventListener('musicbazi:open-artist', artistListener)
   })
 
   it('handles track without lyricsUrl without perpetual loading', async () => {

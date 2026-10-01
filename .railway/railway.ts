@@ -13,7 +13,7 @@ export default defineRailway(() => {
     // dockerfilePath from CaC: "Dockerfile.railway"
     // builder from CaC: "DOCKERFILE"
   });
-  return project("unstream", {
+  return project("musicbazi", {
     resources: [MusicBazi],
   });
 });

@@ -3,9 +3,9 @@
 تاریخِ آماده‌سازی: نسخه‌ی ۱٫۲ (versionCode 3).
 
 ## ۱. امضا — انجام شد ✅
-- کلید: `android/unstream.jks` (alias `unstream`, RSA ۲۰۴۸، اعتبار ۱۰۰۰۰ روز)
+- کلید: `android/musicbazi.jks` (alias `musicbazi`, RSA ۲۰۴۸، اعتبار ۱۰۰۰۰ روز)
 - رمزها: `android/keystore.properties` — هر دو در `.gitignore`، هیچ‌وقت کامیت نشوند
-- بکاپِ کلید: `~/Documents/unstream-keystore-backup.jks` — **همین حالا یک نسخه‌ی
+- بکاپِ کلید: `~/Documents/musicbazi-keystore-backup.jks` — **همین حالا یک نسخه‌ی
   ابری/آفلاینِ دوم هم بگیر.** گم‌کردنِ کلید = مرگِ همیشگیِ آپدیت‌ها
 - SHA-256 گواهی: `12811523cd3592192c0b59778eda667032668cc49b12cfec82c3d9476abfcde8`
 - ⚠ نسخه‌های ۱٫۰ و قبل با کلید *debug* امضا شده بودند؛ کاربرهای فعلی باید یک‌بار
@@ -13,8 +13,8 @@
 
 ## ۲. انتشارِ خودمیزبان — انجام شد ✅
 ```bash
-UNSTREAM_RELEASE_NOTES="…" node scripts/android-release.mjs --apk --publish
-# مقصد: UNSTREAM_RELEASES_DIR (روی سرور: DATA_DIR/releases/)
+MUSICBAZI_RELEASE_NOTES="…" node scripts/android-release.mjs --apk --publish
+# مقصد: MUSICBAZI_RELEASES_DIR (روی سرور: DATA_DIR/releases/)
 ```
 - `GET /api/release` و `GET /api/release/apk` روی سرورِ زنده تست شدند (بایت‌به‌بایت یکسان)
 - دروازه: تا APK امضا نشده باشد `--publish` با exit 1 جلو می‌گیرد

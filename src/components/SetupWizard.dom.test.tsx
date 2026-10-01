@@ -17,7 +17,7 @@ const txt = (k: string) => (typeof dict[k] === 'string' ? (dict[k] as string) : 
 
 const STATE = {
   done: false,
-  set: { UNSTREAM_AUDD_TOKEN: '…da25' },
+  set: { MUSICBAZI_AUDD_TOKEN: '…da25' },
   restartNeeded: false,
   env: {
     ffmpeg: true,
@@ -161,13 +161,13 @@ describe('SetupWizard', () => {
       restart: boolean
       done: boolean
     }
-    expect(body.values).toEqual({ UNSTREAM_AUDD_TOKEN: 'fresh-token' })
+    expect(body.values).toEqual({ MUSICBAZI_AUDD_TOKEN: 'fresh-token' })
     expect(body.restart).toBe(true)
     expect(body.done).toBe(true)
   })
 
   it('ری‌استارتِ موفق: صبر تا سلامتی، بعد reload', async () => {
-    saveReply = { ok: true, changed: ['UNSTREAM_AUDD_TOKEN'], restarting: true, manualRestart: false }
+    saveReply = { ok: true, changed: ['MUSICBAZI_AUDD_TOKEN'], restarting: true, manualRestart: false }
     await render()
     await type(inputFor('AUDD_TOKEN'), 'fresh-token')
     await click(byButton(txt('setupSaveNothing'))!)

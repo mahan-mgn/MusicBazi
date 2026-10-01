@@ -1,4 +1,4 @@
-# فرانت آنستریم — بیلد با Vite، سرو با nginx
+# فرانت موزیک بازی — بیلد با Vite، سرو با nginx
 FROM node:22-alpine AS build
 
 WORKDIR /app

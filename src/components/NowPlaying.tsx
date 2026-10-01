@@ -269,10 +269,30 @@ export default function NowPlaying({
     typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : false,
   )
 
+  // تشخیص حالت افقی در گوشی‌ها (Landscape) برای چیدمان متناسب دو ستونه
+  const [isLandscape, setIsLandscape] = useState(() =>
+    typeof window !== 'undefined'
+      ? window.matchMedia('(orientation: landscape) and (max-height: 550px)').matches
+      : false,
+  )
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const mq = window.matchMedia('(min-width: 1024px)')
     const onChange = (e: MediaQueryListEvent | MediaQueryList) => setIsDesktop(e.matches)
+    if (mq.addEventListener) {
+      mq.addEventListener('change', onChange)
+      return () => mq.removeEventListener('change', onChange)
+    } else {
+      mq.addListener(onChange)
+      return () => mq.removeListener(onChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(orientation: landscape) and (max-height: 550px)')
+    const onChange = (e: MediaQueryListEvent | MediaQueryList) => setIsLandscape(e.matches)
     if (mq.addEventListener) {
       mq.addEventListener('change', onChange)
       return () => mq.removeEventListener('change', onChange)
@@ -349,7 +369,7 @@ export default function NowPlaying({
     dismiss()
     const ref = item?.track.artistId || item?.track.artist
     if (ref) {
-      window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+      window.dispatchEvent(new CustomEvent('musicbazi:open-artist', { detail: { ref } }))
     }
   }
 
@@ -358,7 +378,7 @@ export default function NowPlaying({
     dismiss()
     const ref = item?.track.albumId || item?.track.album
     if (ref) {
-      window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+      window.dispatchEvent(new CustomEvent('musicbazi:open-album', { detail: { ref } }))
     }
   }
 
@@ -946,7 +966,7 @@ export default function NowPlaying({
           backgroundColor: tidalBg,
           transition: 'background-color 0.8s ease',
         }}
-        className={`absolute inset-0 flex flex-col overflow-hidden text-white p-4 sm:p-6 pb-[calc(1.25rem+var(--safe-b))] pt-[calc(0.75rem+var(--safe-t))] ${
+        className={`absolute inset-0 flex flex-col overflow-hidden text-white p-4 sm:p-6 pb-[calc(1.25rem+var(--safe-b))] pt-[calc(0.75rem+var(--safe-t))] ps-[calc(1rem+var(--safe-l))] pe-[calc(1rem+var(--safe-r))] ${
           closing ? 'np-sheet-out' : 'np-sheet-in'
         }`}
       >
@@ -972,7 +992,7 @@ export default function NowPlaying({
                         e.stopPropagation()
                         dismiss()
                         window.dispatchEvent(
-                          new CustomEvent('unstream:open-artist', { detail: { ref } }),
+                          new CustomEvent('musicbazi:open-artist', { detail: { ref } }),
                         )
                       }}
                       title={art}
@@ -1048,22 +1068,22 @@ export default function NowPlaying({
         </div>
 
         {/* ============================================================== */}
-        {/* ۱. نمای دسکتاپ و نمایشگرهای عریض (Landscape & Desktop Layout)   */}
+        {/* ۱. نمای دسکتاپ و نمایشگرهای عریض و افقی (Landscape & Desktop)   */}
         {/* ============================================================== */}
-        {isDesktop ? (
-          <div className="relative min-h-0 flex-1 flex flex-col justify-center z-10 py-2">
-            <div className="w-full max-w-6xl xl:max-w-7xl mx-auto flex-1 min-h-0 grid grid-cols-12 gap-8 xl:gap-14 items-center px-4 sm:px-8">
+        {isDesktop || isLandscape ? (
+          <div className="relative min-h-0 flex-1 flex flex-col justify-center z-10 py-1 sm:py-2">
+            <div className={`w-full max-w-6xl xl:max-w-7xl mx-auto flex-1 min-h-0 grid grid-cols-12 ${isLandscape ? 'gap-4' : 'gap-8 xl:gap-14'} items-center px-4 sm:px-8`}>
               {/* ستون چپ: استیج کاور آلبوم */}
-              <div className="col-span-5 flex flex-col items-center justify-center space-y-4">
+              <div className="col-span-5 flex flex-col items-center justify-center space-y-3">
                 <div className="flex items-center justify-center w-full">
-                  {renderCover('w-full max-w-[340px] sm:max-w-[390px] xl:max-w-[430px]')}
+                  {renderCover(isLandscape ? 'w-full max-h-[65vh] max-w-[min(65vh,290px)]' : 'w-full max-w-[340px] sm:max-w-[390px] xl:max-w-[430px]')}
                 </div>
               </div>
 
               {/* ستون راست: کنترل‌ها در حالت کاور، یا پنل کامل لیریکس/صف */}
-              <div className="col-span-7 flex flex-col h-full max-h-[82vh] justify-center">
+              <div className="col-span-7 flex flex-col h-full max-h-[85vh] justify-center">
                 {panel === 'cover' ? (
-                  <div className="w-full max-w-xl mx-auto space-y-6">
+                  <div className={`w-full max-w-xl mx-auto ${isLandscape ? 'space-y-2.5' : 'space-y-6'}`}>
                     {renderTrackInfo()}
                     <NowPlayingSeekBar total={total} seek={seek} />
                     {renderTransportRow()}
@@ -1074,7 +1094,7 @@ export default function NowPlaying({
                     <div className="relative flex-1 min-h-0 w-full overflow-hidden">
                       {panel === 'lyrics' ? renderLyricsContent() : renderQueueContent()}
                     </div>
-                    <div className="shrink-0 pt-4 border-t border-white/10">
+                    <div className="shrink-0 pt-3 border-t border-white/10">
                       {renderFooterRow()}
                     </div>
                   </div>

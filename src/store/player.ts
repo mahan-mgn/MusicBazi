@@ -119,8 +119,8 @@ interface PlayerState {
   radio: boolean
   /** رادیو در حال جستجو/دانلودِ ترکِ بعدی است */
   radioLoading: boolean
-  /** زمانِ خاموش‌شدنِ خودکار (اپاکِ میلی‌ثانیه)، یا null یعنی تایمری در کار نیست */
-  sleepAt: number | null
+  /** زمانِ خاموش‌شدنِ خودکار (اپاکِ میلی‌ثانیه یا 'track_end')، یا null یعنی تایمری در کار نیست */
+  sleepAt: number | 'track_end' | null
 
   play: (items: PlayItem[], startIndex?: number) => void
   /** به عنوان ترک‌های بعدی صف درج می‌کند تا بلافاصله پس از ترک جاری پخش شوند */
@@ -139,8 +139,8 @@ interface PlayerState {
   setShuffle: (shuffle: boolean) => void
   toggleSmartShuffle: () => void
   toggleRadio: () => void
-  /** خاموشیِ خودکار بعد از این تعداد دقیقه؛ null یعنی لغو */
-  setSleepTimer: (minutes: number | null) => void
+  /** خاموشیِ خودکار بعد از این تعداد دقیقه یا در پایان همین ترک؛ null یعنی لغو */
+  setSleepTimer: (choice: number | 'track_end' | null) => void
   /** یک مورد از صف بیرون می‌رود (مثلاً از کتابخانه پاک شده) */
   drop: (id: string) => void
   close: () => void
@@ -226,6 +226,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
         updatePositionState()
       },
       onEnded: () => {
+        if (get().sleepAt === 'track_end') {
+          get().pause()
+          set({ sleepAt: null })
+          return
+        }
         if (get().repeat === 'one') {
           engine.seek(0)
           engine.play()
@@ -272,6 +277,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
    * محوکردنش روی خودش فقط یک پژواکِ عجیب می‌سازد.
    */
   function scheduleNext() {
+    if (get().sleepAt === 'track_end') {
+      pendingNext = null
+      engine.setNext(null)
+      return
+    }
     const next = get().repeat === 'one' ? null : nextIndex()
     // «بعدی» که خودِ ترکِ فعلی است هم همان حالت است: صفِ یک‌تایی با تکرارِ
     // همه، `nextIndex` را به ایندکسِ خودش می‌رساند و کراس‌فید ترک را روی
@@ -679,21 +689,29 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     toggleRadio: () => set({ radio: !get().radio }),
 
-    setSleepTimer: (minutes) => {
+    setSleepTimer: (choice) => {
       clearTimeout(sleepTimer)
-      // تایمرِ سیستم همیشه با همان عدد ست/لغو می‌شود تا دو ساعت از هم
-      // واگرا نمانند (مثلاً کاربر تایمر را عوض کند وقتی صفحه پس‌زمینه است)
-      setNativeSleepTimer(minutes ?? 0)
-      if (minutes === null) {
-        set({ sleepAt: null })
+      if (choice === 'track_end') {
+        setNativeSleepTimer(0)
+        set({ sleepAt: 'track_end' })
+        scheduleNext()
         return
       }
-      const at = Date.now() + minutes * 60_000
+      // تایمرِ سیستم همیشه با همان عدد ست/لغو می‌شود تا دو ساعت از هم
+      // واگرا نمانند (مثلاً کاربر تایمر را عوض کند وقتی صفحه پس‌زمینه است)
+      setNativeSleepTimer(choice ?? 0)
+      if (choice === null) {
+        set({ sleepAt: null })
+        scheduleNext()
+        return
+      }
+      const at = Date.now() + choice * 60_000
       set({ sleepAt: at })
+      scheduleNext()
       sleepTimer = setTimeout(() => {
         engine.pause()
         set({ sleepAt: null })
-      }, minutes * 60_000)
+      }, choice * 60_000)
     },
 
     drop: (id) => {

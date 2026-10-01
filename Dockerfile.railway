@@ -1,4 +1,4 @@
-# آنستریم روی Railway — یک کانتینر، یک Volume، یک دامنه.
+# موزیک بازی روی Railway — یک کانتینر، یک Volume، یک دامنه.
 #
 # چرا تک‌کانتینر: اپ تک‌مبدأ ساخته شده (nginx هم / را سرو می‌کند هم /api را) و
 # Railway هم Volume را فقط به *یک* سرویس می‌چسباند. پس به‌جای سه سرویسِ
@@ -85,10 +85,10 @@ COPY deploy/railway-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # مسیرها روی Volume؛ POT از طریق HTTPِ لوکال (همان حالت compose)
-ENV UNSTREAM_DOWNLOAD_DIR=/data/downloads \
-    UNSTREAM_DATA_DIR=/data/db \
-    UNSTREAM_JS_RUNTIME=node \
-    UNSTREAM_POT_BASE_URL=http://127.0.0.1:4416 \
+ENV MUSICBAZI_DOWNLOAD_DIR=/data/downloads \
+    MUSICBAZI_DATA_DIR=/data/db \
+    MUSICBAZI_JS_RUNTIME=node \
+    MUSICBAZI_POT_BASE_URL=http://127.0.0.1:4416 \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8080

@@ -112,7 +112,7 @@ from .models import (
 )
 from .providers import audd, genius, spotify
 
-USER_AGENT = "Unstream/0.2 (+local)"
+USER_AGENT = "MusicBazi/1.4 (+local)"
 
 # ارسال‌های تمام‌شده‌ی قدیمی‌تر از این پاک می‌شوند — فقط برای اینکه جدولِ صف
 # بی‌نهایت رشد نکند؛ وب فقط تا وقتی دکمه روی صفحه است سراغشان می‌رود.
@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
     db.close()
 
 
-app = FastAPI(title="Unstream API", lifespan=lifespan)
+app = FastAPI(title="MusicBazi API", lifespan=lifespan)
 
 # ویزاردِ راه‌اندازی. جدا از `app` تعریف شده تا `main.py` بزرگ‌تر نشود؛
 # اندپوینت‌هایش بی‌احراز هویت‌اند (عمدی — تصمیمِ کاربر) و کلیدها را بیرون

@@ -151,7 +151,7 @@ async def _create(manager, track, candidate_url=None):
 
 def test_defer_can_be_switched_off(manager, track, monkeypatch):
     """
-    `UNSTREAM_DEFER_DOWNLOADS=0` باید دقیقاً رفتارِ قبلی را برگرداند — تلاش
+    `MUSICBAZI_DEFER_DOWNLOADS=0` باید دقیقاً رفتارِ قبلی را برگرداند — تلاش
     کردن و شکست خوردن، برای کسی که ترجیح می‌دهد خطا را همان لحظه ببیند.
     """
     monkeypatch.setattr(jobs_mod, "DEFER_DOWNLOADS", False)

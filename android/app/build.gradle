@@ -10,13 +10,13 @@ apply plugin: 'com.android.application'
  * ساختنِ کلید (یک‌بار، و فایلِ حاصل را جایی امن نگه دار — با گم‌شدنش دیگر
  * نمی‌شود همین اپ را آپدیت کرد):
  *
- *   keytool -genkeypair -v -keystore android/unstream.jks -keyalg RSA  *           -keysize 2048 -validity 10000 -alias unstream
+ *   keytool -genkeypair -v -keystore android/musicbazi.jks -keyalg RSA  *           -keysize 2048 -validity 10000 -alias musicbazi
  *
  * بعد `android/keystore.properties`:
  *
- *   storeFile=unstream.jks
+ *   storeFile=musicbazi.jks
  *   storePassword=…
- *   keyAlias=unstream
+ *   keyAlias=musicbazi
  *   keyPassword=…
  */
 def keystoreProperties = new Properties()
@@ -26,10 +26,10 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "app.unstream.client"
+    namespace = "app.musicbazi.client"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "app.unstream.client"
+        applicationId "app.musicbazi.client"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 5

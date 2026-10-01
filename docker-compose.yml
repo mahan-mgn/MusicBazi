@@ -1,4 +1,4 @@
-# آنستریم به‌صورت کامل: فرانت، بک‌اند، و سرور PO Token.
+# موزیک بازی به‌صورت کامل: فرانت، بک‌اند، و سرور PO Token.
 #
 #   docker compose up --build     →  http://localhost:8080
 #
@@ -23,22 +23,22 @@ services:
     depends_on:
       - potoken
     environment:
-      UNSTREAM_POT_BASE_URL: http://potoken:4416
-      UNSTREAM_COOKIES_FILE: ${UNSTREAM_COOKIES_FILE:-}
-      UNSTREAM_SPOTIFY_CLIENT_ID: ${UNSTREAM_SPOTIFY_CLIENT_ID:-}
-      UNSTREAM_SPOTIFY_CLIENT_SECRET: ${UNSTREAM_SPOTIFY_CLIENT_SECRET:-}
-      UNSTREAM_ACOUSTID_KEY: ${UNSTREAM_ACOUSTID_KEY:-}
-      UNSTREAM_GEMINI_API_KEY: ${UNSTREAM_GEMINI_API_KEY:-}
-      UNSTREAM_PROXY: ${UNSTREAM_PROXY:-}
-      UNSTREAM_YTDLP_PROXY: ${UNSTREAM_YTDLP_PROXY:-}
-      UNSTREAM_CONCURRENCY: ${UNSTREAM_CONCURRENCY:-3}
-      UNSTREAM_FILE_RETENTION: ${UNSTREAM_FILE_RETENTION:-604800}
+      MUSICBAZI_POT_BASE_URL: http://potoken:4416
+      MUSICBAZI_COOKIES_FILE: ${MUSICBAZI_COOKIES_FILE:-}
+      MUSICBAZI_SPOTIFY_CLIENT_ID: ${MUSICBAZI_SPOTIFY_CLIENT_ID:-}
+      MUSICBAZI_SPOTIFY_CLIENT_SECRET: ${MUSICBAZI_SPOTIFY_CLIENT_SECRET:-}
+      MUSICBAZI_ACOUSTID_KEY: ${MUSICBAZI_ACOUSTID_KEY:-}
+      MUSICBAZI_GEMINI_API_KEY: ${MUSICBAZI_GEMINI_API_KEY:-}
+      MUSICBAZI_PROXY: ${MUSICBAZI_PROXY:-}
+      MUSICBAZI_YTDLP_PROXY: ${MUSICBAZI_YTDLP_PROXY:-}
+      MUSICBAZI_CONCURRENCY: ${MUSICBAZI_CONCURRENCY:-3}
+      MUSICBAZI_FILE_RETENTION: ${MUSICBAZI_FILE_RETENTION:-604800}
     # پروکسیِ روی هاست از داخل کانتینر با این نام دیده می‌شود. روی داکر دسکتاپ
-    # خودکار هست، روی داکرِ لینوکس نه — و آن‌جا UNSTREAM_PROXY بی‌صدا شکست می‌خورد.
+    # خودکار هست، روی داکرِ لینوکس نه — و آن‌جا MUSICBAZI_PROXY بی‌صدا شکست می‌خورد.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - unstream-data:/data
+      - musicbazi-data:/data
       # پوشه سوار می‌شود، نه فایل: bind کردنِ فایلی که وجود ندارد،
       # روی داکر دسکتاپ به‌جای خطا یک پوشه‌ی خالی می‌سازد و کوکی بی‌صدا نادیده می‌رود.
       - ./secrets:/secrets:ro
@@ -49,7 +49,7 @@ services:
     depends_on:
       - server
     ports:
-      - "${UNSTREAM_PORT:-8080}:80"
+      - "${MUSICBAZI_PORT:-8080}:80"
 
   # اختیاری — «docker compose --profile tunnel up -d» و بعد
   # «docker compose logs tunnel» که آدرسِ https://…trycloudflare.com را چاپ می‌کند.
@@ -79,19 +79,19 @@ services:
       - server
     command: python -m app.bot.run
     environment:
-      UNSTREAM_TELEGRAM_BOT_TOKEN: ${UNSTREAM_TELEGRAM_BOT_TOKEN:-}
-      UNSTREAM_API_BASE_URL: http://server:8000
-      UNSTREAM_PROXY: ${UNSTREAM_PROXY:-}
-      UNSTREAM_TELEGRAM_PROXY: ${UNSTREAM_TELEGRAM_PROXY:-}
-      UNSTREAM_FOLLOW_POLL_INTERVAL: ${UNSTREAM_FOLLOW_POLL_INTERVAL:-1800}
-      UNSTREAM_TELEGRAM_CACHE_CHAT_ID: ${UNSTREAM_TELEGRAM_CACHE_CHAT_ID:-}
-      UNSTREAM_TELEGRAM_WEBAPP_URL: ${UNSTREAM_TELEGRAM_WEBAPP_URL:-}
+      MUSICBAZI_TELEGRAM_BOT_TOKEN: ${MUSICBAZI_TELEGRAM_BOT_TOKEN:-}
+      MUSICBAZI_API_BASE_URL: http://server:8000
+      MUSICBAZI_PROXY: ${MUSICBAZI_PROXY:-}
+      MUSICBAZI_TELEGRAM_PROXY: ${MUSICBAZI_TELEGRAM_PROXY:-}
+      MUSICBAZI_FOLLOW_POLL_INTERVAL: ${MUSICBAZI_FOLLOW_POLL_INTERVAL:-1800}
+      MUSICBAZI_TELEGRAM_CACHE_CHAT_ID: ${MUSICBAZI_TELEGRAM_CACHE_CHAT_ID:-}
+      MUSICBAZI_TELEGRAM_WEBAPP_URL: ${MUSICBAZI_TELEGRAM_WEBAPP_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       # فقط برای دیتابیسِ محلیِ بات (follow ها) — کتابخانه و دانلودها همچنان
       # فقط سمتِ سرورند؛ همین یک والیوم مشترک است ولی فایل‌ها جدا می‌مانند
-      - unstream-data:/data
+      - musicbazi-data:/data
 
 volumes:
-  unstream-data:
+  musicbazi-data:

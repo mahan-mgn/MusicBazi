@@ -113,13 +113,13 @@ export default function PlayerBar() {
   // قلبِ نوارِ پخش = ناوبری به «لایک‌ها»، نه لایکِ همان ترک. رویداد است نه
   // ایمپورتِ ناوبری — همان الگویِ «برو به کتابخانه» که شنونده‌اش در App است
   const openLiked = useCallback(() => {
-    window.dispatchEvent(new Event('unstream:open-liked'))
+    window.dispatchEvent(new Event('musicbazi:open-liked'))
   }, [])
 
   // میان‌برِ «F» — خودِ شنونده در `Shortcuts` است تا همه‌ی میان‌برها یک‌جا بمانند
   useEffect(() => {
-    window.addEventListener('unstream:expand-player', expand)
-    return () => window.removeEventListener('unstream:expand-player', expand)
+    window.addEventListener('musicbazi:expand-player', expand)
+    return () => window.removeEventListener('musicbazi:expand-player', expand)
   }, [expand])
 
   /*

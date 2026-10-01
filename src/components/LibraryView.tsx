@@ -178,8 +178,8 @@ export default function LibraryView({ initialTab }: { initialTab?: 'playlists' |
       setTab('tracks')
       setOnlyFavs(true)
     }
-    window.addEventListener('unstream:open-liked', open)
-    return () => window.removeEventListener('unstream:open-liked', open)
+    window.addEventListener('musicbazi:open-liked', open)
+    return () => window.removeEventListener('musicbazi:open-liked', open)
   }, [])
   const [unreachable, setUnreachable] = useState(false)
   const [selectedSource, setSelectedSource] = useState<Source | null>(null)
@@ -1029,15 +1029,45 @@ export default function LibraryView({ initialTab }: { initialTab?: 'playlists' |
                 setSelectedSource(null)
                 setOnlyLossless(false)
                 setOnlyUnplayed(false)
+                setOnlyFavs(false)
+                setOnlyOffline(false)
               }}
               className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] transition ${
-                !selectedSource && !onlyLossless && !onlyUnplayed
+                !selectedSource && !onlyLossless && !onlyUnplayed && !onlyFavs && !onlyOffline
                   ? 'bg-accent/15 font-semibold text-accent'
                   : 'text-muted hover:text-fg'
               }`}
             >
               {t.filterAll}
             </button>
+
+            <button
+              type="button"
+              onClick={() => setOnlyFavs((v) => !v)}
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition ${
+                onlyFavs
+                  ? 'border-like bg-like font-semibold text-white'
+                  : 'border-line text-muted hover:text-fg'
+              }`}
+            >
+              <HeartIcon className="size-3" filled={onlyFavs} />
+              <span>{t.favoritesOnly}</span>
+            </button>
+
+            {offlineSupported() && !unreachable && (
+              <button
+                type="button"
+                onClick={() => setOnlyOffline((v) => !v)}
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition ${
+                  onlyOffline
+                    ? 'border-accent bg-accent font-semibold text-accent-fg'
+                    : 'border-line text-muted hover:text-fg'
+                }`}
+              >
+                <OfflineIcon className="size-3" filled={onlyOffline} />
+                <span>{t.offlineOnly}</span>
+              </button>
+            )}
 
             {(['spotify', 'youtube', 'soundcloud', 'deezer', 'apple'] as const).map((source) => (
               <button

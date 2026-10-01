@@ -80,13 +80,13 @@ def missing() -> str:
     if ACOUSTID_KEY and not FPCALC:
         return (
             "شناسایی صوتی خاموش است: `fpcalc` (از بسته‌ی Chromaprint) روی این سیستم "
-            "پیدا نشد. نصبش کن یا مسیرش را در UNSTREAM_FPCALC بگذار."
+            "پیدا نشد. نصبش کن یا مسیرش را در MUSICBAZI_FPCALC بگذار."
         )
     if FPCALC and not ACOUSTID_KEY:
-        return "شناسایی صوتی خاموش است: UNSTREAM_ACOUSTID_KEY تنظیم نشده."
+        return "شناسایی صوتی خاموش است: MUSICBAZI_ACOUSTID_KEY تنظیم نشده."
     return (
         "شناسایی صوتی تنظیم نشده. برای فایلِ کامل: `fpcalc` به‌علاوه‌ی "
-        "UNSTREAM_ACOUSTID_KEY. برای ضبطِ میکروفون: UNSTREAM_AUDD_TOKEN."
+        "MUSICBAZI_ACOUSTID_KEY. برای ضبطِ میکروفون: MUSICBAZI_AUDD_TOKEN."
     )
 
 

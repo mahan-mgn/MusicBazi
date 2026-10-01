@@ -2,7 +2,7 @@
 نقطه‌ی ورود بات تلگرام — یک کلاینت تازه برای همون API، نه یک مسیر دانلود جدا.
 
 اجرا: `python -m app.bot.run` (کنار سرور اصلی که باید بالا باشد).
-بدون UNSTREAM_TELEGRAM_BOT_TOKEN بی‌صدا خارج می‌شود — قابلیتِ اختیاری است.
+بدون MUSICBAZI_TELEGRAM_BOT_TOKEN بی‌صدا خارج می‌شود — قابلیتِ اختیاری است.
 """
 
 from __future__ import annotations
@@ -137,7 +137,7 @@ except OSError:
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-log = logging.getLogger("unstream.bot")
+log = logging.getLogger("musicbazi.bot")
 
 # حداکثر طول کپشن برای ارسال عکس در تلگرام (۱۰۲۴ کاراکتر استاندارد)
 MAX_CAPTION_LEN = 1024
@@ -3337,7 +3337,7 @@ def _api_from_app(application: Application) -> ApiClient:
 
 def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
-        log.info("UNSTREAM_TELEGRAM_BOT_TOKEN ست نشده — بات غیرفعال می‌ماند.")
+        log.info("MUSICBAZI_TELEGRAM_BOT_TOKEN ست نشده — بات غیرفعال می‌ماند.")
         sys.exit(0)
 
     # پایتون ۳.۱۴ دیگر لوپ را خودکار نمی‌سازد (asyncio.get_event_loop بدون

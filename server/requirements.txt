@@ -1,6 +1,6 @@
 fastapi>=0.118
 uvicorn[standard]>=0.38
-# extra socks لازم است اگر UNSTREAM_PROXY از نوع socks5 باشد؛ بدونش httpx
+# extra socks لازم است اگر MUSICBAZI_PROXY از نوع socks5 باشد؛ بدونش httpx
 # همان‌جا با «Using SOCKS proxy, but the socksio package is not installed» می‌افتد.
 # yt-dlp خودش socks را بومی می‌فهمد و به این نیاز ندارد.
 httpx[socks]>=0.28
@@ -11,7 +11,7 @@ mutagen>=1.47
 python-multipart>=0.0.9
 
 # تحلیل حس‌وحالِ صوتی (والانس/انرژی) بعد از دانلود، برای شافلِ هم‌حس‌وحال.
-# numpy/scipy/soundfile را خودش می‌آورد؛ UNSTREAM_MOOD=0 اگر نصبِ سنگینش
+# numpy/scipy/soundfile را خودش می‌آورد؛ MUSICBAZI_MOOD=0 اگر نصبِ سنگینش
 # به‌صرفه نبود — بقیه‌ی برنامه بدونش هم کار می‌کند.
 librosa>=0.10
 
@@ -26,6 +26,6 @@ yt-dlp-ejs>=0.8
 # پلاگین PO Token. سرورش جدا با `bash setup_potoken.sh` بیلد می‌شود.
 bgutil-ytdlp-pot-provider==1.3.1
 
-# بات تلگرام — اختیاری، فقط با UNSTREAM_TELEGRAM_BOT_TOKEN فعال می‌شود.
+# بات تلگرام — اختیاری، فقط با MUSICBAZI_TELEGRAM_BOT_TOKEN فعال می‌شود.
 # نسخه‌ی ۲۱+ خودش روی httpx است، بدون تداخل با نسخه‌ی بالا.
 python-telegram-bot>=21,<22

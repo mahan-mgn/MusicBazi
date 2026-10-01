@@ -25,7 +25,9 @@ def _live(name: str, imported):
     می‌گرفت تا ری‌استارتِ بعدی (دقیقاً همان «کوکی دادم ولی یوتیوب نشکست»).
     محیط برنده است؛ نبودش یعنی برگشت به مقدارِ زمانِ استارت‌آپ.
     """
-    return os.environ.get(name) or imported
+    if name.startswith("MUSICBAZI_"):
+        return os.environ.get(name) or imported
+    return os.environ.get(f"MUSICBAZI_{name}") or imported
 
 BASE_OPTS: dict = {
     "quiet": True,
@@ -49,8 +51,8 @@ def auth_opts() -> dict:
     """
     opts: dict = {}
 
-    cookies_file = _live("UNSTREAM_COOKIES_FILE", COOKIES_FILE)
-    cookies_browser = _live("UNSTREAM_COOKIES_BROWSER", COOKIES_BROWSER)
+    cookies_file = _live("COOKIES_FILE", COOKIES_FILE)
+    cookies_browser = _live("COOKIES_BROWSER", COOKIES_BROWSER)
     if cookies_file:
         opts["cookiefile"] = cookies_file
     elif cookies_browser:
@@ -88,8 +90,8 @@ def opts(**extra) -> dict:
 
 def has_cookies() -> bool:
     return bool(
-        _live("UNSTREAM_COOKIES_FILE", COOKIES_FILE)
-        or _live("UNSTREAM_COOKIES_BROWSER", COOKIES_BROWSER)
+        _live("COOKIES_FILE", COOKIES_FILE)
+        or _live("COOKIES_BROWSER", COOKIES_BROWSER)
     )
 
 

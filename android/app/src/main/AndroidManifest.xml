@@ -38,7 +38,7 @@
             </intent-filter>
 
             <!--
-              «اشتراک‌گذاری» از هر اپ دیگری (تلگرام، مرورگر، اسپاتیفای) به آنستریم.
+              «اشتراک‌گذاری» از هر اپ دیگری (تلگرام، مرورگر، اسپاتیفای) به موزیک بازی.
               لینکِ آلبوم یا ترک را می‌گیرد و همان لحظه بازش می‌کند — بدون این،
               کاربر باید لینک را کپی می‌کرد، اپ را باز می‌کرد و پیست می‌کرد.
             -->
@@ -75,6 +75,19 @@
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
+        </receiver>
+
+        <!-- ویجت هوم‌اسکرین اندروید -->
+        <receiver
+            android:name=".PlaybackWidget"
+            android:exported="true"
+            android:label="@string/widget_playback_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_playback_info" />
         </receiver>
 
         <provider

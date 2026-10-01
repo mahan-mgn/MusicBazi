@@ -1,7 +1,24 @@
 import { useState } from 'react'
 import { useI18n } from '../lib/i18n'
-import { isLocalServer, localBase, normalizeBase, serverBase, setServerBase } from '../lib/server'
-import { CheckIcon, CloseIcon, HeadphonesIcon, PerformanceGaugeIcon, PhoneIcon, Spinner, WarnIcon } from './icons'
+import {
+  discoverLanServer,
+  isLocalServer,
+  lastRemoteBase,
+  localBase,
+  normalizeBase,
+  serverBase,
+  setServerBase,
+} from '../lib/server'
+import {
+  CheckIcon,
+  CloseIcon,
+  HeadphonesIcon,
+  PerformanceGaugeIcon,
+  PhoneIcon,
+  SearchIcon,
+  Spinner,
+  WarnIcon,
+} from './icons'
 
 type Probe = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok' } | { kind: 'fail' }
 
@@ -30,6 +47,29 @@ export default function ServerSetup({ onDone }: { onDone?: () => void }) {
   const [probe, setProbe] = useState<Probe>({ kind: 'idle' })
   const [localProbe, setLocalProbe] = useState<Probe>({ kind: 'idle' })
   const [showSteps, setShowSteps] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [scanFailed, setScanFailed] = useState(false)
+
+  const remoteRemembered = lastRemoteBase()
+
+  async function handleAutoScan() {
+    setScanning(true)
+    setScanFailed(false)
+    setProbe({ kind: 'idle' })
+    try {
+      const found = await discoverLanServer()
+      if (found) {
+        setValue(found)
+        setProbe({ kind: 'busy' })
+        const alive = await ping(found)
+        setProbe({ kind: alive ? 'ok' : 'fail' })
+      } else {
+        setScanFailed(true)
+      }
+    } finally {
+      setScanning(false)
+    }
+  }
 
   const target = normalizeBase(value)
 
@@ -172,6 +212,7 @@ export default function ServerSetup({ onDone }: { onDone?: () => void }) {
               onChange={(e) => {
                 setValue(e.target.value)
                 setProbe({ kind: 'idle' })
+                setScanFailed(false)
               }}
               placeholder={t.serverPlaceholder}
               inputMode="url"
@@ -182,7 +223,41 @@ export default function ServerSetup({ onDone }: { onDone?: () => void }) {
               className="w-full rounded-xl border border-line bg-panel-2 px-3.5 py-3 text-sm outline-none transition placeholder:text-muted-2 focus:border-accent/70"
             />
           </label>
-          <p className="mt-1.5 text-[11px] leading-5 text-muted-2">{t.serverHint}</p>
+
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => void handleAutoScan()}
+              disabled={scanning}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-accent transition hover:brightness-125 disabled:opacity-50 cursor-pointer"
+            >
+              {scanning ? <Spinner className="size-3.5" /> : <SearchIcon className="size-3.5" />}
+              {scanning ? t.serverScanning : t.serverAutoScan}
+            </button>
+
+            {remoteRemembered && remoteRemembered !== value && (
+              <button
+                type="button"
+                onClick={() => {
+                  setValue(remoteRemembered)
+                  setProbe({ kind: 'idle' })
+                  setScanFailed(false)
+                }}
+                className="inline-flex items-center rounded-lg border border-line bg-panel-2 px-2 py-0.5 text-[11px] text-muted transition hover:border-accent/40 hover:text-fg cursor-pointer"
+              >
+                {t.serverSwitchTo(remoteRemembered)}
+              </button>
+            )}
+          </div>
+
+          {scanFailed && (
+            <p className="mt-2 flex items-center gap-1.5 text-xs text-warn">
+              <WarnIcon className="size-3.5 shrink-0" />
+              {t.serverScanNotFound}
+            </p>
+          )}
+
+          <p className="mt-2 text-[11px] leading-5 text-muted-2">{t.serverHint}</p>
 
           {probe.kind === 'ok' && (
             <p className="mt-3 flex items-center gap-1.5 text-xs text-accent">

@@ -1,9 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">آنستریم</string>
-    <string name="title_activity_main">آنستریم</string>
-    <string name="package_name">app.unstream.client</string>
-    <string name="custom_url_scheme">app.unstream.client</string>
+    <string name="app_name">موزیک بازی</string>
+    <string name="title_activity_main">موزیک بازی</string>
+    <string name="package_name">app.musicbazi.client</string>
+    <string name="custom_url_scheme">app.musicbazi.client</string>
 
     <!-- کانالِ نوتیفیکیشنِ پخش — کاربر از تنظیمات اندروید با همین نام می‌بیندش -->
     <string name="channel_playback">پخش موسیقی</string>
@@ -22,4 +22,7 @@
     <string name="shortcut_resume_long">ادامه‌ی پخش</string>
     <string name="shortcut_liked_short">لایک‌ها</string>
     <string name="shortcut_liked_long">آهنگ‌های لایک‌شده</string>
+
+    <!-- ویجت هوم‌اسکرین -->
+    <string name="widget_playback_name">موزیک بازی — کنترل پخش</string>
 </resources>

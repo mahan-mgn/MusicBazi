@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# آنستریم را روی یک VM ابری خام (Ubuntu 22.04/24.04) بالا می‌آورد.
+# موزیک بازی را روی یک VM ابری خام (Ubuntu 22.04/24.04) بالا می‌آورد.
 # یک‌بار روی VM اجرا کن — بقیه‌اش خودکار است:
 #   داکر نصب می‌شود → مخزن کلون می‌شود → ایمیج‌ها بیلد می‌شوند →
 #   تونل Cloudflare یک آدرس HTTPS عمومی می‌دهد.
 #
-#   curl -fsSL https://raw.githubusercontent.com/mahan-mgn/Unstream/main/deploy/bootstrap.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/mahan-mgn/MusicBazi/main/deploy/bootstrap.sh | bash
 #
 # یا اگر مخزن را دستی کلون کردی، از ریشه‌ی پروژه:
 #   bash deploy/bootstrap.sh
@@ -13,8 +13,8 @@
 # آدرس نهایی (https://…trycloudflare.com) آخرِ خروجی چاپ می‌شود.
 set -euo pipefail
 
-REPO="https://github.com/mahan-mgn/Unstream.git"
-DIR="${UNSTREAM_DIR:-$HOME/unstream}"
+REPO="https://github.com/mahan-mgn/MusicBazi.git"
+DIR="${MUSICBAZI_DIR:-$HOME/musicbazi}"
 
 log()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31mخطا:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -76,7 +76,7 @@ done
 # صبر تا بک‌اند واقعاً جواب بدهد، نه فقط بالا آمده باشد. از پورت ۸۰۸۰ روی
 # هاست می‌زنیم: کانتینر web همان را map کرده و nginx داخلش /api/ را به بک‌اند
 # پروکسی می‌کند — پس اگر /api/health ۲۰۰ داد، کل زنجیره سالم است.
-PORT="$(grep -E '^UNSTREAM_PORT=' .env 2>/dev/null | cut -d= -f2)"
+PORT="$(grep -E '^MUSICBAZI_PORT=' .env 2>/dev/null | cut -d= -f2)"
 PORT="${PORT:-8080}"
 log "چک سلامت بک‌اند روی پورت $PORT…"
 HEALTHY=""
@@ -90,7 +90,7 @@ done
 cat <<EOF
 
 ══════════════════════════════════════════════════════════════
-  آنستریم بالا آمد.
+  موزیک بازی بالا آمد.
   آدرس عمومی:  $URL
 ══════════════════════════════════════════════════════════════
 

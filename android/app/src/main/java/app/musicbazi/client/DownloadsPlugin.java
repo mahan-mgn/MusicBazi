@@ -1,4 +1,4 @@
-package app.unstream.client;
+package app.musicbazi.client;
 
 import android.Manifest;
 import android.content.ContentResolver;
@@ -31,7 +31,7 @@ import java.util.concurrent.Executors;
  * چرا `MediaStore` و نه فایل‌سیستمِ ساده؟ چون خواسته‌ی واقعیِ کاربر «فایل توی
  * گوشیم باشد» نیست، «آهنگ توی موزیک‌پلیرِ گوشیم پیدا شود» است. فایلی که در
  * حافظه‌ی خصوصیِ اپ بنشیند نه در گالریِ موسیقی دیده می‌شود، نه با اپِ دیگری باز
- * می‌شود، و با حذفِ آنستریم پاک می‌شود.
+ * می‌شود، و با حذفِ موزیک بازی پاک می‌شود.
  *
  * فقط همین یک قابلیت اینجاست و نه یک لایه‌ی عمومیِ فایل: هر چیزِ دیگری (کتابخانه،
  * پخشِ آفلاین) از قبل با سرویس‌ورکر کار می‌کند و آوردنش به نیتیو یعنی دو
@@ -50,7 +50,7 @@ import java.util.concurrent.Executors;
 public class DownloadsPlugin extends Plugin {
 
     /** پوشه‌ای که ترک‌ها زیرِ Music/ می‌نشینند */
-    private static final String FOLDER = "Unstream";
+    private static final String FOLDER = "MusicBazi";
 
     private final ExecutorService pool = Executors.newSingleThreadExecutor();
 

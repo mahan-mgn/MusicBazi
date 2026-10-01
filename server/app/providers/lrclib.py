@@ -14,7 +14,7 @@ import httpx
 from ..config import LRCLIB_API, PROXY
 
 # LRCLIB در راهنمایش می‌خواهد کلاینت خودش را معرفی کند
-_HEADERS = {"user-agent": "Unstream/0.2 (https://github.com/unstream)"}
+_HEADERS = {"user-agent": "MusicBazi/1.4 (https://github.com/mahan-mgn/MusicBazi)"}
 _TIMEOUT = 8.0
 
 

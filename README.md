@@ -1,10 +1,10 @@
-# Unstream
+# Music Bazi (موزیک بازی)
 
 <div align="center">
 
 **High-performance, self-hosted music streaming and downloader with public catalog aggregation, smart audio resolving, lossless transcoding, offline resilience, and a native Android application.**
 
-[![Release](https://img.shields.io/github/v/release/mahan-mgn/Unstream?style=flat-square&color=blue)](https://github.com/mahan-mgn/Unstream/releases)
+[![Release](https://img.shields.io/github/v/release/mahan-mgn/MusicBazi?style=flat-square&color=blue)](https://github.com/mahan-mgn/MusicBazi/releases)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Node](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -13,7 +13,7 @@
 [![Tests](https://img.shields.io/badge/Tests-1238%20Passed-brightgreen?style=flat-square)]()
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-[Features](#key-features) • [Quick Start](#system-setup-desktop--server) • [Mobile Setup](#mobile-setup-android) • [Architecture](#architecture) • [API Reference](#api-reference) • [Releases](https://github.com/mahan-mgn/Unstream/releases)
+[Features](#key-features) • [Quick Start](#system-setup-desktop--server) • [Mobile Setup](#mobile-setup-android) • [Architecture](#architecture) • [API Reference](#api-reference) • [Releases](https://github.com/mahan-mgn/MusicBazi/releases)
 
 </div>
 
@@ -21,11 +21,11 @@
 
 ## Overview
 
-**Unstream** bridges the gap between commercial streaming platforms and self-hosted personal music libraries. It queries public metadata catalogs (**Apple Music**, **Deezer**, and **Spotify**) to index tracks, albums, and playlists, then intelligently locates, extracts, and transcodes high-quality audio from open sources (**YouTube** and **SoundCloud** via `yt-dlp`).
+**Music Bazi** bridges the gap between commercial streaming platforms and self-hosted personal music libraries. It queries public metadata catalogs (**Apple Music**, **Deezer**, and **Spotify**) to index tracks, albums, and playlists, then intelligently locates, extracts, and transcodes high-quality audio from open sources (**YouTube** and **SoundCloud** via `yt-dlp`).
 
 Audio files are automatically transcoded to user-selected bitrates, injected with official cover artwork, tagged with normalized ID3 metadata, aligned with synchronized lyrics (`.lrc`), and normalized for loudness according to **EBU R128**.
 
-Whether deployed on a home server via Docker, run locally for development, accessed as a PWA, installed as a native Android APK, or executed fully standalone on an Android phone via Termux without any computer, Unstream provides a unified audiophile experience.
+Whether deployed on a home server via Docker, run locally for development, accessed as a PWA, installed as a native Android APK, or executed fully standalone on an Android phone via Termux without any computer, Music Bazi provides a unified audiophile experience.
 
 ---
 
@@ -66,7 +66,7 @@ Whether deployed on a home server via Docker, run locally for development, acces
 ### 📱 Android Native Experience
 - **Foreground Playback Service:** Background playback that survives application minimization, complete with MediaStyle lock screen controls, notification album art, and Bluetooth/headphone control hooks.
 - **Edge-to-Edge Fluid UI:** Liquid glass aesthetic with dynamic cover-art color extraction, responsive bottom tab bar, thumb-friendly gesture sheet dismissal, and swipeable library rows.
-- **MediaStore Export:** Save tracks directly into the Android `Music/Unstream` directory for accessibility by any system media player.
+- **MediaStore Export:** Save tracks directly into the Android `Music/MusicBazi` directory for accessibility by any system media player.
 
 ### 🤖 Telegram Bot & Web Integration
 - **Full Bot Client:** Search songs, download albums, and inspect audio files directly from Telegram (@BotFather integration).
@@ -88,7 +88,7 @@ Whether deployed on a home server via Docker, run locally for development, acces
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ HTTP / REST / SSE
 ┌───────────────────────────────────▼────────────────────────────────────┐
-│                    Unstream Server (FastAPI)                           │
+│                    MusicBazi Server (FastAPI)                          │
 │                                                                        │
 │  ┌──────────────────────┐  ┌─────────────────┐  ┌───────────────────┐  │
 │  │ Catalog Aggregator   │  │ Audio Resolver  │  │ Download Pipeline │  │
@@ -121,8 +121,8 @@ The easiest and most reliable deployment method. Packages the React frontend beh
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/mahan-mgn/Unstream.git
-   cd Unstream
+   git clone https://github.com/mahan-mgn/MusicBazi.git
+   cd MusicBazi
    ```
 
 2. **Configure environment:**
@@ -151,7 +151,7 @@ docker compose --profile bot up -d
 #### Prerequisites
 - **Node.js:** v20.x or higher
 - **Python:** 3.11 or higher
-- **ffmpeg:** Installed and available in your system `PATH` (or specified via `UNSTREAM_FFMPEG`)
+- **ffmpeg:** Installed and available in your system `PATH` (or specified via `MUSICBAZI_FFMPEG`)
 - **JavaScript Runtime:** `node`, `deno`, or `bun` (for YouTube signature cipher decoding)
 
 #### 1. Backend Setup
@@ -190,18 +190,18 @@ Verify backend health at `http://localhost:8000/api/health`.
 
 ### Option 3: Cloud / Railway Deployment
 
-Unstream supports single-container cloud deployment with Nginx, Uvicorn, and PO Token bundled together:
+Music Bazi supports single-container cloud deployment with Nginx, Uvicorn, and PO Token bundled together:
 
 1. Deploy using the repository's `Dockerfile`.
 2. Attach a persistent volume mounted at `/data`.
-3. Set `UNSTREAM_PORT` (e.g. `8080` or provided `$PORT`).
-4. Set `UNSTREAM_DATA_DIR=/data`.
+3. Set `MUSICBAZI_PORT` (e.g. `8080` or provided `$PORT`).
+4. Set `MUSICBAZI_DATA_DIR=/data`.
 
 ---
 
 ## Mobile Setup (Android)
 
-Unstream provides two ways to use the platform on mobile devices:
+Music Bazi provides two ways to use the platform on mobile devices:
 1. **Native Android APK** (connecting to your home server or remote server).
 2. **Standalone Mobile Server** (running the FastAPI backend directly on the phone via **Termux** — no computer required).
 
@@ -209,10 +209,10 @@ Unstream provides two ways to use the platform on mobile devices:
 
 ### 1. Installing the Android APK
 
-1. Go to the [Unstream Releases](https://github.com/mahan-mgn/Unstream/releases) page.
+1. Go to the [Music Bazi Releases](https://github.com/mahan-mgn/MusicBazi/releases) page.
 2. Download `app-release.apk` from the latest release.
 3. Install the APK on your Android device (allow "Install from unknown sources" if prompted).
-4. Launch **Unstream**. On first launch, the app prompts for your server address:
+4. Launch **Music Bazi**. On first launch, the app prompts for your server address:
    - **Local Wi-Fi:** Enter `http://192.168.x.x:8080` (Docker) or `http://192.168.x.x:5174` (Vite dev).
    - **Remote / Cloud:** Enter your domain or Cloudflare Tunnel URL (`https://your-tunnel.trycloudflare.com`).
    - **On-Phone Server:** Tap **"On This Device"** (`http://127.0.0.1:8000`).
@@ -222,7 +222,7 @@ Unstream provides two ways to use the platform on mobile devices:
 
 ### 2. Standalone Phone Server (Termux — No PC Required)
 
-You can run the entire Unstream backend on your Android device without needing a computer running in the background.
+You can run the entire Music Bazi backend on your Android device without needing a computer running in the background.
 
 #### Why Termux?
 `pydantic-core` (the Rust validation engine used by FastAPI) currently provides zero pre-built wheels for Android Bionic on PyPI. Termux allows compiling `pydantic-core` directly on the device using its native Rust and Clang toolchain, guaranteeing 100% backend code parity between desktop and mobile without compromising features.
@@ -232,7 +232,7 @@ You can run the entire Unstream backend on your Android device without needing a
 2. Open Termux and clone the repository:
    ```bash
    pkg update && pkg install git
-   git clone https://github.com/mahan-mgn/Unstream.git ~/MusicBazi
+   git clone https://github.com/mahan-mgn/MusicBazi.git ~/MusicBazi
    cd ~/MusicBazi
    bash scripts/phone-server.sh
    ```
@@ -247,7 +247,7 @@ You can run the entire Unstream backend on your Android device without needing a
    - Compile `pydantic-core` for Android.
    - Configure background execution with `termux-wake-lock`.
    - Start the FastAPI server on `http://127.0.0.1:8000`.
-4. Open the Unstream APK, choose **"On This Device"**, and enjoy!
+4. Open the Music Bazi APK, choose **"On This Device"**, and enjoy!
 
 #### CLI Server Management on Android:
 ```bash
@@ -281,14 +281,14 @@ Output APK will be placed in `release-out/app-release.apk`.
 
 To sign the release build, generate a keystore:
 ```bash
-keytool -genkeypair -v -keystore android/unstream.jks -keyalg RSA \
-        -keysize 2048 -validity 10000 -alias unstream
+keytool -genkeypair -v -keystore android/musicbazi.jks -keyalg RSA \
+        -keysize 2048 -validity 10000 -alias musicbazi
 ```
 Then create `android/keystore.properties`:
 ```ini
-storeFile=unstream.jks
+storeFile=musicbazi.jks
 storePassword=your_password
-keyAlias=unstream
+keyAlias=musicbazi
 keyPassword=your_password
 ```
 
@@ -309,11 +309,11 @@ If you prefer not to install the APK:
 
 ## YouTube Extraction: The 3 Gates
 
-YouTube restricts automated audio extraction through three distinct barriers. Unstream handles all three:
+YouTube restricts automated audio extraction through three distinct barriers. Music Bazi handles all three:
 
-| Gate | Symptom | Resolution in Unstream |
+| Gate | Symptom | Resolution in Music Bazi |
 |---|---|---|
-| **1. Anti-Bot Verification** | `Sign in to confirm you're not a bot` | Export cookies in Netscape format to `secrets/cookies.txt` or set `UNSTREAM_COOKIES_BROWSER=firefox`. |
+| **1. Anti-Bot Verification** | `Sign in to confirm you're not a bot` | Export cookies in Netscape format to `secrets/cookies.txt` or set `MUSICBAZI_COOKIES_BROWSER=firefox`. |
 | **2. Proof of Origin (PO Token)** | Empty audio format list | Handled automatically by the bundled `bgutil-ytdlp-pot-provider` service in Docker or `setup_potoken.sh` locally. |
 | **3. JavaScript Signature Cipher** | `Signature solving failed` | Automatically handled via `yt-dlp-ejs` and the system JS runtime (`node`, `deno`, or `bun`). |
 
@@ -325,28 +325,28 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 
 | Variable | Default | Description |
 |---|---|---|
-| `UNSTREAM_PORT` | `8080` | Host port for the Docker web proxy. |
-| `UNSTREAM_DATA_DIR` | `server/data` | Directory for SQLite DB, catalog cache, and local cover art mirror. |
-| `UNSTREAM_DOWNLOAD_DIR` | `server/downloads` | Directory where downloaded audio files are temporarily staged. |
-| `UNSTREAM_FILE_RETENTION` | `604800` (7 days) | Retention period in seconds for cached downloads (`0` = keep forever). |
-| `UNSTREAM_CONCURRENCY` | `3` | Maximum concurrent download and transcode jobs. |
-| `UNSTREAM_PROXY` | *None* | Global proxy for all outbound requests (e.g. `socks5h://127.0.0.1:1080`). |
-| `UNSTREAM_YTDLP_PROXY` | *None* | Dedicated proxy for audio extraction only. |
-| `UNSTREAM_POT_BASE_URL` | *None* | HTTP URL of `bgutil-ytdlp-pot-provider` (e.g. `http://localhost:4416`). |
-| `UNSTREAM_COOKIES_BROWSER` | *None* | Browser to extract YouTube cookies from (`firefox` on Windows). |
-| `UNSTREAM_COOKIES_FILE` | *None* | File path to exported Netscape format cookies. |
-| `UNSTREAM_SPOTIFY_CLIENT_ID` | *None* | Spotify Developer Application Client ID. |
-| `UNSTREAM_SPOTIFY_CLIENT_SECRET`| *None* | Spotify Developer Application Client Secret. |
-| `UNSTREAM_GENIUS_ACCESS_TOKEN` | *None* | Genius API Client Access Token. |
-| `UNSTREAM_GEMINI_API_KEY` | *None* | Google Gemini API key for natural language vibe playlist generation. |
-| `UNSTREAM_ACOUSTID_KEY` | *None* | AcoustID client application API key. |
-| `UNSTREAM_AUDD_TOKEN` | *None* | AudD API token for microphone song recognition. |
-| `UNSTREAM_TELEGRAM_BOT_TOKEN` | *None* | Telegram bot token from @BotFather. |
-| `UNSTREAM_LOUDNESS` | `1` | Enable EBU R128 loudness measurement (`1` = on, `0` = off). |
-| `UNSTREAM_LOUDNESS_TARGET` | `-14` | Target loudness in LUFS for playback gain calculation. |
-| `UNSTREAM_ART_MIRROR` | `1` | Cache cover art on server disk for intranet offline mode. |
-| `UNSTREAM_CATALOG_CACHE` | `1` | Cache metadata search and entities for offline browsing. |
-| `UNSTREAM_DEFER_DOWNLOADS` | `1` | Defer failed downloads during outages and auto-resume. |
+| `MUSICBAZI_PORT` | `8080` | Host port for the Docker web proxy. |
+| `MUSICBAZI_DATA_DIR` | `server/data` | Directory for SQLite DB, catalog cache, and local cover art mirror. |
+| `MUSICBAZI_DOWNLOAD_DIR` | `server/downloads` | Directory where downloaded audio files are temporarily staged. |
+| `MUSICBAZI_FILE_RETENTION` | `604800` (7 days) | Retention period in seconds for cached downloads (`0` = keep forever). |
+| `MUSICBAZI_CONCURRENCY` | `3` | Maximum concurrent download and transcode jobs. |
+| `MUSICBAZI_PROXY` | *None* | Global proxy for all outbound requests (e.g. `socks5h://127.0.0.1:1080`). |
+| `MUSICBAZI_YTDLP_PROXY` | *None* | Dedicated proxy for audio extraction only. |
+| `MUSICBAZI_POT_BASE_URL` | *None* | HTTP URL of `bgutil-ytdlp-pot-provider` (e.g. `http://localhost:4416`). |
+| `MUSICBAZI_COOKIES_BROWSER` | *None* | Browser to extract YouTube cookies from (`firefox` on Windows). |
+| `MUSICBAZI_COOKIES_FILE` | *None* | File path to exported Netscape format cookies. |
+| `MUSICBAZI_SPOTIFY_CLIENT_ID` | *None* | Spotify Developer Application Client ID. |
+| `MUSICBAZI_SPOTIFY_CLIENT_SECRET`| *None* | Spotify Developer Application Client Secret. |
+| `MUSICBAZI_GENIUS_ACCESS_TOKEN` | *None* | Genius API Client Access Token. |
+| `MUSICBAZI_GEMINI_API_KEY` | *None* | Google Gemini API key for natural language vibe playlist generation. |
+| `MUSICBAZI_ACOUSTID_KEY` | *None* | AcoustID client application API key. |
+| `MUSICBAZI_AUDD_TOKEN` | *None* | AudD API token for microphone song recognition. |
+| `MUSICBAZI_TELEGRAM_BOT_TOKEN` | *None* | Telegram bot token from @BotFather. |
+| `MUSICBAZI_LOUDNESS` | `1` | Enable EBU R128 loudness measurement (`1` = on, `0` = off). |
+| `MUSICBAZI_LOUDNESS_TARGET` | `-14` | Target loudness in LUFS for playback gain calculation. |
+| `MUSICBAZI_ART_MIRROR` | `1` | Cache cover art on server disk for intranet offline mode. |
+| `MUSICBAZI_CATALOG_CACHE` | `1` | Cache metadata search and entities for offline browsing. |
+| `MUSICBAZI_DEFER_DOWNLOADS` | `1` | Defer failed downloads during outages and auto-resume. |
 
 ---
 
@@ -389,7 +389,7 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 
 ## Testing
 
-Unstream maintains strict test suites covering frontend logic, audio streaming, API contracts, resolver heuristics, and database integrity.
+Music Bazi maintains strict test suites covering frontend logic, audio streaming, API contracts, resolver heuristics, and database integrity.
 
 ```bash
 # Run Frontend Unit & DOM Tests (Vitest)

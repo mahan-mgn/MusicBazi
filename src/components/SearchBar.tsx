@@ -64,10 +64,10 @@ export default function SearchBar({ value, loading, onSearch }: Props) {
        می‌کند. بدونِ این، میان‌بُر فقط صفحه را باز می‌کرد و هیچ کادری فعال
        نمی‌شد؛ یعنی یک ضربه‌ی هدررفته. */
     const onFocus = () => input.current?.focus()
-    window.addEventListener('unstream:focus-search', onFocus)
+    window.addEventListener('musicbazi:focus-search', onFocus)
     return () => {
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('unstream:focus-search', onFocus)
+      window.removeEventListener('musicbazi:focus-search', onFocus)
     }
   }, [])
 

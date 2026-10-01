@@ -17,7 +17,7 @@
  * است و رفت‌وبرگشتِ پیام با سرویس‌ورکر چیزی اضافه نمی‌کرد.
  */
 
-const OFFLINE_CACHE = 'unstream-offline-v1'
+const OFFLINE_CACHE = 'musicbazi-offline-v1'
 const STREAM_PATTERN = /^\/api\/downloads\/[^/]+\/stream$/
 
 /**
@@ -75,6 +75,7 @@ function sliceResponse(response, rangeHeader, buffer) {
       'content-length': String(last - start + 1),
       'content-range': `bytes ${start}-${last}/${total}`,
       'accept-ranges': 'bytes',
+      'access-control-allow-origin': '*',
     },
   })
 }
@@ -120,12 +121,13 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  if (url.origin === self.location.origin && STREAM_PATTERN.test(url.pathname)) {
+  // هم‌مبدأ (وب) یا برون‌مبدأ (اپ اندروید: مبدأ https://localhost است و سرور آی‌پی شبکه)
+  if (STREAM_PATTERN.test(url.pathname)) {
     event.respondWith(serveStream(request))
     return
   }
 
-  if (url.origin === self.location.origin && ART_PATTERN.test(url.pathname)) {
+  if (ART_PATTERN.test(url.pathname)) {
     event.respondWith(serveImage(request))
     return
   }

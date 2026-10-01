@@ -148,7 +148,7 @@ export const useDownloads = create<DownloadState>((set, get) => {
          */
         useToasts.getState().push(t.toastReady(job.track.title), 'success', {
           label: t.goToLibrary,
-          run: () => window.dispatchEvent(new CustomEvent('unstream:open-library')),
+          run: () => window.dispatchEvent(new CustomEvent('musicbazi:open-library')),
         })
       } else if (p.status === 'error') {
         cancelers.delete(job.id)

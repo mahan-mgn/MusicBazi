@@ -112,7 +112,7 @@ def test_snapshot_reports_what_it_actually_measured():
 
 def test_no_probes_configured_means_always_online(monkeypatch):
     """
-    خالی گذاشتنِ `UNSTREAM_REACH_PROBES` یعنی «این قابلیت را نمی‌خواهم».
+    خالی گذاشتنِ `MUSICBAZI_REACH_PROBES` یعنی «این قابلیت را نمی‌خواهم».
 
     آن‌وقت هیچ‌چیز نباید به حالتِ اینترانت برود، وگرنه خاموش‌کردنِ تشخیص، خودش
     برنامه را فلج می‌کرد.

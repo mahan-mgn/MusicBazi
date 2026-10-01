@@ -240,6 +240,15 @@ function ensure(): Deck {
     decks = [buildDeck(), buildDeck()]
     decks.forEach(attach)
     applyEq()
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && ctx?.state === 'suspended') {
+          const d = active()
+          if (d && !d.el.paused) void ctx.resume().catch(() => {})
+        }
+      })
+    }
   }
   return decks[activeIndex]
 }

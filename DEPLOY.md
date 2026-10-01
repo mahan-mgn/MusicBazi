@@ -1,4 +1,4 @@
-# دیپلوی رایگان و always-on آنستریم
+# دیپلوی رایگان و always-on موزیک بازی
 
 > **Railway** (بدون کارت، ۵ دلار اعتبار Trial، تک‌کانتینر + Volume):
 > راهنمای قدم‌به‌قدم در `RAILWAY.md` — بیلد با `Dockerfile.railway`.
@@ -7,7 +7,7 @@
 
 ## چرا نه Vercel؟
 
-Vercel فقط **فرانت‌اند استاتیک** را نگه می‌دارد. بک‌اندِ آنستریم چیزهایی می‌خواهد که Vercel serverless ندارد:
+Vercel فقط **فرانت‌اند استاتیک** را نگه می‌دارد. بک‌اندِ موزیک بازی چیزهایی می‌خواهد که Vercel serverless ندارد:
 
 - **دیسک ماندگار** — SQLite، کاورها، فایل‌های دانلودشده. روی Vercel با هر cold start پاک می‌شوند.
 - **پروسه‌ی دائمی** — uvicorn، سرور PO Token، بات تلگرام. serverless تابع است، نه سرویس.
@@ -33,7 +33,7 @@ Vercel فقط **فرانت‌اند استاتیک** را نگه می‌دارد
 بدون دامنه، بدون تنظیمات. یک تونل **موقتی** trycloudflare آدرس HTTPS می‌دهد. روی VM (Ubuntu 22.04/24.04):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mahan-mgn/Unstream/main/deploy/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mahan-mgn/MusicBazi/main/deploy/bootstrap.sh | bash
 ```
 
 اسکریپت: داکر نصب می‌کند → مخزن کلون می‌شود → ایمیج‌ها بیلد می‌شوند → پشته با تونل بالا می‌آید → آدرس `https://…trycloudflare.com` را چاپ می‌کند. همان آدرس را در مرورگر باز کن.
@@ -54,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/mahan-mgn/Unstream/main/deploy/boot
    ```bash
    docker run --rm -v "$HOME/.cloudflared:/root/.cloudflared" cloudflare/cloudflared:latest tunnel login
    # یک برگه‌ی مرورگر باز می‌کند؛ دامنه‌ات را انتخاب کن تا cert.pem بیفتد
-   docker run --rm -v "$HOME/.cloudflared:/root/.cloudflared" cloudflare/cloudflared:latest tunnel create unstream
+   docker run --rm -v "$HOME/.cloudflared:/root/.cloudflared" cloudflare/cloudflared:latest tunnel create musicbazi
    # credentials و config می‌سازد
    ```
 4. تونل را به پورت ۸۰۸۰ کانتینر `web` وصل کن (یک `route dns` + اجرای دائمی با `restart: unless-stopped`).
@@ -74,10 +74,10 @@ curl -fsSL https://raw.githubusercontent.com/mahan-mgn/Unstream/main/deploy/boot
 
 - یک فایل کوکی Netscape از یوتیوب (افزونه‌ی «Get cookies.txt» در مرورگر، در حالی که لاگین هستی) بگیر.
 - در VM بگذارش در `secrets/cookies.txt`.
-- در `.env` باز کن: `UNSTREAM_COOKIES_FILE=/secrets/cookies.txt`.
+- در `.env` باز کن: `MUSICBAZI_COOKIES_FILE=/secrets/cookies.txt`.
 - `docker compose up -d` (کوکی سوار می‌شود؛ سرور PO Token که در compose هست، گیت دوم را باز نگه می‌دارد).
 
-اگر باز هم نخورد، `UNSTREAM_PROXY` (یک پروکسی residential) آخرین راه است. **این را زود تست کن، نه آخر کار** — اگر دانلود از آی‌پی ابری کلاً ممکن نباشد، ارزش دیپلوی ابری زیر سؤال می‌رود.
+اگر باز هم نخورد، `MUSICBAZI_PROXY` (یک پروکسی residential) آخرین راه است. **این را زود تست کن، نه آخر کار** — اگر دانلود از آی‌پی ابری کلاً ممکن نباشد، ارزش دیپلوی ابری زیر سؤال می‌رود.
 
 ### ۲. کلیدهای اختیاری (همه در `.env`)
 
@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/mahan-mgn/Unstream/main/deploy/boot
 ## دستورهای روزمره (روی VM)
 
 ```bash
-cd ~/unstream
+cd ~/musicbazi
 docker compose --profile tunnel up -d --build   # بیلد + بالا (اولین بار کند)
 docker compose --profile tunnel up -d           # بالا بدون بیلد
 docker compose logs -f                          # همه‌ی لاگ‌ها

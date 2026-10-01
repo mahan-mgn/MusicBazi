@@ -422,7 +422,7 @@ class VibeSuggestion(BaseModel):
 class ZipRequest(BaseModel):
     jobIds: list[str]
     # نام فایل zip؛ معمولاً عنوان آلبوم
-    name: str = "unstream"
+    name: str = "musicbazi"
 
 
 class ZipReady(BaseModel):

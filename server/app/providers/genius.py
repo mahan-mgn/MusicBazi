@@ -20,7 +20,7 @@ import httpx
 
 from ..config import GENIUS_ACCESS_TOKEN, GENIUS_API, PROXY
 
-_HEADERS = {"user-agent": "Mozilla/5.0 (compatible; Unstream/0.2)"}
+_HEADERS = {"user-agent": "Mozilla/5.0 (compatible; MusicBazi/1.4)"}
 _TIMEOUT = 8.0
 
 _BLANK_RUN = re.compile(r"\n{3,}")

@@ -138,7 +138,7 @@ function TelegramItem({ item, onDone }: { item: LibraryItem; onDone: () => void 
  * تفاوتش با «سنجاقِ آفلاین» که بغلش نشسته، همان تفاوتی است که کاربر هم
  * می‌فهمد: سنجاق فایل را در حافظه‌ی خودِ اپ نگه می‌دارد تا *اینجا* بدون
  * اینترنت پخش شود؛ این یکی فایل را در کتابخانه‌ی موسیقیِ گوشی می‌گذارد تا
- * *هر اپِ دیگری* هم ببیندش و با پاک‌کردنِ آنستریم نرود.
+ * *هر اپِ دیگری* هم ببیندش و با پاک‌کردنِ موزیک بازی نرود.
  *
  * روی وب اصلاً نشان داده نمی‌شود: آنجا همان دکمه‌ی دانلودِ مرورگر کار را
  * می‌کند و یک آیتمِ منوی اضافه که فقط روی یک پلتفرم کار می‌کند، گیج‌کننده است.
@@ -312,7 +312,7 @@ function RowMenu({
                   setOpen(false)
                   const ref = item.track.artistId || item.track.artist
                   if (ref) {
-                    window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+                    window.dispatchEvent(new CustomEvent('musicbazi:open-artist', { detail: { ref } }))
                   }
                 }}
                 className={menuItem}
@@ -328,7 +328,7 @@ function RowMenu({
                     setOpen(false)
                     const ref = item.track.albumId || item.track.album
                     if (ref) {
-                      window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+                      window.dispatchEvent(new CustomEvent('musicbazi:open-album', { detail: { ref } }))
                     }
                   }}
                   className={menuItem}
@@ -537,7 +537,7 @@ export const LibraryRow = memo(function LibraryRow({
                 e.stopPropagation()
                 const ref = track.artistId || track.artist
                 if (ref) {
-                  window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+                  window.dispatchEvent(new CustomEvent('musicbazi:open-artist', { detail: { ref } }))
                 }
               }}
               title={t.goToArtist(track.artist)}
@@ -558,7 +558,7 @@ export const LibraryRow = memo(function LibraryRow({
               e.stopPropagation()
               const ref = track.albumId || track.album
               if (ref) {
-                window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+                window.dispatchEvent(new CustomEvent('musicbazi:open-album', { detail: { ref } }))
               }
             }}
             title={t.goToAlbum(track.album)}

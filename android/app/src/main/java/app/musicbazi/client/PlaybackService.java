@@ -1,14 +1,19 @@
-package app.unstream.client;
+package app.musicbazi.client;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -46,11 +51,11 @@ import java.util.concurrent.Executors;
  */
 public class PlaybackService extends Service {
 
-    public static final String ACTION_SYNC = "app.unstream.client.SYNC";
-    public static final String ACTION_STOP = "app.unstream.client.STOP";
-    public static final String ACTION_SLEEP = "app.unstream.client.SLEEP";
+    public static final String ACTION_SYNC = "app.musicbazi.client.SYNC";
+    public static final String ACTION_STOP = "app.musicbazi.client.STOP";
+    public static final String ACTION_SLEEP = "app.musicbazi.client.SLEEP";
 
-    private static final String CHANNEL_ID = "unstream.playback";
+    private static final String CHANNEL_ID = "musicbazi.playback";
     private static final int NOTIFICATION_ID = 0x555;
 
     /** رابطِ برگشت به جاوااسکریپت — پلاگین خودش را اینجا ثبت می‌کند */
@@ -72,6 +77,52 @@ public class PlaybackService extends Service {
 
     private MediaSessionCompat session;
     private PowerManager.WakeLock wakeLock;
+    private AudioManager audioManager;
+    private AudioFocusRequest focusRequest;
+    private boolean hasAudioFocus = false;
+    private boolean noisyReceiverRegistered = false;
+    private boolean pausedDueToTransientFocusLoss = false;
+
+    private final AudioManager.OnAudioFocusChangeListener focusListener = new AudioManager.OnAudioFocusChangeListener() {
+        @Override
+        public void onAudioFocusChange(int focusChange) {
+            switch (focusChange) {
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                    hasAudioFocus = false;
+                    if (playing) {
+                        pausedDueToTransientFocusLoss = true;
+                        emit("pause", 0);
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS:
+                    hasAudioFocus = false;
+                    pausedDueToTransientFocusLoss = false;
+                    if (playing) {
+                        emit("pause", 0);
+                    }
+                    break;
+                case AudioManager.AUDIOFOCUS_GAIN:
+                    hasAudioFocus = true;
+                    if (pausedDueToTransientFocusLoss) {
+                        pausedDueToTransientFocusLoss = false;
+                        emit("play", 0);
+                    }
+                    break;
+            }
+        }
+    };
+
+    private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                if (playing) {
+                    emit("pause", 0);
+                }
+            }
+        }
+    };
 
     /*
      * تایمرِ خواب روی نخِ *سیستم*، نه تایمرِ جاوااسکریپتی.
@@ -107,7 +158,7 @@ public class PlaybackService extends Service {
         super.onCreate();
         createChannel();
 
-        session = new MediaSessionCompat(this, "unstream");
+        session = new MediaSessionCompat(this, "musicbazi");
         session.setCallback(new MediaSessionCompat.Callback() {
             @Override
             public void onPlay() {
@@ -147,8 +198,10 @@ public class PlaybackService extends Service {
          * فقط تا وقتی چیزی در حال پخش است گرفته می‌شود.
          */
         PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "unstream:playback");
+        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "musicbazi:playback");
         wakeLock.setReferenceCounted(false);
+
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
     }
 
     @Override
@@ -240,9 +293,14 @@ public class PlaybackService extends Service {
          * «در حال استفاده از منابع» حساب نکند.
          */
         if (playing) {
+            requestAudioFocus();
+            registerNoisyReceiver();
             startForeground(NOTIFICATION_ID, notification);
             if (!wakeLock.isHeld()) wakeLock.acquire(3 * 60 * 60 * 1000L);
         } else {
+            pausedDueToTransientFocusLoss = false;
+            abandonAudioFocus();
+            unregisterNoisyReceiver();
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(Service.STOP_FOREGROUND_DETACH);
             } else {
@@ -252,6 +310,11 @@ public class PlaybackService extends Service {
                     (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             manager.notify(NOTIFICATION_ID, notification);
             if (wakeLock.isHeld()) wakeLock.release();
+        }
+
+        try {
+            PlaybackWidget.update(this, title, artist, artwork, playing);
+        } catch (Exception ignored) {
         }
     }
 
@@ -344,6 +407,12 @@ public class PlaybackService extends Service {
     }
 
     private void shutdown() {
+        abandonAudioFocus();
+        unregisterNoisyReceiver();
+        try {
+            PlaybackWidget.update(this, "", "", null, false);
+        } catch (Exception ignored) {
+        }
         if (sleepTask != null) {
             clock.removeCallbacks(sleepTask);
             sleepTask = null;
@@ -388,11 +457,69 @@ public class PlaybackService extends Service {
 
     @Override
     public void onDestroy() {
+        abandonAudioFocus();
+        unregisterNoisyReceiver();
         if (sleepTask != null) clock.removeCallbacks(sleepTask);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         session.release();
         artworkPool.shutdownNow();
         super.onDestroy();
+    }
+
+    private void requestAudioFocus() {
+        if (hasAudioFocus || audioManager == null) return;
+        int res;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (focusRequest == null) {
+                AudioAttributes attrs = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build();
+                focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                        .setAudioAttributes(attrs)
+                        .setAcceptsDelayedFocusGain(false)
+                        .setOnAudioFocusChangeListener(focusListener)
+                        .build();
+            }
+            res = audioManager.requestAudioFocus(focusRequest);
+        } else {
+            res = audioManager.requestAudioFocus(
+                    focusListener,
+                    AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN
+            );
+        }
+        hasAudioFocus = (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+    }
+
+    private void abandonAudioFocus() {
+        if (!hasAudioFocus || audioManager == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (focusRequest != null) {
+                audioManager.abandonAudioFocusRequest(focusRequest);
+            }
+        } else {
+            audioManager.abandonAudioFocus(focusListener);
+        }
+        hasAudioFocus = false;
+    }
+
+    private void registerNoisyReceiver() {
+        if (noisyReceiverRegistered) return;
+        try {
+            registerReceiver(noisyReceiver, new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+            noisyReceiverRegistered = true;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void unregisterNoisyReceiver() {
+        if (!noisyReceiverRegistered) return;
+        try {
+            unregisterReceiver(noisyReceiver);
+        } catch (Exception ignored) {
+        }
+        noisyReceiverRegistered = false;
     }
 
     @Nullable

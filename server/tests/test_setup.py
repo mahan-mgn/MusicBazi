@@ -58,34 +58,34 @@ def _client(handler) -> httpx.AsyncClient:
 
 
 def test_write_env_creates_and_updates(env_file):
-    assert su.write_env({"UNSTREAM_AUDD_TOKEN": "abc"}) == ["UNSTREAM_AUDD_TOKEN"]
-    assert "UNSTREAM_AUDD_TOKEN=abc" in env_file.read_text(encoding="utf-8")
+    assert su.write_env({"MUSICBAZI_AUDD_TOKEN": "abc"}) == ["MUSICBAZI_AUDD_TOKEN"]
+    assert "MUSICBAZI_AUDD_TOKEN=abc" in env_file.read_text(encoding="utf-8")
     # همان مقدار دوباره = هیچ تغییری = هیچ ری‌استارتی
-    assert su.write_env({"UNSTREAM_AUDD_TOKEN": "abc"}) == []
-    assert su.write_env({"UNSTREAM_AUDD_TOKEN": "xyz"}) == ["UNSTREAM_AUDD_TOKEN"]
-    assert env_file.read_text(encoding="utf-8").count("UNSTREAM_AUDD_TOKEN") == 1
+    assert su.write_env({"MUSICBAZI_AUDD_TOKEN": "abc"}) == []
+    assert su.write_env({"MUSICBAZI_AUDD_TOKEN": "xyz"}) == ["MUSICBAZI_AUDD_TOKEN"]
+    assert env_file.read_text(encoding="utf-8").count("MUSICBAZI_AUDD_TOKEN") == 1
 
 
 def test_write_env_keeps_foreign_lines(env_file):
-    env_file.write_text("# توضیحِ دستی\nUNSTREAM_CONCURRENCY=9\n", encoding="utf-8")
-    su.write_env({"UNSTREAM_AUDD_TOKEN": "abc"})
+    env_file.write_text("# توضیحِ دستی\nMUSICBAZI_CONCURRENCY=9\n", encoding="utf-8")
+    su.write_env({"MUSICBAZI_AUDD_TOKEN": "abc"})
     text = env_file.read_text(encoding="utf-8")
-    assert "UNSTREAM_CONCURRENCY=9" in text and "# توضیحِ دستی" in text
+    assert "MUSICBAZI_CONCURRENCY=9" in text and "# توضیحِ دستی" in text
 
 
 def test_restart_needed_detects_drift(env_file, monkeypatch, clean_env):
     assert su._restart_needed() is False
-    su.write_env({"UNSTREAM_AUDD_TOKEN": "abc"})
+    su.write_env({"MUSICBAZI_AUDD_TOKEN": "abc"})
     # روی دیسک هست، در محیطِ این فرایند نیست → سرور هنوز نخوانده
     assert su._restart_needed() is True
-    monkeypatch.setenv("UNSTREAM_AUDD_TOKEN", "abc")
+    monkeypatch.setenv("MUSICBAZI_AUDD_TOKEN", "abc")
     assert su._restart_needed() is False
 
 
 def test_save_rejects_keys_outside_the_allowlist(env_file):
-    """`PATH` یا `UNSTREAM_DB` اگر باز بودند، یک درخواستِ HTTP می‌توانست مسیرِ دیتابیس را عوض کند."""
+    """`PATH` یا `MUSICBAZI_DB` اگر باز بودند، یک درخواستِ HTTP می‌توانست مسیرِ دیتابیس را عوض کند."""
     client = TestClient(_app())
-    for bad in ({"PATH": "/tmp"}, {"UNSTREAM_DB": "/tmp/evil.db"}, {"PYTHONPATH": "/tmp"}):
+    for bad in ({"PATH": "/tmp"}, {"MUSICBAZI_DB": "/tmp/evil.db"}, {"PYTHONPATH": "/tmp"}):
         r = client.post("/api/setup/save", json={"values": bad, "restart": False})
         assert r.status_code == 400, bad
     assert not env_file.exists()
@@ -95,7 +95,7 @@ def test_test_rejects_unknown_group_and_key():
     client = TestClient(_app())
     assert client.post("/api/setup/test", json={"key": "nope", "values": {}}).status_code == 400
     r = client.post(
-        "/api/setup/test", json={"key": "genius", "values": {"UNSTREAM_DB": "x"}}
+        "/api/setup/test", json={"key": "genius", "values": {"MUSICBAZI_DB": "x"}}
     )
     assert r.status_code == 400
 
@@ -104,7 +104,7 @@ def test_save_rejects_multiline_values(env_file):
     """
     حفره‌ی واقعی: کلید در allowlist است ولی *مقدار* خطِ دومِ دلخواه می‌آورد.
 
-    `UNSTREAM_PROXY = "socks5://x\\nUNSTREAM_DB=/evil"` یک خط مجاز می‌نویسد و
+    `MUSICBAZI_PROXY = "socks5://x\\nMUSICBAZI_DB=/evil"` یک خط مجاز می‌نویسد و
     کنارش یک خطِ کاملاً خارجِ allowlist — چون allowlist فقط نامِ کلیدِ ارسالی را
     می‌بیند، نه چیزی که روی دیسک می‌نشیند. اندپوینت احراز هویت ندارد، پس تنها
     دفاع، ردّکردنِ خودِ مقدارِ چندخطی است.
@@ -112,14 +112,14 @@ def test_save_rejects_multiline_values(env_file):
     client = TestClient(_app())
     r = client.post(
         "/api/setup/save",
-        json={"values": {"UNSTREAM_PROXY": "socks5://127.0.0.1:1080\nUNSTREAM_DB=/evil.db"}},
+        json={"values": {"MUSICBAZI_PROXY": "socks5://127.0.0.1:1080\nMUSICBAZI_DB=/evil.db"}},
     )
     assert r.status_code == 400
     assert not env_file.exists()
     # مقدارِ تک‌خطیِ عادی نباید با این بررسی رد شود
     ok = client.post(
         "/api/setup/save",
-        json={"values": {"UNSTREAM_PROXY": "socks5://127.0.0.1:1080"}, "restart": False},
+        json={"values": {"MUSICBAZI_PROXY": "socks5://127.0.0.1:1080"}, "restart": False},
     )
     assert ok.status_code == 200
     assert env_file.read_text(encoding="utf-8").count("\n") == 1
@@ -134,7 +134,7 @@ def test_spotify_needs_both_parts():
     ok, _ = run(
         su._test_spotify(
             _client(lambda r: httpx.Response(200, json={})),
-            {"UNSTREAM_SPOTIFY_CLIENT_ID": "id"},
+            {"MUSICBAZI_SPOTIFY_CLIENT_ID": "id"},
         )
     )
     assert not ok
@@ -150,7 +150,7 @@ def test_spotify_sends_basic_auth_and_reads_status():
     ok, detail = run(
         su._test_spotify(
             _client(tok),
-            {"UNSTREAM_SPOTIFY_CLIENT_ID": "id", "UNSTREAM_SPOTIFY_CLIENT_SECRET": "sh"},
+            {"MUSICBAZI_SPOTIFY_CLIENT_ID": "id", "MUSICBAZI_SPOTIFY_CLIENT_SECRET": "sh"},
         )
     )
     assert ok and seen["auth"].startswith("Basic ")
@@ -158,7 +158,7 @@ def test_spotify_sends_basic_auth_and_reads_status():
     ok, detail = run(
         su._test_spotify(
             _client(lambda r: httpx.Response(400, json={"error": "invalid_client"})),
-            {"UNSTREAM_SPOTIFY_CLIENT_ID": "id", "UNSTREAM_SPOTIFY_CLIENT_SECRET": "bad"},
+            {"MUSICBAZI_SPOTIFY_CLIENT_ID": "id", "MUSICBAZI_SPOTIFY_CLIENT_SECRET": "bad"},
         )
     )
     assert not ok and "غلط" in detail
@@ -168,17 +168,17 @@ def test_telegram_reports_username():
     ok, detail = run(
         su._test_telegram(
             _client(
-                lambda r: httpx.Response(200, json={"ok": True, "result": {"username": "unstream_bot"}})
+                lambda r: httpx.Response(200, json={"ok": True, "result": {"username": "musicbazi_bot"}})
             ),
-            {"UNSTREAM_TELEGRAM_BOT_TOKEN": "123:abc"},
+            {"MUSICBAZI_TELEGRAM_BOT_TOKEN": "123:abc"},
         )
     )
-    assert ok and detail == "@unstream_bot"
+    assert ok and detail == "@musicbazi_bot"
 
     ok, detail = run(
         su._test_telegram(
             _client(lambda r: httpx.Response(401, json={"ok": False, "description": "Unauthorized"})),
-            {"UNSTREAM_TELEGRAM_BOT_TOKEN": "nope"},
+            {"MUSICBAZI_TELEGRAM_BOT_TOKEN": "nope"},
         )
     )
     assert not ok and "Unauthorized" in detail
@@ -187,18 +187,18 @@ def test_telegram_reports_username():
 def test_acoustid_separates_key_from_fpcalc(monkeypatch):
     good = lambda r: httpx.Response(200, json={"status": "ok"})  # noqa: E731
     monkeypatch.setattr(su.cfg, "FPCALC", "/usr/bin/fpcalc")
-    ok, _ = run(su._test_acoustid(_client(good), {"UNSTREAM_ACOUSTID_KEY": "k"}))
+    ok, _ = run(su._test_acoustid(_client(good), {"MUSICBAZI_ACOUSTID_KEY": "k"}))
     assert ok
 
     # کلید سالم است ولی ابزارش نیست — پیام باید همین را بگوید، نه «کلید غلط»
     monkeypatch.setattr(su.cfg, "FPCALC", None)
-    ok, detail = run(su._test_acoustid(_client(good), {"UNSTREAM_ACOUSTID_KEY": "k"}))
+    ok, detail = run(su._test_acoustid(_client(good), {"MUSICBAZI_ACOUSTID_KEY": "k"}))
     assert ok and "fpcalc" in detail
 
     ok, _ = run(
         su._test_acoustid(
             _client(lambda r: httpx.Response(200, json={"status": "error", "error": "No client key"})),
-            {"UNSTREAM_ACOUSTID_KEY": "k"},
+            {"MUSICBAZI_ACOUSTID_KEY": "k"},
         )
     )
     assert not ok
@@ -217,7 +217,7 @@ def test_gemini_distinguishes_model_from_key():
                     json={"error": {"message": "models/gemini-9-flash is not found for API version"}},
                 )
             ),
-            {"UNSTREAM_GEMINI_API_KEY": "AIza-x"},
+            {"MUSICBAZI_GEMINI_API_KEY": "AIza-x"},
         )
     )
     assert not ok and "مدل" in detail
@@ -227,7 +227,7 @@ def test_gemini_distinguishes_model_from_key():
             _client(
                 lambda r: httpx.Response(400, json={"error": {"message": "API key not valid."}})
             ),
-            {"UNSTREAM_GEMINI_API_KEY": "bad"},
+            {"MUSICBAZI_GEMINI_API_KEY": "bad"},
         )
     )
     assert not ok and "کلید" in detail
@@ -237,7 +237,7 @@ def test_gemini_distinguishes_model_from_key():
 
 
 def test_proxy_checks_shape_before_touching_the_network():
-    ok, detail = run(su._test_proxy(_client(lambda r: httpx.Response(200)), {"UNSTREAM_PROXY": "nope"}))
+    ok, detail = run(su._test_proxy(_client(lambda r: httpx.Response(200)), {"MUSICBAZI_PROXY": "nope"}))
     assert not ok and "قالب" in detail
     ok, _ = run(su._test_proxy(_client(lambda r: httpx.Response(200)), {}))
     assert not ok
@@ -252,7 +252,7 @@ def test_network_failure_is_not_reported_as_a_bad_key():
     client = TestClient(_app())
     client.app.state.http = _client(boom)
     r = client.post(
-        "/api/setup/test", json={"key": "genius", "values": {"UNSTREAM_GENIUS_ACCESS_TOKEN": "t"}}
+        "/api/setup/test", json={"key": "genius", "values": {"MUSICBAZI_GENIUS_ACCESS_TOKEN": "t"}}
     )
     assert r.status_code == 200
     body = r.json()
@@ -263,9 +263,9 @@ def test_network_failure_is_not_reported_as_a_bad_key():
 
 
 def test_state_masks_keys(env_file, clean_env, monkeypatch):
-    monkeypatch.setenv("UNSTREAM_AUDD_TOKEN", "supersecretvalue")
+    monkeypatch.setenv("MUSICBAZI_AUDD_TOKEN", "supersecretvalue")
     body = TestClient(_app()).get("/api/setup").json()
-    assert body["set"]["UNSTREAM_AUDD_TOKEN"] == "…alue"
+    assert body["set"]["MUSICBAZI_AUDD_TOKEN"] == "…alue"
     assert "supersecretvalue" not in json.dumps(body)
     assert "restartNeeded" in body and "env" in body
 
@@ -276,7 +276,7 @@ def test_gate_opens_for_an_install_that_was_already_configured(env_file, clean_e
     نشد پرچمِ DONE ست نبود — و اپی که کامل کار می‌کرد ناگهان پشتِ دروازه ماند.
     """
     monkeypatch.setattr(su.cfg, "SETUP_DONE", False)
-    monkeypatch.setenv("UNSTREAM_SPOTIFY_CLIENT_ID", "89ce-real-looking-id")
+    monkeypatch.setenv("MUSICBAZI_SPOTIFY_CLIENT_ID", "89ce-real-looking-id")
     assert TestClient(_app()).get("/api/setup").json()["done"] is True
 
 
@@ -288,7 +288,7 @@ def test_gate_stays_shut_on_a_genuinely_fresh_install(env_file, clean_env, monke
 def test_done_flag_alone_opens_the_gate(env_file, clean_env, monkeypatch):
     """«رد کردن» با کلیدِ خالی هم باید دروازه را برای همیشه باز کند."""
     monkeypatch.setattr(su.cfg, "SETUP_DONE", False)
-    monkeypatch.setenv("UNSTREAM_SETUP_DONE", "1")
+    monkeypatch.setenv("MUSICBAZI_SETUP_DONE", "1")
     assert TestClient(_app()).get("/api/setup").json()["done"] is True
 
 
@@ -297,7 +297,7 @@ def test_save_writes_done_flag(env_file, clean_env):
         "/api/setup/save", json={"values": {}, "restart": False, "done": True}
     )
     assert r.status_code == 200 and r.json()["restarting"] is False
-    assert "UNSTREAM_SETUP_DONE=1" in env_file.read_text(encoding="utf-8")
+    assert "MUSICBAZI_SETUP_DONE=1" in env_file.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- کوکی
@@ -322,7 +322,7 @@ def test_cookies_accepts_netscape_and_registers_the_path(env_file):
     data = r.json()
     assert data["cookies"] == 2 and data["youtube"] == 1
     assert su.COOKIES_PATH.read_text(encoding="utf-8").startswith("# Netscape")
-    assert f"UNSTREAM_COOKIES_FILE={su.COOKIES_PATH}" in env_file.read_text(encoding="utf-8")
+    assert f"MUSICBAZI_COOKIES_FILE={su.COOKIES_PATH}" in env_file.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- ری‌استارت
@@ -396,13 +396,13 @@ def test_save_stays_alive_when_the_relauncher_cannot_spawn(env_file, clean_env, 
     monkeypatch.setattr(su, "_exit", lambda code: exits.append(code))
     r = TestClient(_app()).post(
         "/api/setup/save",
-        json={"values": {"UNSTREAM_AUDD_TOKEN": "x"}, "restart": True, "done": False},
+        json={"values": {"MUSICBAZI_AUDD_TOKEN": "x"}, "restart": True, "done": False},
     )
     body = r.json()
     assert body["restarting"] is False and body["manualRestart"] is True
     assert exits == []
     # ولی مقدار روی دیسک نشسته و از اجرایِ بعدی خوانده می‌شود
-    assert "UNSTREAM_AUDD_TOKEN=x" in env_file.read_text(encoding="utf-8")
+    assert "MUSICBAZI_AUDD_TOKEN=x" in env_file.read_text(encoding="utf-8")
 
 
 def test_launch_reuses_the_running_invocation(monkeypatch):

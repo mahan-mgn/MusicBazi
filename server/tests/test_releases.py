@@ -57,7 +57,7 @@ class TestRelease:
 
     def test_apk_present_gives_url_and_size(self, dirs, client):
         rel, _ = dirs
-        apk = rel / "unstream-1.2.apk"
+        apk = rel / "musicbazi-1.2.apk"
         apk.write_bytes(b"z" * 1234)
         write_manifest(rel, versionCode=3, versionName="1.2")
         body = client.get("/api/release").json()
@@ -66,12 +66,12 @@ class TestRelease:
 
     def test_apk_download_names_the_file(self, dirs, client):
         rel, _ = dirs
-        apk = rel / "unstream-1.2.apk"
+        apk = rel / "musicbazi-1.2.apk"
         apk.write_bytes(b"abc")
         write_manifest(rel, versionCode=3, versionName="1.2")
         res = client.get("/api/release/apk")
         assert res.status_code == 200
-        assert "unstream-1.2.apk" in res.headers["content-disposition"]
+        assert "musicbazi-1.2.apk" in res.headers["content-disposition"]
         assert res.headers["content-type"].startswith("application/vnd.android.package-archive")
 
     def test_apk_404_when_absent(self, dirs, client):

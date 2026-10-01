@@ -9,7 +9,7 @@
  *
  * اجرا:
  *   node scripts/android-release.mjs            # بیلد + ساختنِ پوشه‌ی release/
- *   node scripts/android-release.mjs --publish  # و کپی‌کردن روی سرور (UNSTREAM_RELEASES_DIR)
+ *   node scripts/android-release.mjs --publish  # و کپی‌کردن روی سرور (MUSICBAZI_RELEASES_DIR)
  *
  * `mapping.txt` هم کنار خروجی می‌نشیند: بدونِ آن، stacktraceی که از
  * `POST /api/client-error` می‌آید (که R8 آن را مبهم کرده) هیچ‌وقت رمزگشا نمی‌شود.
@@ -139,7 +139,7 @@ await grab(
   'mapping (R8)',
 )
 
-const notes = process.env.UNSTREAM_RELEASE_NOTES ?? ''
+const notes = process.env.MUSICBAZI_RELEASE_NOTES ?? ''
 const manifest = {
   versionCode: code,
   versionName: name,
@@ -160,8 +160,8 @@ if (!publish) {
   console.error('✖ APK امضا نشده — انتشار نمی‌شود. اول keystore.properties را بگذار.')
   process.exit(1)
 } else {
-  const dest = process.env.UNSTREAM_RELEASES_DIR
-  if (!dest) throw new Error('UNSTREAM_RELEASES_DIR ست نشده — مقصد کپی کجاست؟')
+  const dest = process.env.MUSICBAZI_RELEASES_DIR
+  if (!dest) throw new Error('MUSICBAZI_RELEASES_DIR ست نشده — مقصد کپی کجاست؟')
   await mkdir(dest, { recursive: true })
   for (const f of [...copied, join(OUT, 'latest.json')]) {
     await cp(f, join(dest, f.split(/[\\/]/).pop()))

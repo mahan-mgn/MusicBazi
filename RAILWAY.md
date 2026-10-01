@@ -1,4 +1,4 @@
-# آنستریم روی Railway
+# موزیک بازی روی Railway
 
 راه‌اندازی این‌جا با `Dockerfile.railway` انجام می‌شود — **یک سرویس، یک کانتینر**:
 nginx (فرانت + پروکسی `/api`) + uvicorn + سرور PO Token هر سه داخل یک کانتینر،
@@ -18,23 +18,23 @@ nginx (فرانت + پروکسی `/api`) + uvicorn + سرور PO Token هر سه
 ```bash
 npm i -g @railway/cli      # یک‌بار
 railway login              # مرورگر باز می‌شود؛ با GitHub لاگین کن
-railway init               # نام پروژه: unstream
+railway init               # نام پروژه: musicbazi
 ```
 
 یا از داشبورد: https://railway.com → New Project → Empty.
 
 ## ۲ — سرویس از روی GitHub
 
-1. مخزن `mahan-mgn/Unstream` را به پروژه وصل کن (Deploy from GitHub repo).
+1. مخزن `mahan-mgn/MusicBazi` را به پروژه وصل کن (Deploy from GitHub repo).
    Railway خودش `railway.json` را می‌بیند و `Dockerfile.railway` را بیلد می‌کند.
-2. **اسم سرویس را حتماً `unstream` بگذار** — بعداً به آن Volume می‌چسبد.
+2. **اسم سرویس را حتماً `musicbazi` بگذار** — بعداً به آن Volume می‌چسبد.
 3. اولین بیلد ~۵-۸ دقیقه (ffmpeg + librosa + بیلد bgutil). صبر کن سبز شود.
 
 اگر از CLI دیپلوی می‌کنی (بدون GitHub): `railway up` داخل پوشه ریپو.
 
 ## ۳ — Volume (دیتابیس + دانلودها این‌جا می‌مانند)
 
-داشبورد → سرویس `unstream` → تب **Volumes** → Attach Volume:
+داشبورد → سرویس `musicbazi` → تب **Volumes** → Attach Volume:
 
 | تنظیم | مقدار |
 |---|---|
@@ -50,20 +50,20 @@ railway init               # نام پروژه: unstream
 داشبورد (Variables) بگذاری، همان نام‌های `.env.docker.example`:
 
 ```
-UNSTREAM_SPOTIFY_CLIENT_ID / UNSTREAM_SPOTIFY_CLIENT_SECRET
-UNSTREAM_GEMINI_API_KEY
-UNSTREAM_ACOUSTID_KEY / UNSTREAM_AUDD_TOKEN
-UNSTREAM_TELEGRAM_BOT_TOKEN        # بات جدا نیست؛ سرور اصلی خودش بالا می‌آوردش
+MUSICBAZI_SPOTIFY_CLIENT_ID / MUSICBAZI_SPOTIFY_CLIENT_SECRET
+MUSICBAZI_GEMINI_API_KEY
+MUSICBAZI_ACOUSTID_KEY / MUSICBAZI_AUDD_TOKEN
+MUSICBAZI_TELEGRAM_BOT_TOKEN        # بات جدا نیست؛ سرور اصلی خودش بالا می‌آوردش
 ```
 
 کوکی یوتیوب: از همان ویزارد آپلودش کن → `/data/db/cookies.txt` روی Volume
-می‌نشیند و باقی می‌ماند. (دست‌ورز: `UNSTREAM_COOKIES_FILE=/data/db/cookies.txt`
+می‌نشیند و باقی می‌ماند. (دست‌ورز: `MUSICBAZI_COOKIES_FILE=/data/db/cookies.txt`
 خودکار ست می‌شود.)
 
 ## ۵ — دامنه
 
 سرویس → Settings → Networking → **Generate Domain** →
-آدرشی مثل `https://unstream-xxxx.railway.app` می‌گیری. HTTPS خودکار است →
+آدرشی مثل `https://musicbazi-xxxx.railway.app` می‌گیری. HTTPS خودکار است →
 PWA، سرویس‌ورکر آفلاین و میکروفون کار می‌کنند. دامنه‌ی خودت بعداً با
 Custom Domain (CNAME + TXT) وصل می‌شود.
 
@@ -88,9 +88,9 @@ railway up
 - **دیتای لوکال منتقل نمی‌شود** — Railway راهِ آپلود به Volume ندارد؛ دیپلوی
   با کتابخانه‌ی خالی شروع می‌کند (کاتالوگ کش خودش را می‌سازد).
 - **RAM سقف ۱GB روی Trial** — uvicorn + node + nginx + ffmpeg با هم لب‌به‌لب
-  است؛ دانلود همزمان را با `UNSTREAM_CONCURRENCY=1` پایین بیاور اگر OOM دیدی.
+  است؛ دانلود همزمان را با `MUSICBAZI_CONCURRENCY=1` پایین بیاور اگر OOM دیدی.
 - **Egress ۰.۰۵ دلار/GB** — هر آهنگی که کاربر می‌گیرد از این حساب می‌رود.
 - **حالت اینترانت/قطعی** (reach.py) روی Railway بی‌معناست — سرور خودش بیرون
   از فیلتر است.
-- **بات تلگرام** جدا نیست: `UNSTREAM_TELEGRAM_BOT_TOKEN` که ست شود سرور اصلی
+- **بات تلگرام** جدا نیست: `MUSICBAZI_TELEGRAM_BOT_TOKEN` که ست شود سرور اصلی
   خودش بات را در-process بالا می‌آورد (نیاز به ری‌استارت بعد از ذخیره).

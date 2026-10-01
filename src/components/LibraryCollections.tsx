@@ -250,10 +250,10 @@ export function GroupHero({
                 onClick={() => {
                   if (round) {
                     const ref = group.items.find((x) => x.track.artistId)?.track.artistId || group.title
-                    window.dispatchEvent(new CustomEvent('unstream:open-artist', { detail: { ref } }))
+                    window.dispatchEvent(new CustomEvent('musicbazi:open-artist', { detail: { ref } }))
                   } else {
                     const ref = group.items.find((x) => x.track.albumId)?.track.albumId || group.title
-                    window.dispatchEvent(new CustomEvent('unstream:open-album', { detail: { ref } }))
+                    window.dispatchEvent(new CustomEvent('musicbazi:open-album', { detail: { ref } }))
                   }
                 }}
                 title={round ? t.viewOnlineArtist : t.viewOnlineAlbum}

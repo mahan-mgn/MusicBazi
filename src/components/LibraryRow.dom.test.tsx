@@ -50,12 +50,12 @@ afterEach(() => {
 })
 
 describe('LibraryRow', () => {
-  it('کلیک روی نام هنرمند رویداد unstream:open-artist را با شناسه هنرمند می‌فرستد', () => {
+  it('کلیک روی نام هنرمند رویداد musicbazi:open-artist را با شناسه هنرمند می‌فرستد', () => {
     let capturedDetail: unknown = null
     const handler = (e: Event) => {
       capturedDetail = (e as CustomEvent).detail
     }
-    window.addEventListener('unstream:open-artist', handler)
+    window.addEventListener('musicbazi:open-artist', handler)
 
     act(() => {
       root.render(
@@ -79,15 +79,15 @@ describe('LibraryRow', () => {
     })
 
     expect(capturedDetail).toEqual({ ref: 'sp:artist:kourosh' })
-    window.removeEventListener('unstream:open-artist', handler)
+    window.removeEventListener('musicbazi:open-artist', handler)
   })
 
-  it('کلیک روی نام آلبوم رویداد unstream:open-album را با شناسه آلبوم می‌فرستد', () => {
+  it('کلیک روی نام آلبوم رویداد musicbazi:open-album را با شناسه آلبوم می‌فرستد', () => {
     let capturedDetail: unknown = null
     const handler = (e: Event) => {
       capturedDetail = (e as CustomEvent).detail
     }
-    window.addEventListener('unstream:open-album', handler)
+    window.addEventListener('musicbazi:open-album', handler)
 
     act(() => {
       root.render(
@@ -111,7 +111,7 @@ describe('LibraryRow', () => {
     })
 
     expect(capturedDetail).toEqual({ ref: 'sp:album:backbrink' })
-    window.removeEventListener('unstream:open-album', handler)
+    window.removeEventListener('musicbazi:open-album', handler)
   })
 
   it('منوی سه نقطه شامل گزینه‌های «پخش بعدی» و «افزودن به صف» است و با کلیک فراخوانی می‌شوند', () => {

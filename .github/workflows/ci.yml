@@ -43,6 +43,6 @@ jobs:
       # runner اوبونتو از قبل ندارد.
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - run: pip install -r requirements-dev.txt
-      # conftest خودش UNSTREAM_ENV_NO_FILES=1 می‌گذارد — هیچ .env توسعه‌دهنده
+      # conftest خودش MUSICBAZI_ENV_NO_FILES=1 می‌گذارد — هیچ .env توسعه‌دهنده
       # یا کلید واقعی در CI خوانده نمی‌شود.
       - run: python -m pytest -p no:warnings

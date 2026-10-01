@@ -13,6 +13,15 @@ import { Capacitor } from '@capacitor/core'
  */
 
 const KEY = 'server:base'
+const REMOTE_KEY = 'server:remote'
+
+export function lastRemoteBase(): string {
+  try {
+    return localStorage.getItem(REMOTE_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
 
 /**
  * آیا داخل پوسته‌ی نیتیو اجرا می‌شویم؟
@@ -34,7 +43,7 @@ export function isNativeApp(): boolean {
  * شبکه را share می‌کنند، پس loopback از داخل اپ همان‌جا می‌رسد — بدون وای‌فای،
  * بدون آی‌پی، بدون هیچ دستگاهِ دیگری.
  *
- * پورت با `UNSTREAM_PHONE_PORT` عوض می‌شود؛ اگر کسی عوض کرد، همان آدرس را دستی
+ * پورت با `MUSICBAZI_PHONE_PORT` عوض می‌شود؛ اگر کسی عوض کرد، همان آدرس را دستی
  * در «آدرس سرور» وارد می‌کند.
  */
 export const LOCAL_PORT = 8000
@@ -92,11 +101,79 @@ export function setServerBase(raw: string): void {
   const value = normalizeBase(raw)
   cached = value
   try {
-    if (value) localStorage.setItem(KEY, value)
-    else localStorage.removeItem(KEY)
+    if (value) {
+      localStorage.setItem(KEY, value)
+      if (!isLocalServer(value)) {
+        localStorage.setItem(REMOTE_KEY, value)
+      }
+    } else {
+      localStorage.removeItem(KEY)
+    }
   } catch {
     // ذخیره نشد — همین اجرا کار می‌کند، دفعه‌ی بعد دوباره پرسیده می‌شود
   }
+}
+
+/**
+ * جستجوی خودکار برای یافتن سرور موزیک بازی در شبکه محلی (وای‌فای)
+ * ساب‌نت‌های رایج (192.168.1.x و 192.168.0.x یا آخرین آی‌پی شناخته‌شده)
+ * را روی پورت‌های ۸۰۸۰ و ۸۰۰۰ پینگ می‌کند.
+ */
+export async function discoverLanServer(onProgress?: (checked: number, total: number) => void): Promise<string | null> {
+  const remembered = lastRemoteBase()
+  const ports = [8080, 8000]
+  const subnets = new Set<string>()
+
+  if (remembered) {
+    const match = /https?:\/\/(\d+\.\d+\.\d+)\.\d+(?::(\d+))?/.exec(remembered)
+    if (match) {
+      subnets.add(match[1])
+      if (match[2]) ports.unshift(Number(match[2]))
+    }
+  }
+  subnets.add('192.168.1')
+  subnets.add('192.168.0')
+
+  const hostSuffixes: number[] = []
+  for (let i = 2; i <= 40; i++) hostSuffixes.push(i)
+  for (let i = 100; i <= 130; i++) hostSuffixes.push(i)
+
+  const candidates: string[] = []
+  for (const subnet of subnets) {
+    for (const port of Array.from(new Set(ports))) {
+      for (const h of hostSuffixes) {
+        candidates.push(`http://${subnet}.${h}:${port}`)
+      }
+    }
+  }
+
+  const batchSize = 20
+  let checked = 0
+  for (let i = 0; i < candidates.length; i += batchSize) {
+    const batch = candidates.slice(i, i + batchSize)
+    const promises = batch.map(async (url) => {
+      try {
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 900)
+        const res = await fetch(`${url}/api/health`, { signal: ctrl.signal })
+        clearTimeout(timer)
+        if (res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { ok?: boolean }
+          if (data.ok) return url
+        }
+      } catch {
+        // unreachable
+      }
+      return null
+    })
+
+    const results = await Promise.all(promises)
+    const found = results.find(Boolean)
+    if (found) return found
+    checked += batch.length
+    onProgress?.(checked, candidates.length)
+  }
+  return null
 }
 
 /**

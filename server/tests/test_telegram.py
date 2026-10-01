@@ -29,7 +29,7 @@ from app.models import (
 def tg(fresh_db):
     """دیتابیسِ خالی + حالتِ درون‌حافظه‌ایِ پاک، و باتی که «بالاست»."""
     telegram.reset()
-    telegram.heartbeat("unstream_bot")
+    telegram.heartbeat("musicbazi_bot")
     return fresh_db
 
 
@@ -104,7 +104,7 @@ def test_pairing_needs_a_running_bot(tg):
 def test_deep_link_carries_the_code(tg):
     pairing = asyncio.run(main.telegram_pair())
 
-    assert pairing.deepLink == f"https://t.me/unstream_bot?start=link_{pairing.code}"
+    assert pairing.deepLink == f"https://t.me/musicbazi_bot?start=link_{pairing.code}"
 
 
 def test_status_separates_not_linked_from_bot_down(tg):
@@ -255,15 +255,15 @@ def test_finished_sends_are_pruned(tg, track, monkeypatch):
 
 def test_polling_reports_the_bot_as_alive(tg):
     telegram.reset()
-    asyncio.run(main.telegram_next_job(username="unstream_bot", wait=0))
+    asyncio.run(main.telegram_next_job(username="musicbazi_bot", wait=0))
 
     assert telegram.connected() is True
-    assert telegram.bot_username() == "unstream_bot"
+    assert telegram.bot_username() == "musicbazi_bot"
 
 
 def test_heartbeat_goes_stale(tg):
     telegram.reset()
-    telegram.heartbeat("unstream_bot", now=time.time() - telegram.PRESENCE_TTL - 1)
+    telegram.heartbeat("musicbazi_bot", now=time.time() - telegram.PRESENCE_TTL - 1)
 
     assert telegram.connected() is False
     assert telegram.bot_username() is None
@@ -271,9 +271,9 @@ def test_heartbeat_goes_stale(tg):
 
 def test_bot_registration_returns_current_status(tg, track):
     telegram.reset()
-    status = asyncio.run(main.telegram_bot_heartbeat(TelegramHeartbeat(username="unstream_bot")))
+    status = asyncio.run(main.telegram_bot_heartbeat(TelegramHeartbeat(username="musicbazi_bot")))
 
-    assert (status.connected, status.botUsername) == (True, "unstream_bot")
+    assert (status.connected, status.botUsername) == (True, "musicbazi_bot")
 
 
 def test_unknown_send_is_not_found(tg):
