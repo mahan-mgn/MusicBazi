@@ -4,12 +4,14 @@ import { isNativeApp } from '../lib/server'
 import { TelegramConnection } from './TelegramLink'
 
 const AUTHORS = [
-  { handle: 'amiralibgi', url: 'https://x.com/_amiralibgi' },
-  { handle: 'yazdanctx', url: 'https://x.com/yazdanctx' },
+  { handle: 'mahan-mgn', url: 'https://github.com/mahan-mgn', avatar: '/avatar.jpg' },
 ]
 
-/** آواتار تولیدی — بدون درخواست شبکه‌ی خارجی */
-function Avatar({ seed }: { seed: string }) {
+/** آواتار اختصاصی یا تولیدی — بدون درخواست شبکه‌ی خارجی */
+function Avatar({ seed, avatar }: { seed: string; avatar?: string }) {
+  if (avatar) {
+    return <img src={avatar} alt="" aria-hidden className="size-4 shrink-0 rounded-full object-cover" />
+  }
   let h = 0
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
   const hue = h % 360
@@ -69,7 +71,7 @@ export default function Footer() {
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 transition hover:text-fg"
             >
-              <Avatar seed={author.handle} />
+              <Avatar seed={author.handle} avatar={author.avatar} />
               {author.handle}
             </a>
           </span>
