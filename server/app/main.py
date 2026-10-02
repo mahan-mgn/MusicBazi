@@ -1007,6 +1007,19 @@ async def stream_file(job_id: str) -> FileResponse:
     )
 
 
+@app.options("/api/stream")
+async def stream_options() -> Response:
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition",
+        },
+    )
+
+
 @app.get("/api/stream")
 async def stream_audio(
     track_id: str,

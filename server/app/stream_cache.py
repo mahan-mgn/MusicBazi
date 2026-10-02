@@ -328,9 +328,15 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         if p.is_file() and p.stem == out_stem.name:
             p.unlink(missing_ok=True)
 
+    format_selector = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio/best"
+    if quality == "m4a":
+        format_selector = "bestaudio[ext=m4a]/bestaudio/best"
+    elif quality == "opus":
+        format_selector = "bestaudio[ext=opus]/bestaudio/best"
+
     ydl_opts = ydl.opts(
         outtmpl=str(out_stem) + ".%(ext)s",
-        format="bestaudio/best",
+        format=format_selector,
         format_sort=["abr", "asr"],
         noplaylist=True,
         quiet=True,
@@ -341,16 +347,6 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
 
     if quality == "flac":
         ydl_opts["postprocessors"] = [{"key": "FFmpegExtractAudio", "preferredcodec": "flac"}]
-    elif quality == "320":
-        ydl_opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "320"}
-        ]
-    elif quality == "opus":
-        ydl_opts["postprocessors"] = [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "opus", "preferredquality": "160"}
-        ]
-    elif quality == "m4a":
-        ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio/best"
 
     last_error: Exception | None = None
     for candidate in candidates:
@@ -426,6 +422,8 @@ async def get_stream_response(
     headers = {
         "Accept-Ranges": "bytes",
         "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
         "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition",
     }
     return FileResponse(path, media_type=media_type, headers=headers)

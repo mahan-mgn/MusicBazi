@@ -88,28 +88,18 @@ public class PlaybackService extends Service {
         public void onAudioFocusChange(int focusChange) {
             switch (focusChange) {
                 case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                case AudioManager.AUDIOFOCUS_LOSS:
                     hasAudioFocus = false;
-                    if (playing) {
-                        pausedDueToTransientFocusLoss = true;
-                        emit("pause", 0);
-                    }
+                    pausedDueToTransientFocusLoss = false;
+                    // وب‌ویوی داخلی کرومیوم خود مستقلاً فکوس صوتی را مدیریت می‌کند.
+                    // ارسال دستی pause از سرویس نیتیو باعث توقف فوری پخش در حین شروع می‌شود
+                    // چون کرومیوم و سرویس هر دو به صورت همزمان درخواست فکوس می‌دهند.
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
                     // اجازه می‌دهیم سیستم خودش ولوم را کم کند؛ قطع و وصل ناگهانی صدا در هدفون ایجاد نمی‌کنیم
                     break;
-                case AudioManager.AUDIOFOCUS_LOSS:
-                    hasAudioFocus = false;
-                    pausedDueToTransientFocusLoss = false;
-                    if (playing) {
-                        emit("pause", 0);
-                    }
-                    break;
                 case AudioManager.AUDIOFOCUS_GAIN:
                     hasAudioFocus = true;
-                    if (pausedDueToTransientFocusLoss) {
-                        pausedDueToTransientFocusLoss = false;
-                        emit("play", 0);
-                    }
                     break;
             }
         }

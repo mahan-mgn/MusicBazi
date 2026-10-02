@@ -249,7 +249,11 @@ function attach(deck: Deck): void {
     if (el === active()?.el) handlers?.onEnded()
   })
   el.addEventListener('error', () => {
-    if (el === active()?.el) handlers?.onError()
+    if (el === active()?.el) {
+      const err = el.error
+      console.warn(`[audioEngine] playback error (code: ${err?.code}, msg: ${err?.message}) for src: ${el.src}`)
+      handlers?.onError()
+    }
   })
 }
 
@@ -440,6 +444,7 @@ export const engine = {
       // پرشِ سریع به ترکِ بعدی، `play()`ِ قبلی را با AbortError رد می‌کند —
       // این شکست نیست، پخشِ تازه دارد شروع می‌شود
       if (err instanceof DOMException && err.name === 'AbortError') return
+      console.warn('[audioEngine] deck.el.play() rejected:', err)
       handlers?.onError()
     })
   },

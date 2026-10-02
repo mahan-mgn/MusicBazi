@@ -35,8 +35,9 @@ server/vendor/
 secrets/*
 !secrets/.gitkeep
 
-# APK ساخته‌شده‌ی اندروید — خروجی بیلد است، نه سورس
+# APK و AAB ساخته‌شده‌ی اندروید — خروجی بیلد است، نه سورس
 *.apk
+*.aab
 
 # وضعیت ماشین‌محلیِ ابزارها (Spec Kit / Claude / Hermes) — سهم‌گذاری نمی‌شود
 .claude/
