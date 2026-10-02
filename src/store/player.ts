@@ -259,8 +259,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
      */
     onTransport((action, value) => {
       const state = get()
-      if (action === 'play' || action === 'pause') state.toggle()
-      else if (action === 'next') state.next()
+      if (action === 'play') {
+        if (!state.playing) state.toggle()
+      } else if (action === 'pause') {
+        state.pause()
+      } else if (action === 'next') state.next()
       else if (action === 'prev') state.prev()
       else if (action === 'stop') state.close()
       else if (action === 'seek') state.seek(value)
@@ -373,7 +376,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
        */
       if (!notifyAsked) {
         notifyAsked = true
-        void ensureNotificationPermission()
+        void ensureNotificationPermission().then((granted) => {
+          if (granted) syncNative(true)
+        })
       }
     }
 

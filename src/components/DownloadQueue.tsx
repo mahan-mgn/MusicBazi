@@ -3,6 +3,7 @@ import { useBackDismiss } from '../lib/back'
 import { api } from '../lib/api'
 import { digits, fileExt, formatLabel, percent as fmtPercent, safeFilename } from '../lib/format'
 import { useI18n, type Dict } from '../lib/i18n'
+import { canSaveToDevice, downloadFile, haptic, saveToDevice } from '../lib/native'
 import {
   isActive,
   isDone,
@@ -129,11 +130,31 @@ function TrackLine({ job, queue }: { job: Job; queue: PlayItem[] }) {
               ? `${safeFilename(`${job.track.artist} - ${job.track.title}`)}.${fileExt(job.format)}`
               : undefined
           }
-          onClick={(e) => {
-            if (!job.fileUrl) e.preventDefault()
+          onClick={async (e) => {
+            if (!job.fileUrl) {
+              e.preventDefault()
+              return
+            }
+            if (canSaveToDevice()) {
+              e.preventDefault()
+              try {
+                await saveToDevice({
+                  url: job.fileUrl,
+                  title: job.track.title,
+                  artist: job.track.artist,
+                  album: job.track.album ?? '',
+                  ext: fileExt(job.format),
+                })
+                haptic.success()
+                useToasts.getState().push(t.saveToPhoneDone, 'success')
+              } catch (err) {
+                haptic.warn()
+                useToasts.getState().push(err instanceof Error ? err.message : t.saveToPhoneFailed, 'error')
+              }
+            }
           }}
-          title={job.fileUrl ? t.save : t.mockNoFile}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/40 bg-accent-dim px-1.5 py-0.5 text-[10px] font-semibold text-accent"
+          title={job.fileUrl ? (canSaveToDevice() ? t.saveToPhone : t.save) : t.mockNoFile}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/40 bg-accent-dim px-1.5 py-0.5 text-[10px] font-semibold text-accent cursor-pointer"
         >
           <DownloadIcon className="size-3" />
           {formatLabel(job.format, lang)}
@@ -186,8 +207,8 @@ function BatchBlock({ view }: { view: BatchView }) {
         pushToast(t.mockNoFile, 'info')
         return
       }
-      // ناوبری به URL، نه fetch: دانلود بومی و بدون نگه‌داشتن آرشیو در حافظه
-      location.href = url
+      // در وب مستقیم، در اندروید با دانلود منیجر سیستم
+      await downloadFile(url)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {

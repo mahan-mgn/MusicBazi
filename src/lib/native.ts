@@ -409,6 +409,21 @@ export async function openExternal(url: string): Promise<boolean> {
 }
 
 /**
+ * دانلود فایل (مثل آرشیو ZIP).
+ *
+ * در وب با `location.href` مستقیم دانلود می‌شود.
+ * در اپ اندروید اگر `location.href` تغییر کند WebView صفحه را عوض می‌کند و اپ سفید می‌شود؛
+ * پس با `openExternal` به دانلود منیجر اندروید سپرده می‌شود.
+ */
+export async function downloadFile(url: string): Promise<void> {
+  if (isNativeApp()) {
+    await openExternal(url)
+  } else {
+    location.href = url
+  }
+}
+
+/**
  * اگر موتورِ رندر در اجرای *قبلی* مرده باشد، متنش را می‌دهد (و پاکش می‌کند).
  *
  * یک‌بار مصرف است: یک مرگ باید یک بار گزارش شود، نه هر بار که اپ بالا بیاید.

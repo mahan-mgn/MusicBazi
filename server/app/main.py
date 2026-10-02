@@ -112,7 +112,7 @@ from .models import (
 )
 from .providers import audd, genius, spotify
 
-USER_AGENT = "MusicBazi/1.4 (+local)"
+USER_AGENT = "MusicBazi/1.0 (+local)"
 
 # ارسال‌های تمام‌شده‌ی قدیمی‌تر از این پاک می‌شوند — فقط برای اینکه جدولِ صف
 # بی‌نهایت رشد نکند؛ وب فقط تا وقتی دکمه روی صفحه است سراغشان می‌رود.

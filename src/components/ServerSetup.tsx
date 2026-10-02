@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useBackDismiss } from '../lib/back'
 import { useI18n } from '../lib/i18n'
 import {
   discoverLanServer,
@@ -42,6 +43,7 @@ type Probe = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok' } | { kind: 'fai
  * بفهمد تقصیرِ آدرس بوده یا سرور.
  */
 export default function ServerSetup({ onDone }: { onDone?: () => void }) {
+  useBackDismiss(Boolean(onDone), onDone ?? (() => {}))
   const { t } = useI18n()
   const [value, setValue] = useState(isLocalServer() ? '' : serverBase())
   const [probe, setProbe] = useState<Probe>({ kind: 'idle' })

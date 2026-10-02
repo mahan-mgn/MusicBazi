@@ -55,19 +55,18 @@ public class PlaybackPlugin extends Plugin {
         intent.putExtra("artist", call.getString("artist", ""));
         intent.putExtra("album", call.getString("album", ""));
         intent.putExtra("artworkUrl", call.getString("artworkUrl", ""));
-        intent.putExtra("playing", Boolean.TRUE.equals(call.getBoolean("playing", false)));
+        boolean playing = Boolean.TRUE.equals(call.getBoolean("playing", false));
+        intent.putExtra("playing", playing);
         intent.putExtra("position", (long) (call.getDouble("position", 0.0) * 1000));
         intent.putExtra("duration", (long) (call.getDouble("duration", 0.0) * 1000));
 
         /*
-         * `startForegroundService` فقط وقتی مجاز است که اپ دیده شود یا سرویس
-         * قبلاً پیش‌زمینه باشد؛ از اندروید ۱۲ به بعد صدا زدنش از پس‌زمینه
-         * استثنا پرت می‌کند. همیشه در واکنش به کنشِ کاربر صدا زده می‌شود، ولی
-         * یک حالتِ مرزی هست: مکث از خودِ نوتیفیکیشن وقتی اپ پس‌زمینه است.
-         * آن استثنا نباید پخش را بترکاند، پس بی‌صدا رد می‌شود.
+         * `startForegroundService` فقط وقتی لازم و مجاز است که `playing == true` باشد.
+         * در حالت مکث صدا زدنش تعهد به شروع سرویس پیش‌زمینه ایجاد می‌کند و اگر تا ۵ ثانیه
+         * startForeground نخورد، سیستم با ForegroundServiceDidNotStartInTimeException کرش می‌کند.
          */
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (playing && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 getContext().startForegroundService(intent);
             } else {
                 getContext().startService(intent);

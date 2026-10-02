@@ -1,6 +1,8 @@
 package app.musicbazi.client;
 
+import android.content.Context;
 import android.graphics.Color;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.WindowManager;
@@ -19,6 +21,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ShellPlugin.class);
         registerPlugin(DownloadsPlugin.class);
         super.onCreate(savedInstanceState);
+
+        enforceMediaAudio();
 
         /*
          * لبه‌تاـلبه.
@@ -43,6 +47,26 @@ public class MainActivity extends BridgeActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // خطِ جداکننده‌ای که اندروید خودش پشتِ نوار ناوبریِ شفاف می‌کشد
             getWindow().setNavigationBarContrastEnforced(false);
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        enforceMediaAudio();
+    }
+
+    /**
+     * دکمه‌های فیزیکی بلندی صدای گوشی را مستقیم به جریان پخش موسیقی متصل می‌کند.
+     */
+    private void enforceMediaAudio() {
+        try {
+            setVolumeControlStream(AudioManager.STREAM_MUSIC);
+            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (audioManager != null && audioManager.getMode() != AudioManager.MODE_NORMAL) {
+                audioManager.setMode(AudioManager.MODE_NORMAL);
+            }
+        } catch (Exception ignored) {
         }
     }
 }

@@ -61,8 +61,7 @@ public class DownloadsPlugin extends Plugin {
             return;
         }
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
-                && getPermissionState("storage") != PermissionState.GRANTED) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && !isStorageGranted()) {
             // نتیجه‌ی درخواست دوباره به همین متد برمی‌گردد
             requestPermissionForAlias("storage", call, "storageResult");
             return;
@@ -73,11 +72,17 @@ public class DownloadsPlugin extends Plugin {
 
     @PermissionCallback
     private void storageResult(PluginCall call) {
-        if (getPermissionState("storage") != PermissionState.GRANTED) {
+        if (!isStorageGranted()) {
             call.reject("اجازه‌ی نوشتن در حافظه داده نشد");
             return;
         }
         run(call);
+    }
+
+    private boolean isStorageGranted() {
+        return androidx.core.content.ContextCompat.checkSelfPermission(
+                getContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
     private void run(PluginCall call) {
@@ -89,8 +94,9 @@ public class DownloadsPlugin extends Plugin {
         final String name = fileName(title, artist, call.getString("ext"));
 
         pool.execute(() -> {
+            Uri target = null;
             try {
-                Uri target = insert(name, mime, title, artist, album);
+                target = insert(name, mime, title, artist, album);
                 if (target == null) {
                     call.reject("جایی برای فایل ساخته نشد");
                     return;
@@ -103,6 +109,12 @@ public class DownloadsPlugin extends Plugin {
                 result.put("name", name);
                 call.resolve(result);
             } catch (Exception error) {
+                if (target != null) {
+                    try {
+                        getContext().getContentResolver().delete(target, null, null);
+                    } catch (Exception ignored) {
+                    }
+                }
                 call.reject(error.getMessage() == null ? "ذخیره نشد" : error.getMessage());
             }
         });

@@ -15,6 +15,7 @@ import {
   type LibrarySort,
 } from '../lib/library'
 import { pinnedBytes, supported as offlineSupported } from '../lib/offline'
+import { downloadFile } from '../lib/native'
 import { readStored, readStoredAs, writeStored } from '../lib/storage'
 import { SOURCE_LABEL, type LibraryItem, type LibraryPage, type Source } from '../lib/types'
 import { useFavorites } from '../store/favorites'
@@ -429,8 +430,8 @@ export default function LibraryView({ initialTab }: { initialTab?: 'playlists' |
         pushToast(t.mockNoFile, 'info')
         return
       }
-      // ناوبری به URL، نه fetch: دانلود بومی و بدون نگه‌داشتن آرشیو در حافظه
-      location.href = url
+      // در وب مستقیم، در اندروید با دانلود منیجر سیستم
+      await downloadFile(url)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {

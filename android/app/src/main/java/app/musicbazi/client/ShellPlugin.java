@@ -164,7 +164,11 @@ public class ShellPlugin extends Plugin {
          */
         if (restarted) return false;
         restarted = true;
-        view.post(() -> getActivity().recreate());
+        view.post(() -> {
+            if (getActivity() != null && !getActivity().isFinishing()) {
+                getActivity().recreate();
+            }
+        });
         return true;
     }
 

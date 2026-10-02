@@ -5,6 +5,7 @@ import { digits, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { trackDedupeKey } from '../lib/radio'
 import { findBestJob, toPlayItem } from '../lib/stream'
+import { downloadFile } from '../lib/native'
 import {
   SOURCE_LABEL,
   type Album,
@@ -738,7 +739,7 @@ export default function ArtistView({
         pushToast(t.mockNoFile, 'info')
         return
       }
-      location.href = url
+      await downloadFile(url)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {

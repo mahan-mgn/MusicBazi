@@ -116,6 +116,9 @@
     <!-- لرزشِ ریزِ بازخوردِ لمسی -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- ضبط صدا برای قابلیت شناسایی آهنگ با میکروفون -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!--
       ذخیره‌ی آهنگ در کتابخانه‌ی موسیقیِ گوشی. از اندروید ۱۰ اپ برای نوشتن در
       کالکشنِ خودش هیچ اجازه‌ای نمی‌خواهد، پس این فقط برای گوشی‌های قدیمی‌تر

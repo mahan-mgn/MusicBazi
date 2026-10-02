@@ -15,6 +15,7 @@ import { useSettings } from '../store/settings'
 import { useToasts } from '../store/toasts'
 import { toPlayItem } from '../lib/stream'
 import { useRowSwipe } from '../lib/useRowSwipe'
+import { canSaveToDevice, haptic, saveToDevice } from '../lib/native'
 import Artwork from './Artwork'
 import SendToTelegram from './SendToTelegram'
 import SourceBadge from './SourceBadge'
@@ -250,11 +251,31 @@ export default function TrackRow({
           <a
             href={job.fileUrl ?? '#'}
             download={job.fileUrl ? filename : undefined}
-            onClick={(e) => {
-              if (!job.fileUrl) e.preventDefault()
+            onClick={async (e) => {
+              if (!job.fileUrl) {
+                e.preventDefault()
+                return
+              }
+              if (canSaveToDevice()) {
+                e.preventDefault()
+                try {
+                  await saveToDevice({
+                    url: job.fileUrl,
+                    title: track.title,
+                    artist: track.artist,
+                    album: track.album ?? '',
+                    ext: fileExt(job.format),
+                  })
+                  haptic.success()
+                  useToasts.getState().push(t.saveToPhoneDone, 'success')
+                } catch (err) {
+                  haptic.warn()
+                  useToasts.getState().push(err instanceof Error ? err.message : t.saveToPhoneFailed, 'error')
+                }
+              }
             }}
-            title={job.fileUrl ? t.save : t.mockNoFile}
-            className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent-dim px-2 py-1 text-[11px] font-semibold text-accent"
+            title={job.fileUrl ? (canSaveToDevice() ? t.saveToPhone : t.save) : t.mockNoFile}
+            className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent-dim px-2 py-1 text-[11px] font-semibold text-accent cursor-pointer"
           >
             <CheckIcon className="size-3" />
             {formatLabel(job.format, lang)}

@@ -90,6 +90,7 @@ let handlers: EngineHandlers | null = null
 let ctx: AudioContext | null = null
 let eqNodes: BiquadFilterNode[] = []
 let master: GainNode | null = null
+let limiter: DynamicsCompressorNode | null = null
 /**
  * تحلیلگرِ طیف — برای «هاله‌ی هم‌رhythm با صدا» در پخش‌کننده.
  *
@@ -151,22 +152,40 @@ function buildGraph(): void {
       filter.gain.value = 0
       return filter
     })
-    // باندها پشت‌سرهم، بعد مستر، بعد بلندگو
+    // باندها پشت‌سرهم، بعد مستر، بعد لیمیتر، بعد بلندگو
     eqNodes.reduce((prev, node) => {
       prev.connect(node)
       return node
     })
     eqNodes[eqNodes.length - 1].connect(master)
+
+    // لیمیتر شفاف با زانوی نرم (soft knee): جلوی دیستورشن دیجیتال را می‌گیرد
+    // بدون آنکه بیس‌ها را دچار شکستگی موج (waveshaping) یا خش در هدفون بلوتوث کند
+    try {
+      limiter = ctx.createDynamicsCompressor()
+      limiter.threshold.value = -0.5
+      limiter.knee.value = 12
+      limiter.ratio.value = 3
+      limiter.attack.value = 0.01
+      limiter.release.value = 0.25
+      master.connect(limiter)
+    } catch {
+      limiter = null
+    }
+
     analyser = ctx.createAnalyser()
     analyser.fftSize = 256
     analyser.smoothingTimeConstant = 0.82
     spectrum = new Uint8Array(analyser.frequencyBinCount)
-    // master → analyser → destination: طیف را می‌خواند و سیگنال را رد می‌کند
-    master.connect(analyser)
+
+    const outputNode: AudioNode = limiter ?? master
+    // outputNode → analyser → destination: طیف را می‌خواند و سیگنال را رد می‌کند
+    outputNode.connect(analyser)
     analyser.connect(ctx.destination)
   } catch {
     ctx = null
     master = null
+    limiter = null
     eqNodes = []
     analyser = null
     spectrum = null

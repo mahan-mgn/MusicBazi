@@ -4,6 +4,7 @@ import { digits, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { dominantColor } from '../lib/artColor'
 import { findBestJob, toPlayItem } from '../lib/stream'
+import { downloadFile } from '../lib/native'
 import { SOURCE_LABEL, type Album, type AlbumDetail, type Track } from '../lib/types'
 import { isActive, isDone, useDownloads } from '../store/downloads'
 import { usePlayer } from '../store/player'
@@ -325,7 +326,7 @@ export default function AlbumView({
         pushToast(t.mockNoFile, 'info')
         return
       }
-      location.href = url
+      await downloadFile(url)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {

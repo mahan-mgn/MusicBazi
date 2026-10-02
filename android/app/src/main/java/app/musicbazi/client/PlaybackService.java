@@ -88,12 +88,14 @@ public class PlaybackService extends Service {
         public void onAudioFocusChange(int focusChange) {
             switch (focusChange) {
                 case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
-                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
                     hasAudioFocus = false;
                     if (playing) {
                         pausedDueToTransientFocusLoss = true;
                         emit("pause", 0);
                     }
+                    break;
+                case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK:
+                    // اجازه می‌دهیم سیستم خودش ولوم را کم کند؛ قطع و وصل ناگهانی صدا در هدفون ایجاد نمی‌کنیم
                     break;
                 case AudioManager.AUDIOFOCUS_LOSS:
                     hasAudioFocus = false;
@@ -401,8 +403,12 @@ public class PlaybackService extends Service {
             // نتیجه‌ی کاورِ ترکِ قبلی نباید روی ترکِ فعلی بنشیند
             if (!url.equals(artworkUrl)) return;
 
-            artwork = bitmap;
-            publish();
+            final Bitmap decoded = bitmap;
+            clock.post(() -> {
+                if (!url.equals(artworkUrl)) return;
+                artwork = decoded;
+                publish();
+            });
         });
     }
 
@@ -467,6 +473,12 @@ public class PlaybackService extends Service {
     }
 
     private void requestAudioFocus() {
+        if (audioManager != null && audioManager.getMode() != AudioManager.MODE_NORMAL) {
+            try {
+                audioManager.setMode(AudioManager.MODE_NORMAL);
+            } catch (Exception ignored) {
+            }
+        }
         if (hasAudioFocus || audioManager == null) return;
         int res;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -477,7 +489,7 @@ public class PlaybackService extends Service {
                         .build();
                 focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                         .setAudioAttributes(attrs)
-                        .setAcceptsDelayedFocusGain(false)
+                        .setAcceptsDelayedFocusGain(true)
                         .setOnAudioFocusChangeListener(focusListener)
                         .build();
             }

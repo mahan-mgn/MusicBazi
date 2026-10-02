@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { onNetworkChange } from '../lib/native'
 import { useToasts } from './toasts'
 
 /**
@@ -119,6 +120,7 @@ export const useNet = create<NetState>((set, get) => ({
     void tick()
 
     const wake = () => void tick()
+    const offNet = onNetworkChange(wake)
     window.addEventListener('online', wake)
     window.addEventListener('offline', wake)
     document.addEventListener('visibilitychange', wake)
@@ -126,6 +128,7 @@ export const useNet = create<NetState>((set, get) => ({
     return () => {
       stopped = true
       clearTimeout(timer)
+      offNet()
       window.removeEventListener('online', wake)
       window.removeEventListener('offline', wake)
       document.removeEventListener('visibilitychange', wake)
