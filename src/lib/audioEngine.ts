@@ -234,7 +234,10 @@ function attach(deck: Deck): void {
   })
   el.addEventListener('pause', () => {
     // مکثِ دکِ در حالِ محو شدن، «مکث» نیست — کاربر چیزی را متوقف نکرده
-    if (el === active()?.el && !fading) handlers?.onPause()
+    if (el === active()?.el && !fading) {
+      console.log(`[audioEngine] pause event on active deck (currentTime: ${el.currentTime}, duration: ${el.duration})`)
+      handlers?.onPause()
+    }
   })
   el.addEventListener('timeupdate', () => {
     if (el !== active()?.el) return
@@ -246,7 +249,10 @@ function attach(deck: Deck): void {
   })
   el.addEventListener('ended', () => {
     // پایانِ دکی که کراس‌فید جایش را گرفته بی‌معنی است — صف از قبل جلو رفته
-    if (el === active()?.el) handlers?.onEnded()
+    if (el === active()?.el) {
+      console.log(`[audioEngine] ended event on active deck (currentTime: ${el.currentTime}, duration: ${el.duration})`)
+      handlers?.onEnded()
+    }
   })
   el.addEventListener('error', () => {
     if (el === active()?.el) {
@@ -326,7 +332,14 @@ function maybeCrossfade(): void {
   if (!current || !current.fade) return
 
   const remaining = current.el.duration - current.el.currentTime
-  if (!Number.isFinite(remaining) || remaining > crossfadeSeconds) return
+  if (
+    !Number.isFinite(remaining) ||
+    remaining <= 0 ||
+    remaining > crossfadeSeconds ||
+    current.el.duration <= crossfadeSeconds ||
+    current.el.currentTime < 2
+  )
+    return
 
   const incoming = idle()
   if (!incoming) return

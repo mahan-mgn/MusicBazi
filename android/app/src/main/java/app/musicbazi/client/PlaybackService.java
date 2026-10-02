@@ -463,47 +463,12 @@ public class PlaybackService extends Service {
     }
 
     private void requestAudioFocus() {
-        if (audioManager != null && audioManager.getMode() != AudioManager.MODE_NORMAL) {
-            try {
-                audioManager.setMode(AudioManager.MODE_NORMAL);
-            } catch (Exception ignored) {
-            }
-        }
-        if (hasAudioFocus || audioManager == null) return;
-        int res;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (focusRequest == null) {
-                AudioAttributes attrs = new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build();
-                focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                        .setAudioAttributes(attrs)
-                        .setAcceptsDelayedFocusGain(true)
-                        .setOnAudioFocusChangeListener(focusListener)
-                        .build();
-            }
-            res = audioManager.requestAudioFocus(focusRequest);
-        } else {
-            res = audioManager.requestAudioFocus(
-                    focusListener,
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN
-            );
-        }
-        hasAudioFocus = (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+        // وب‌ویوی کرومیوم به عنوان پخش‌کننده واقعی تگ <audio> خود مستقلاً و نیتیو
+        // فکوس صوتی STREAM_MUSIC را از اندروید می‌گیرد. درخواست مجدد فکوس از این سرویس
+        // باعث می‌شد سیستم‌عامل فکوس را از وب‌ویو پس بگیرد و پخش پس از چند ثانیه قطع شود.
     }
 
     private void abandonAudioFocus() {
-        if (!hasAudioFocus || audioManager == null) return;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (focusRequest != null) {
-                audioManager.abandonAudioFocusRequest(focusRequest);
-            }
-        } else {
-            audioManager.abandonAudioFocus(focusListener);
-        }
-        hasAudioFocus = false;
     }
 
     private void registerNoisyReceiver() {
