@@ -85,7 +85,7 @@ export function UpdateBanner() {
       <button
         type="button"
         onClick={() => {
-          dismissUpdate(info.versionCode)
+          dismissUpdate(info.versionName || info.versionCode)
           setInfo(null)
         }}
         className="rounded-full px-2 py-0.5 text-muted underline underline-offset-2 transition hover:text-fg"

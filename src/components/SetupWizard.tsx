@@ -10,7 +10,7 @@ import {
   type SetupState,
   type TestGroup,
 } from '../lib/setup'
-import { CheckIcon, CloseIcon, HeadphonesIcon, Spinner, TelegramIcon, WarnIcon } from './icons'
+import { CheckIcon, CloseIcon, Spinner, TelegramIcon, WarnIcon } from './icons'
 import { GeminiLogo, GeniusLogo, SpotifyLogo } from './logos'
 
 /**
@@ -253,9 +253,7 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
     <div className="flex min-h-dvh flex-col items-center px-safe py-10">
       <div className="w-full max-w-lg">
         <div className="mb-6 flex items-center gap-2.5">
-          <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent text-accent-fg">
-            <HeadphonesIcon className="size-5" />
-          </span>
+          <img src="/logo.png" alt="" className="size-10 rounded-xl object-cover shadow-sm" />
           <span className="text-lg font-bold">{t.brand}</span>
           {onDone && (
             <button

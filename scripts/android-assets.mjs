@@ -91,4 +91,7 @@ for (const [dpi, [w, h]] of Object.entries(SPLASH)) {
 // نسخه‌ی بی‌چگالی — وقتی اندروید هیچ‌کدام از بالایی‌ها را انتخاب نکند
 await write(`${RES}/drawable/splash.png`, await splashSvg(480, 320))
 
+// لوگوی باکیفیت برای اسپلش اسکرین اندروید ۱۲ به بعد
+await write(`${RES}/drawable/splash_logo.png`, await png(logoPng, 512))
+
 console.log('آیکون‌ها و اسپلش ساخته شدند.')

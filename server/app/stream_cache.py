@@ -1,10 +1,10 @@
 """
-کش موقت و دانلود سریع برای استریم آنلاین موزیک‌ها.
+کش موقت و دانلود پایدار برای استریم آنلاین موزیک‌ها.
 
 فایل‌های استریم شده در این کش نگهداری می‌شوند و کاملاً مجزا از کتابخانه دائمی (SQLite jobs)
 هستند. در صورت وجود فایل در کتابخانه محلی، مستقیماً از فایل محلی استفاده می‌شود.
-این ماژول استریم بلادرنگ تکه‌تکه (Progressive Chunk Streaming) ارائه می‌دهد تا اولین
-بایت ظرف کمتر از یک ثانیه به پخش‌کننده برسد.
+سرویس‌دهی فایل‌ها از طریق FileResponse استاندارد با پشتیبانی کامل از Range Requests، اسکراب،
+کدهای وضعیت صحیح و هدرهای CORS انجام می‌شود.
 """
 
 from __future__ import annotations
@@ -17,13 +17,12 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import httpx
 from fastapi import Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from yt_dlp import YoutubeDL
 
 from . import db, resolver, ydl
-from .config import PROXY, STREAM_CACHE_DIR, STREAM_CACHE_MAX_MB, YTDLP_PROXY
+from .config import STREAM_CACHE_DIR, STREAM_CACHE_MAX_MB
 from .models import Track
 from .providers import lrclib
 
@@ -42,7 +41,7 @@ AUDIO_MIME: dict[str, str] = {
 
 
 class StreamBroadcaster:
-    """مدیریت استریم چانک‌های صوتی در حافظه و نوشتن همزمان روی دیسک."""
+    """مدیریت استریم چانک‌های صوتی در حافظه."""
 
     def __init__(self, cache_key: str, track: Track, quality: str | None = None):
         self.cache_key = cache_key
@@ -67,7 +66,169 @@ class StreamBroadcaster:
         self.new_chunk_event = asyncio.Event()
 
 
-_active_streams: dict[str, StreamBroadcaster] = {}
+async def _stream_generator(
+    session: StreamBroadcaster, start_byte: int = 0, end_byte: int | None = None
+) -> AsyncIterator[bytes]:
+    """تولیدکننده ناهمگام چانک‌های صوتی."""
+    try:
+        chunk_idx = 0
+        current_offset = 0
+        while True:
+            if chunk_idx < len(session.chunks):
+                chunk = session.chunks[chunk_idx]
+                chunk_len = len(chunk)
+                chunk_start = current_offset
+                chunk_end = current_offset + chunk_len
+                chunk_idx += 1
+                current_offset = chunk_end
+
+                if chunk_end <= start_byte:
+                    continue
+
+                offset_in_chunk = max(0, start_byte - chunk_start)
+                data = chunk[offset_in_chunk:]
+
+                if end_byte is not None and current_offset > end_byte:
+                    bytes_needed = (end_byte + 1) - (chunk_start + offset_in_chunk)
+                    if bytes_needed > 0:
+                        yield data[:bytes_needed]
+                    break
+
+                yield data
+                continue
+
+            if session.finished_event.is_set():
+                break
+            if session.error:
+                raise session.error
+
+            await session.new_chunk_event.wait()
+    finally:
+        session.active_readers -= 1
+
+
+def _is_direct_audio_format(f: dict) -> bool:
+    """بررسی اینکه فرمت حتماً صوت استریم مستقیم (HTTP/HTTPS) باشد نه پلی‌لیست متنی HLS/DASH."""
+    proto = (f.get("protocol") or "").lower()
+    url = f.get("url") or ""
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return False
+    if proto and proto not in ("http", "https"):
+        return False
+    if ".m3u8" in url or "manifest" in url or ".mpd" in url:
+        return False
+    if f.get("acodec") == "none":
+        return False
+    return True
+
+
+def _format_quality_score(f: dict) -> float:
+    """محاسبه امتیاز کیفیت صوتی یک فرمت بر اساس نرخ بیت، کدک و سمپل‌ریت."""
+    is_audio_only = 1 if f.get("vcodec") in ("none", None) else 0
+
+    abr = f.get("abr") or (f.get("tbr") if is_audio_only else 0) or 0
+    try:
+        abr = float(abr)
+    except (ValueError, TypeError):
+        abr = 0.0
+
+    acodec = (f.get("acodec") or "").lower()
+    ext = (f.get("ext") or "").lower()
+
+    codec_weight = 1.0
+    if "flac" in acodec or ext == "flac" or "wav" in acodec:
+        codec_weight = 3.0
+    elif "opus" in acodec or ext in ("opus", "webm"):
+        codec_weight = 1.6
+    elif "mp4a" in acodec or "aac" in acodec or ext == "m4a":
+        codec_weight = 1.3
+    elif "mp3" in acodec or ext == "mp3":
+        codec_weight = 1.0
+
+    score = (is_audio_only * 500.0) + (abr * codec_weight)
+
+    if abr <= 0 and is_audio_only:
+        score += 100.0
+
+    try:
+        asr = float(f.get("asr") or 0)
+    except (ValueError, TypeError):
+        asr = 0.0
+    score += asr / 1000.0
+
+    return score
+
+
+def _extract_direct_stream_info(url: str, quality: str | None = None) -> dict | None:
+    """استخراج مستقیم آدرس استریم صوتی و هدرها با بالاترین کیفیت صوتی ممکن بدون دانلود فایل."""
+    ydl_opts = ydl.opts(
+        skip_download=True,
+        format="bestaudio/best",
+        format_sort=["abr", "asr"],
+        noplaylist=True,
+        quiet=True,
+        no_warnings=True,
+        noprogress=True,
+        check_formats=False,
+        youtube_include_dash_manifest=False,
+        youtube_include_hls_manifest=False,
+    )
+    info = None
+    try:
+        with YoutubeDL(ydl_opts) as y:
+            info = y.extract_info(url, download=False)
+    except Exception as exc:
+        log.warning("استخراج مستقیم با تنظیمات جاری ناموفق بود (%s) — تلاش مجدد بدون کوکی", exc)
+        try:
+            fallback_opts = {
+                k: v for k, v in ydl_opts.items() if k not in ("cookiesfrombrowser", "extractor_args")
+            }
+            with YoutubeDL(fallback_opts) as y:
+                info = y.extract_info(url, download=False)
+        except Exception:
+            return None
+
+    if not info:
+        return None
+
+    all_formats = info.get("formats") or []
+    if not all_formats and _is_direct_audio_format(info):
+        all_formats = [info]
+
+    valid_formats = [f for f in all_formats if _is_direct_audio_format(f)]
+    if not valid_formats:
+        if _is_direct_audio_format(info):
+            valid_formats = [info]
+        else:
+            return None
+
+    if quality in ("m4a", "opus", "flac", "mp3"):
+        q_norm = quality.lower()
+        matching = [
+            f
+            for f in valid_formats
+            if q_norm in (f.get("ext") or "").lower() or q_norm in (f.get("acodec") or "").lower()
+        ]
+        if matching:
+            valid_formats = matching
+
+    valid_formats.sort(key=_format_quality_score, reverse=True)
+    chosen = valid_formats[0]
+
+    chosen_info = dict(info)
+    chosen_info["url"] = chosen["url"]
+    chosen_info["ext"] = chosen.get("ext") or "m4a"
+    chosen_info["http_headers"] = chosen.get("http_headers") or info.get("http_headers") or {}
+    chosen_info["filesize"] = chosen.get("filesize") or chosen.get("filesize_approx")
+    chosen_info["abr"] = chosen.get("abr")
+    chosen_info["acodec"] = chosen.get("acodec")
+    chosen_info["vcodec"] = chosen.get("vcodec")
+    chosen_info["format_id"] = chosen.get("format_id")
+    chosen_info["_quality_score"] = _format_quality_score(chosen)
+    return chosen_info
+
+
+_pending_fetches: dict[str, asyncio.Task[Path]] = {}
 _guard = asyncio.Lock()
 
 
@@ -155,142 +316,8 @@ def _prune_cache_sync() -> None:
             pass
 
 
-def _is_direct_audio_format(f: dict) -> bool:
-    """بررسی اینکه فرمت حتماً صوت استریم مستقیم (HTTP/HTTPS) باشد نه پلی‌لیست متنی HLS/DASH."""
-    proto = (f.get("protocol") or "").lower()
-    url = f.get("url") or ""
-    if not (url.startswith("http://") or url.startswith("https://")):
-        return False
-    if proto and proto not in ("http", "https"):
-        return False
-    if ".m3u8" in url or "manifest" in url or ".mpd" in url:
-        return False
-    if f.get("acodec") == "none":
-        return False
-    return True
-
-
-def _format_quality_score(f: dict) -> float:
-    """
-    محاسبه امتیاز کیفیت صوتی یک فرمت بر اساس نرخ بیت، کارایی کدک و نرخ نمونه‌برداری.
-    استریم‌های خالص صوتی اولویت بسیار بالاتری دارند و کدک‌های با کیفیت‌تر (Opus/AAC/FLAC)
-    ضریب وفاداری بهتری دریافت می‌کنند.
-    """
-    is_audio_only = 1 if f.get("vcodec") in ("none", None) else 0
-
-    abr = f.get("abr") or (f.get("tbr") if is_audio_only else 0) or 0
-    try:
-        abr = float(abr)
-    except (ValueError, TypeError):
-        abr = 0.0
-
-    acodec = (f.get("acodec") or "").lower()
-    ext = (f.get("ext") or "").lower()
-
-    # ضریب وفاداری ادراکی کدک:
-    # ۱. فرمت‌های بی‌اتلاف (FLAC/WAV): ۳.۰
-    # ۲. کدک Opus: ۱.۶ (شفافیت استودیویی فوق‌العاده در نرخ بیت‌های بالای ۱۲۰)
-    # ۳. کدک AAC/M4A: ۱.۳ (بازدهی صوتی بالاتر از MP3)
-    # ۴. کدک MP3: ۱.۰
-    codec_weight = 1.0
-    if "flac" in acodec or ext == "flac" or "wav" in acodec:
-        codec_weight = 3.0
-    elif "opus" in acodec or ext in ("opus", "webm"):
-        codec_weight = 1.6
-    elif "mp4a" in acodec or "aac" in acodec or ext == "m4a":
-        codec_weight = 1.3
-    elif "mp3" in acodec or ext == "mp3":
-        codec_weight = 1.0
-
-    score = (is_audio_only * 500.0) + (abr * codec_weight)
-
-    if abr <= 0 and is_audio_only:
-        score += 100.0
-
-    try:
-        asr = float(f.get("asr") or 0)
-    except (ValueError, TypeError):
-        asr = 0.0
-    score += asr / 1000.0
-
-    return score
-
-
-def _extract_direct_stream_info(url: str, quality: str | None = None) -> dict | None:
-    """استخراج مستقیم آدرس استریم صوتی و هدرها با بالاترین کیفیت صوتی ممکن بدون دانلود فایل."""
-    ydl_opts = ydl.opts(
-        skip_download=True,
-        format="bestaudio/best",
-        format_sort=["abr", "asr"],
-        noplaylist=True,
-        quiet=True,
-        no_warnings=True,
-        noprogress=True,
-        check_formats=False,
-        youtube_include_dash_manifest=False,
-        youtube_include_hls_manifest=False,
-    )
-    info = None
-    try:
-        with YoutubeDL(ydl_opts) as y:
-            info = y.extract_info(url, download=False)
-    except Exception as exc:
-        # اگر کوکی مرورگر خطای نشست یا بازنشانی داد، بدون کوکی تلاش مجدد کن
-        log.warning("استخراج مستقیم با تنظیمات جاری ناموفق بود (%s) — تلاش مجدد بدون کوکی", exc)
-        try:
-            fallback_opts = {
-                k: v for k, v in ydl_opts.items() if k not in ("cookiesfrombrowser", "extractor_args")
-            }
-            with YoutubeDL(fallback_opts) as y:
-                info = y.extract_info(url, download=False)
-        except Exception:
-            return None
-
-    if not info:
-        return None
-
-    # بررسی تمام فرمت‌های استخراج‌شده برای انتخاب قطعی بالاترین کیفیت
-    all_formats = info.get("formats") or []
-    if not all_formats and _is_direct_audio_format(info):
-        all_formats = [info]
-
-    valid_formats = [f for f in all_formats if _is_direct_audio_format(f)]
-    if not valid_formats:
-        if _is_direct_audio_format(info):
-            valid_formats = [info]
-        else:
-            return None
-
-    # اگر کاربر در تنظیمات کدک مشخصی خواسته، فرمت‌های منطبق را فیلتر کن
-    if quality in ("m4a", "opus", "flac", "mp3"):
-        q_norm = quality.lower()
-        matching = [
-            f
-            for f in valid_formats
-            if q_norm in (f.get("ext") or "").lower() or q_norm in (f.get("acodec") or "").lower()
-        ]
-        if matching:
-            valid_formats = matching
-
-    # مرتب‌سازی نزولی بر اساس امتیاز کیفیت صدا
-    valid_formats.sort(key=_format_quality_score, reverse=True)
-    chosen = valid_formats[0]
-
-    chosen_info = dict(info)
-    chosen_info["url"] = chosen["url"]
-    chosen_info["ext"] = chosen.get("ext") or "m4a"
-    chosen_info["http_headers"] = chosen.get("http_headers") or info.get("http_headers") or {}
-    chosen_info["filesize"] = chosen.get("filesize") or chosen.get("filesize_approx")
-    chosen_info["abr"] = chosen.get("abr")
-    chosen_info["acodec"] = chosen.get("acodec")
-    chosen_info["vcodec"] = chosen.get("vcodec")
-    chosen_info["format_id"] = chosen.get("format_id")
-    chosen_info["_quality_score"] = _format_quality_score(chosen)
-    return chosen_info
-
-
 def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = None) -> Path:
-    """فالبک دانلود با yt-dlp با بالاترین کیفیت صوتی ممکن در صورت عدم امکان استخراج استریم مستقیم progressive."""
+    """دانلود با yt-dlp برای ذخیره در کش استریم با بالاترین سرعت و کیفیت."""
     STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     candidates = resolver.resolve(track, use_cache=True)
@@ -309,6 +336,7 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         quiet=True,
         no_warnings=True,
         noprogress=True,
+        concurrent_fragment_downloads=4,
     )
 
     if quality == "flac":
@@ -327,7 +355,7 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
     last_error: Exception | None = None
     for candidate in candidates:
         try:
-            log.info("دانلود کامل استریم برای «%s» از %s (%s)", track.title, candidate.source, candidate.url)
+            log.info("دانلود استریم برای «%s» از %s (%s)", track.title, candidate.source, candidate.url)
             with YoutubeDL(ydl_opts) as y:
                 y.extract_info(candidate.url, download=True)
 
@@ -342,178 +370,14 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
     raise RuntimeError(f"دانلود استریم برای «{track.title}» شکست خورد: {last_error}")
 
 
-async def _start_stream_pipeline(session: StreamBroadcaster) -> None:
-    """تسک پس‌زمینه برای استخراج سریع، استریم چانک‌ها و ذخیره‌سازی همزمان روی دیسک با بالاترین کیفیت صوتی."""
-    try:
-        candidates = await asyncio.to_thread(resolver.resolve, session.track, True)
-        if not candidates:
-            raise RuntimeError(f"هیچ کاندیدایی برای استریم «{session.track.title}» پیدا نشد")
-
-        STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        part_path = STREAM_CACHE_DIR / f"{session.cache_key}.part"
-        part_path.unlink(missing_ok=True)
-
-        extracted = None
-        best_candidate = None
-        best_info = None
-        best_score = -1.0
-
-        for candidate in candidates[:3]:
-            try:
-                info = await asyncio.to_thread(
-                    _extract_direct_stream_info, candidate.url, session.quality
-                )
-                if info and info.get("url"):
-                    q_score = info.get("_quality_score", 0.0)
-                    if q_score > best_score:
-                        best_score = q_score
-                        best_candidate = candidate
-                        best_info = info
-                    # اگر کاندیدا کیفیت ممتاز دارد (مانند Opus ۱۶۰k در یوتیوب یا FLAC)، فورا شروع کن
-                    if q_score >= 750.0:
-                        break
-            except Exception as exc:
-                log.warning("استخراج مستقیم لینک برای %s ناموفق بود: %s", candidate.url, exc)
-                continue
-
-        if best_candidate and best_info:
-            extracted = (best_candidate, best_info)
-
-        if extracted:
-            candidate, info = extracted
-            direct_url = info["url"]
-            http_headers = info.get("http_headers") or {}
-            session.ext = info.get("ext") or "m4a"
-            session.media_type = AUDIO_MIME.get(f".{session.ext}", "audio/mp4")
-            filesize = info.get("filesize") or info.get("filesize_approx")
-            if filesize:
-                session.total_bytes = int(filesize)
-
-            session.ready_event.set()
-
-            proxy = YTDLP_PROXY or PROXY
-            async with httpx.AsyncClient(proxy=proxy, follow_redirects=True, timeout=60.0) as client:
-                async with client.stream("GET", direct_url, headers=http_headers) as resp:
-                    if resp.status_code >= 400:
-                        raise RuntimeError(f"پاسخ سرور منبع با کد {resp.status_code}")
-                    cl = resp.headers.get("content-length")
-                    if cl and cl.isdigit():
-                        session.total_bytes = int(cl)
-
-                    with open(part_path, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=65536):
-                            if not chunk:
-                                continue
-                            f.write(chunk)
-                            session.append_chunk(chunk)
-
-            is_valid_audio = False
-            if part_path.exists() and part_path.stat().st_size > 1024:
-                try:
-                    with open(part_path, "rb") as f:
-                        head = f.read(16)
-                        if not head.startswith(b"#EXTM3U") and b"#EXT" not in head:
-                            is_valid_audio = True
-                except OSError:
-                    pass
-
-            if is_valid_audio:
-                final_path = STREAM_CACHE_DIR / f"{session.cache_key}.{session.ext}"
-                part_path.replace(final_path)
-                session.final_path = final_path
-                session.finished_event.set()
-                session.new_chunk_event.set()
-                asyncio.create_task(asyncio.to_thread(_prune_cache_sync))
-                return
-
-            part_path.unlink(missing_ok=True)
-            log.warning("فایل استریم مستقیم معتبر نبود — اجرا با فالبک کامل برای «%s»", session.track.title)
-
-        # فالبک به دانلود کامل با بالاترین کیفیت
-        log.info("استخراج لینک مستقیم ممکن نبود — استفاده از فالبک با بالاترین کیفیت برای «%s»", session.track.title)
-        out_stem = STREAM_CACHE_DIR / session.cache_key
-        final_path = await asyncio.to_thread(
-            _download_stream_worker, session.track, out_stem, session.quality
-        )
-        session.final_path = final_path
-        session.ext = final_path.suffix.lstrip(".")
-        session.media_type = AUDIO_MIME.get(final_path.suffix.lower(), "audio/mpeg")
-        session.ready_event.set()
-        session.finished_event.set()
-        session.new_chunk_event.set()
-        asyncio.create_task(asyncio.to_thread(_prune_cache_sync))
-
-    except Exception as exc:
-        log.error("خطا در پایپ‌لاین استریم «%s»: %s", session.track.title, exc)
-        session.error = exc
-        session.ready_event.set()
-        session.finished_event.set()
-        session.new_chunk_event.set()
-
-
-async def _stream_generator(
-    session: StreamBroadcaster, start_byte: int = 0, end_byte: int | None = None
-) -> AsyncIterator[bytes]:
-    """تولیدکننده ناهمگام چانک‌های صوتی برای ارسال به مرورگر به عنوان StreamingResponse."""
-    try:
-        chunk_idx = 0
-        current_offset = 0
-        while True:
-            if chunk_idx < len(session.chunks):
-                chunk = session.chunks[chunk_idx]
-                chunk_len = len(chunk)
-                chunk_start = current_offset
-                chunk_end = current_offset + chunk_len
-                chunk_idx += 1
-                current_offset = chunk_end
-
-                if chunk_end <= start_byte:
-                    continue
-
-                offset_in_chunk = max(0, start_byte - chunk_start)
-                data = chunk[offset_in_chunk:]
-
-                if end_byte is not None and current_offset > end_byte:
-                    bytes_needed = (end_byte + 1) - (chunk_start + offset_in_chunk)
-                    if bytes_needed > 0:
-                        yield data[:bytes_needed]
-                    break
-
-                yield data
-                continue
-
-            if session.finished_event.is_set():
-                break
-            if session.error:
-                raise session.error
-
-            await session.new_chunk_event.wait()
-    finally:
-        session.active_readers -= 1
-        if session.active_readers <= 0 and session.finished_event.is_set():
-            async with _guard:
-                _active_streams.pop(session.cache_key, None)
-            session.chunks.clear()
-
-
-async def get_stream_response(
-    track: Track, range_header: str | None = None, quality: str | None = None
-) -> Response:
-    """
-    ارسال پاسخ صوتی استریم با بالاترین کیفیت ممکن:
-    ۱. اگر فایل در کتابخانه دائمی با بهترین کیفیت موجود باشد، بی‌درنگ FileResponse با پشتیبانی Range ارسال می‌شود.
-    ۲. در غیر این صورت، از کش استریم یا استریم مستقیم آنلاین با بالاترین نرخ بیت و وفاداری استفاده می‌شود.
-    """
+async def get_or_fetch(track: Track, quality: str | None = None) -> Path:
+    """دریافت مسیر کامل فایل از کتابخانه، کش استریم، یا دانلود جدید."""
     # ۱. بررسی کتابخانه دائمی با اولویت بهترین کیفیت
     ready = db.find_any_ready(track.id, preferred_quality=quality)
     if ready and ready["path"]:
         lib_path = Path(ready["path"])
         if lib_path.exists():
-            return FileResponse(
-                lib_path,
-                media_type=AUDIO_MIME.get(lib_path.suffix.lower(), "audio/mpeg"),
-                headers={"Accept-Ranges": "bytes"},
-            )
+            return lib_path
 
     cache_key = cache_key_for(track.id, quality=quality)
 
@@ -524,120 +388,47 @@ async def get_stream_response(
             os.utime(cached, None)
         except OSError:
             pass
-        return FileResponse(
-            cached,
-            media_type=AUDIO_MIME.get(cached.suffix.lower(), "audio/mpeg"),
-            headers={"Accept-Ranges": "bytes"},
-        )
-
-    # ۳. اتصال به استریم زنده یا شروع استریم جدید
-    async with _guard:
-        cached = _find_cached_audio(cache_key)
-        if cached and cached.exists():
-            return FileResponse(
-                cached,
-                media_type=AUDIO_MIME.get(cached.suffix.lower(), "audio/mpeg"),
-                headers={"Accept-Ranges": "bytes"},
-            )
-
-        if cache_key in _active_streams:
-            session = _active_streams[cache_key]
-        else:
-            session = StreamBroadcaster(cache_key, track, quality=quality)
-            _active_streams[cache_key] = session
-            asyncio.create_task(_start_stream_pipeline(session))
-
-    await asyncio.wait_for(session.ready_event.wait(), timeout=20.0)
-    if session.error:
-        raise session.error
-
-    if session.final_path and session.final_path.exists():
-        return FileResponse(
-            session.final_path,
-            media_type=session.media_type,
-            headers={"Accept-Ranges": "bytes"},
-        )
-
-    start_byte = 0
-    end_byte = None
-    if range_header and range_header.startswith("bytes="):
-        parts = range_header[6:].split("-")
-        if parts[0].isdigit():
-            start_byte = int(parts[0])
-        if len(parts) > 1 and parts[1].isdigit():
-            end_byte = int(parts[1])
-
-    # هندل درخواست‌های پروب Safari/Chrome (Range: bytes=0-1)
-    if start_byte == 0 and end_byte == 1:
-        while session.downloaded_bytes < 2 and not session.finished_event.is_set():
-            if session.error:
-                raise session.error
-            await session.new_chunk_event.wait()
-
-        probe_bytes = b"".join(session.chunks)[:2]
-        headers = {
-            "Content-Range": f"bytes 0-1/{session.total_bytes or '*'}",
-            "Content-Length": str(len(probe_bytes)),
-            "Accept-Ranges": "bytes",
-        }
-        return Response(content=probe_bytes, status_code=206, media_type=session.media_type, headers=headers)
-
-    headers = {"Accept-Ranges": "bytes"}
-    if session.total_bytes:
-        headers["Content-Range"] = f"bytes {start_byte}-{session.total_bytes - 1}/{session.total_bytes}"
-    else:
-        headers["Content-Range"] = f"bytes {start_byte}-*/*"
-
-    session.active_readers += 1
-    return StreamingResponse(
-        _stream_generator(session, start_byte, end_byte),
-        status_code=206,
-        media_type=session.media_type,
-        headers=headers,
-    )
-
-
-async def get_or_fetch(track: Track, quality: str | None = None) -> Path:
-    """دریافت مسیر کامل فایل برای کارهایی که به فایل فیزیکی نیاز دارند (مانند بسته‌بندی زیپ)."""
-    ready = db.find_any_ready(track.id, preferred_quality=quality)
-    if ready and ready["path"]:
-        lib_path = Path(ready["path"])
-        if lib_path.exists():
-            return lib_path
-
-    cache_key = cache_key_for(track.id, quality=quality)
-
-    cached = _find_cached_audio(cache_key)
-    if cached and cached.exists():
-        try:
-            os.utime(cached, None)
-        except OSError:
-            pass
         return cached
 
+    # ۳. دانلود در صورت عدم وجود (با تجمیع درخواست‌های همزمان)
     async with _guard:
         cached = _find_cached_audio(cache_key)
         if cached and cached.exists():
             return cached
 
-        if cache_key in _active_streams:
-            session = _active_streams[cache_key]
+        if cache_key in _pending_fetches:
+            task = _pending_fetches[cache_key]
         else:
-            session = StreamBroadcaster(cache_key, track, quality=quality)
-            _active_streams[cache_key] = session
-            asyncio.create_task(_start_stream_pipeline(session))
+            out_stem = STREAM_CACHE_DIR / cache_key
+            task = asyncio.create_task(
+                asyncio.to_thread(_download_stream_worker, track, out_stem, quality)
+            )
+            _pending_fetches[cache_key] = task
 
-    await session.finished_event.wait()
-    if session.error:
-        raise session.error
-    if session.final_path and session.final_path.exists():
-        return session.final_path
+    try:
+        path = await task
+        asyncio.create_task(asyncio.to_thread(_prune_cache_sync))
+        return path
+    finally:
+        async with _guard:
+            if _pending_fetches.get(cache_key) == task and task.done():
+                _pending_fetches.pop(cache_key, None)
 
-    cached = _find_cached_audio(cache_key)
-    if cached and cached.exists():
-        return cached
 
-    raise RuntimeError(f"دانلود استریم برای «{track.title}» به پایان نرسید")
+async def get_stream_response(
+    track: Track, range_header: str | None = None, quality: str | None = None
+) -> Response:
+    """
+    ارسال پاسخ صوتی استریم با پشتیبانی کامل از Range و CORS.
+    """
+    path = await get_or_fetch(track, quality=quality)
+    media_type = AUDIO_MIME.get(path.suffix.lower(), "audio/mpeg")
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition",
+    }
+    return FileResponse(path, media_type=media_type, headers=headers)
 
 
 async def get_or_fetch_lyrics(track: Track) -> str | None:

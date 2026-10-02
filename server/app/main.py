@@ -999,6 +999,11 @@ async def stream_file(job_id: str) -> FileResponse:
     return FileResponse(
         job.path,
         media_type=AUDIO_MIME.get(job.path.suffix.lower(), "application/octet-stream"),
+        headers={
+            "Accept-Ranges": "bytes",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "Content-Range, Accept-Ranges, Content-Length, Content-Disposition",
+        },
     )
 
 
