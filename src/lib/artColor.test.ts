@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { tidalBgColor, tintVars } from './artColor'
+import { fallbackTint, tidalBgColor, tintVars } from './artColor'
 
 /** luminance معکوس‌شده از خروجیِ color-mixِ --pb-strong */
 function strongLum(strong: string): number {
@@ -49,6 +49,23 @@ describe('tidalBgColor', () => {
 
   it('returns dark charcoal for black and white cover', () => {
     expect(tidalBgColor([128, 128, 128])).toBe('#141416')
+  })
+})
+
+describe('fallbackTint', () => {
+  it('returns stable rgb triad for given seed', () => {
+    const t1 = fallbackTint('album-123')
+    const t2 = fallbackTint('album-123')
+    expect(t1).toEqual(t2)
+    expect(t1).toHaveLength(3)
+    expect(t1.every((v) => v >= 0 && v <= 255)).toBe(true)
+  })
+
+  it('never returns pure gray/black fallback', () => {
+    const [r, g, b] = fallbackTint('track-abc')
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    expect(max - min).toBeGreaterThan(0)
   })
 })
 

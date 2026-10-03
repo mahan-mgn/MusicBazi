@@ -20,6 +20,7 @@ vi.mock('../lib/audioEngine', async (importOriginal) => {
 
 vi.mock('../lib/artColor', () => ({
   dominantColor: vi.fn().mockResolvedValue([100, 150, 200]),
+  fallbackTint: vi.fn().mockReturnValue([100, 150, 200]),
   tidalBgColor: vi.fn().mockReturnValue('rgb(20, 30, 40)'),
   tintVars: vi.fn().mockReturnValue({ rgb: '100 150 200', strong: '#ffffff' }),
   deriveHarmonics: vi.fn().mockReturnValue({

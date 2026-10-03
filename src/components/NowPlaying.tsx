@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
-import { dominantColor, tidalBgColor } from '../lib/artColor'
+import { deriveHarmonics, dominantColor, fallbackTint, tidalBgColor } from '../lib/artColor'
 import { engine } from '../lib/audioEngine'
 import { digits } from '../lib/format'
 import { useDialog } from '../lib/useDialog'
@@ -17,7 +17,7 @@ import { useRecent } from '../store/recent'
 import { useSettings } from '../store/settings'
 import { PlaylistPicker } from './AddToPlaylist'
 import AudioSettings from './AudioSettings'
-import Artwork from './Artwork'
+import Artwork, { artBlurUrl } from './Artwork'
 import LikeHeart from './LikeHeart'
 import LyricsPanel from './LyricsPanel'
 import PlayPauseIcon from './PlayPauseIcon'
@@ -473,8 +473,15 @@ export default function NowPlaying({
       ? track.album
       : t.nowPlayingView
 
-  // رنگ پس‌زمینه اختصاصی TIDAL
-  const tidalBg = tidalBgColor(tint)
+  // پس‌زمینهٔ بلورشده‌ی کاور — بلور سمت سرور یا خود تصویر کاور
+  const bgBlur = artBlurUrl(track.artworkUrl)
+  const [bgBlurFailed, setBgBlurFailed] = useState<string | null>(null)
+  const bgSrc = bgBlur && bgBlurFailed !== track.artworkUrl ? bgBlur : track.artworkUrl
+
+  // رنگ پس‌زمینه اختصاصی TIDAL و هارمونیک‌های اتمسفری نوری با فالبک پایدار از روی شناسه
+  const effectiveTint = tint ?? fallbackTint(track.albumId ?? track.id)
+  const tidalBg = tidalBgColor(effectiveTint)
+  const harmonics = useMemo(() => deriveHarmonics(effectiveTint), [effectiveTint])
 
   // توکن‌های هنرمندان برای نمایش دکمه‌های پروفایل هنرمندان
   const artistTokens = useMemo(
@@ -970,6 +977,34 @@ export default function NowPlaying({
           closing ? 'np-sheet-out' : 'np-sheet-in'
         }`}
       >
+        {/* ============================================================== */}
+        {/* لایهٔ پس‌زمینهٔ پویا و زنده از کاور آرت‌ورک و گرادیان هارمونیک     */}
+        {/* ============================================================== */}
+        <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+          {bgSrc && (
+            <img
+              key={bgSrc}
+              src={bgSrc}
+              alt=""
+              onError={() => setBgBlurFailed(track.artworkUrl)}
+              className="absolute inset-0 size-full scale-125 object-cover opacity-50 saturate-150 blur-3xl transition-opacity duration-700"
+            />
+          )}
+
+          {/* اتمسفر نوری زنده (Living Mesh Aurora) با پالت هارمونیک */}
+          <span
+            className="absolute inset-0 transition-all duration-700"
+            style={{
+              background: `radial-gradient(ellipse 85% 65% at 50% 15%, rgb(${harmonics.dominant.join(' ')} / 0.5), transparent 75%), radial-gradient(ellipse 70% 55% at 85% 85%, rgb(${harmonics.secondary.join(' ')} / 0.38), transparent 65%), radial-gradient(ellipse 60% 50% at 15% 75%, rgb(${harmonics.accent.join(' ')} / 0.28), transparent 60%)`,
+            }}
+          />
+
+          {/* لایهٔ گرادیان تیره برای تضمین خوانایی متون و کنترل‌ها به سبک TIDAL */}
+          <span className="absolute inset-0 bg-black/55" />
+          <span className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
+          <span className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/60 to-transparent" />
+        </span>
+
         {/* ============================================================== */}
         {/* نوار بالای پلیر به سبک TIDAL                                    */}
         {/* ============================================================== */}

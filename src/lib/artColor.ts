@@ -88,8 +88,31 @@ export async function dominantColor(
     result = null
   }
 
-  cache.set(src, result)
+  // فقط نتایج موفق ذخیره شوند تا خطای موقت شبکه یا CORS کش دائمی نسازد
+  if (result) {
+    cache.set(src, result)
+  }
   return result
+}
+
+const FALLBACK_PALETTES: [number, number, number][] = [
+  [91, 75, 214],
+  [47, 111, 78],
+  [138, 59, 46],
+  [43, 93, 122],
+  [107, 66, 38],
+  [122, 47, 93],
+  [61, 90, 43],
+]
+
+/**
+ * رنگ تینت جایگزینِ پایدار از روی شناسه یا سید — وقتی استخراج بوم به دلیل CORS
+ * یا خطای شبکه شکست می‌خورد تا پس‌زمینه هرگز خاکستری بی‌روح نماند.
+ */
+export function fallbackTint(seed: string): [number, number, number] {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  return FALLBACK_PALETTES[h % FALLBACK_PALETTES.length]
 }
 
 /**

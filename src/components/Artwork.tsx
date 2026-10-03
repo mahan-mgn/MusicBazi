@@ -44,7 +44,8 @@ function hash(s: string): number {
  * باید به CSS blur برگردد.
  */
 export function artBlurUrl(src: string | null): string | null {
-  return src?.startsWith('/api/art/') ? src.replace('/api/art/', '/api/art-blur/') : null
+  if (!src) return null
+  return src.includes('/api/art/') ? src.replace('/api/art/', '/api/art-blur/') : null
 }
 
 /** حرف اول عنوان — برای فارسی هم درست کار می‌کند */
