@@ -300,6 +300,28 @@ def test_save_writes_done_flag(env_file, clean_env):
     assert "MUSICBAZI_SETUP_DONE=1" in env_file.read_text(encoding="utf-8")
 
 
+def test_test_uses_env_when_value_empty(monkeypatch):
+    """کلیدهایی که در env ذخیره‌اند، باید بدون نیاز به تایپ مجدد تست شوند."""
+    monkeypatch.setenv("MUSICBAZI_TELEGRAM_BOT_TOKEN", "123:abc")
+    ok, detail = run(
+        su._test_telegram(
+            _client(
+                lambda r: httpx.Response(200, json={"ok": True, "result": {"username": "saved_bot"}})
+            ),
+            {},
+        )
+    )
+    assert ok and detail == "@saved_bot"
+
+
+def test_state_includes_telegram_status(clean_env, monkeypatch):
+    monkeypatch.setenv("MUSICBAZI_TELEGRAM_BOT_TOKEN", "123:abc")
+    body = TestClient(_app()).get("/api/setup").json()
+    assert "telegram" in body
+    assert body["telegram"]["botTokenSet"] is True
+    assert isinstance(body["telegram"]["connected"], bool)
+
+
 # ---------------------------------------------------------------- کوکی
 
 

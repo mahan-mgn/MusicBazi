@@ -5,7 +5,7 @@ import PillNav from './PillNav'
 import QualityPicker from './QualityPicker'
 import SearchBar from './SearchBar'
 import type { Tab } from './TabBar'
-import { DotsIcon, LinkIcon, MicIcon, MoonIcon, PhoneIcon, SunIcon } from './icons'
+import { DotsIcon, LinkIcon, MicIcon, MoonIcon, PhoneIcon, SlidersIcon, SunIcon } from './icons'
 import { isLocalServer, isNativeApp, serverBase } from '../lib/server'
 import { BatteryRow } from './NativeHealth'
 import { useSettings } from '../store/settings'
@@ -18,6 +18,8 @@ interface Props {
   onIdentify: () => void
   /** «آدرس سرور» — فقط در اپ نیتیو معنا دارد */
   onServer: () => void
+  /** «راه‌اندازی» — تنظیم کلیدها و بررسی پیش‌نیازها */
+  onSetup?: () => void
   /** همان تبی که تب‌بارِ موبایل هم نشان می‌دهد؛ اینجا قرصِ فعال را مشخص می‌کند */
   active: Tab
   searchValue: string
@@ -59,7 +61,15 @@ const menuItem =
  * ۱۷۰ پیکسل می‌خورند و از سرچ‌بار — که کارِ اصلیِ همین صفحه است — یک جعبه‌ی
  * صد پیکسلی باقی می‌گذارند.
  */
-function OverflowMenu({ onIdentify, onServer }: { onIdentify: () => void; onServer: () => void }) {
+function OverflowMenu({
+  onIdentify,
+  onServer,
+  onSetup,
+}: {
+  onIdentify: () => void
+  onServer: () => void
+  onSetup?: () => void
+}) {
   const { t, lang, setLang } = useI18n()
   const { theme, toggleTheme, liquidGlass, setLiquidGlass } = useSettings()
   const [open, setOpen] = useState(false)
@@ -87,40 +97,53 @@ function OverflowMenu({ onIdentify, onServer }: { onIdentify: () => void; onServ
           className="sheet-in absolute end-0 z-40 mt-2 w-48 rounded-xl border border-line bg-panel p-1.5 shadow-xl"
         >
           {native && (
-            <>
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false)
-                  onServer()
-                }}
-                className={menuItem}
-              >
-                {isLocalServer() ? (
-                  <PhoneIcon className="size-4 shrink-0" />
-                ) : (
-                  <LinkIcon className="size-4 shrink-0" />
+            <button
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                onServer()
+              }}
+              className={menuItem}
+            >
+              {isLocalServer() ? (
+                <PhoneIcon className="size-4 shrink-0" />
+              ) : (
+                <LinkIcon className="size-4 shrink-0" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block">{t.serverChange}</span>
+                {/*
+                 * سرورِ محلی به‌جای آدرس، برچسب می‌گیرد: «http://127.0.0.1:8000»
+                 * به کاربر چیزی نمی‌گوید، ولی «همین گوشی» دقیقاً همان چیزی است
+                 * که باید بداند — کتابخانه‌ای که می‌بیند روی این دستگاه است.
+                 */}
+                {serverBase() && (
+                  <span
+                    dir="ltr"
+                    className="block truncate text-[10px] text-muted-2"
+                  >
+                    {isLocalServer() ? t.serverBadgeLocal : serverBase()}
+                  </span>
                 )}
-                <span className="min-w-0 flex-1">
-                  <span className="block">{t.serverChange}</span>
-                  {/*
-                   * سرورِ محلی به‌جای آدرس، برچسب می‌گیرد: «http://127.0.0.1:8000»
-                   * به کاربر چیزی نمی‌گوید، ولی «همین گوشی» دقیقاً همان چیزی است
-                   * که باید بداند — کتابخانه‌ای که می‌بیند روی این دستگاه است.
-                   */}
-                  {serverBase() && (
-                    <span
-                      dir="ltr"
-                      className="block truncate text-[10px] text-muted-2"
-                    >
-                      {isLocalServer() ? t.serverBadgeLocal : serverBase()}
-                    </span>
-                  )}
-                </span>
-              </button>
-              <div className="my-1 border-t border-line-soft" />
-            </>
+              </span>
+            </button>
           )}
+
+          {onSetup && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                onSetup()
+              }}
+              className={menuItem}
+            >
+              <SlidersIcon className="size-4 shrink-0" />
+              <span>{t.setupMenu}</span>
+            </button>
+          )}
+
+          {(native || onSetup) && <div className="my-1 border-t border-line-soft" />}
 
           <button
             role="menuitem"
@@ -198,6 +221,7 @@ export default function Header({
   onStats,
   onIdentify,
   onServer,
+  onSetup,
   active,
   searchValue,
   searchLoading,
@@ -303,7 +327,7 @@ export default function Header({
             <span className="hidden sm:inline">{theme === 'dark' ? t.themeLight : t.themeDark}</span>
           </button>
 
-          <OverflowMenu onIdentify={onIdentify} onServer={onServer} />
+          <OverflowMenu onIdentify={onIdentify} onServer={onServer} onSetup={onSetup} />
         </div>
       </div>
     </header>

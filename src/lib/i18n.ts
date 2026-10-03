@@ -619,6 +619,13 @@ const DICT = {
     setupTelegram: 'بات تلگرام',
     setupTelegramHint:
       'اسم آهنگ یا لینک به بات بفرست، فایل برمی‌گردد. توکن رایگان از @BotFather با /newbot.',
+    setupTelegramOnline: (username: string) => `بات تلگرام آنلاین و متصل است: @${username}`,
+    setupTelegramOffline:
+      'توکن ذخیره شده، اما پروسه‌ی بات تلگرام در حال اجرا نیست. برای فعال‌سازی کامل، دستور python -m app.bot.run (یا در داکر با پروفایل bot) را اجرا کنید.',
+    setupTelegramPairHint:
+      'برای ارسال موزیک از وب به تلگرام، کافیست در وب روی دکمه‌ی تلگرام کلیک کرده و کد اتصال را در چت بات بفرستید.',
+    setupShowSecret: 'نمایش',
+    setupHideSecret: 'مخفی‌سازی',
     setupGemini: 'تشخیصِ حال‌وهوا (Gemini)',
     setupGeminiHint:
       'چت‌باتِ «پلی‌لیست غمگین شب» را دقیق می‌کند. کلیدِ رایگان از Google AI Studio؛ بدون کلید، نگاشتِ کلیدواژه‌ایِ فارسی کار می‌کند.',
@@ -1260,6 +1267,13 @@ const DICT = {
     setupProxyHint: 'Format: socks5h://127.0.0.1:1080 or http://127.0.0.1:3128. Applies to all outbound traffic.',
     setupTelegram: 'Telegram bot',
     setupTelegramHint: 'Send the bot a song name or a link, get the file back. Free token from @BotFather with /newbot.',
+    setupTelegramOnline: (username: string) => `Telegram bot is online and connected: @${username}`,
+    setupTelegramOffline:
+      'Token is saved, but the bot process is not running. Run "python -m app.bot.run" (or in Docker with profile "bot").',
+    setupTelegramPairHint:
+      'To send songs from the web to Telegram, click the Telegram button in the web app and send the pairing code to the bot.',
+    setupShowSecret: 'Show',
+    setupHideSecret: 'Hide',
     setupGemini: 'Mood detection (Gemini)',
     setupGeminiHint:
       'Makes the “sad night playlist” chat accurate. Free key from Google AI Studio; without one, a Persian keyword map is used.',

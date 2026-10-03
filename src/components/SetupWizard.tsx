@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useBackDismiss } from '../lib/back'
 import { useI18n, type Dict } from '../lib/i18n'
 import {
   fetchSetupState,
@@ -10,7 +11,7 @@ import {
   type SetupState,
   type TestGroup,
 } from '../lib/setup'
-import { CheckIcon, CloseIcon, Spinner, TelegramIcon, WarnIcon } from './icons'
+import { CheckIcon, CloseIcon, EyeIcon, EyeOffIcon, Spinner, TelegramIcon, WarnIcon } from './icons'
 import { GeminiLogo, GeniusLogo, SpotifyLogo } from './logos'
 
 /**
@@ -45,7 +46,7 @@ const FIELDS: {
   label: (t: Dict) => string
   hint: (t: Dict) => string
   url?: string
-  secret?: boolean
+  secrets?: SetupKey[]
 }[] = [
   {
     id: 'spotify',
@@ -53,6 +54,7 @@ const FIELDS: {
     label: (t) => t.setupSpotify,
     hint: (t) => t.setupSpotifyHint,
     url: 'https://developer.spotify.com/dashboard',
+    secrets: ['MUSICBAZI_SPOTIFY_CLIENT_SECRET'],
   },
   {
     id: 'proxy',
@@ -66,7 +68,7 @@ const FIELDS: {
     label: (t) => t.setupTelegram,
     hint: (t) => t.setupTelegramHint,
     url: 'https://t.me/BotFather',
-    secret: true,
+    secrets: ['MUSICBAZI_TELEGRAM_BOT_TOKEN'],
   },
   {
     id: 'gemini',
@@ -74,7 +76,7 @@ const FIELDS: {
     label: (t) => t.setupGemini,
     hint: (t) => t.setupGeminiHint,
     url: 'https://aistudio.google.com/apikey',
-    secret: true,
+    secrets: ['MUSICBAZI_GEMINI_API_KEY'],
   },
   {
     id: 'genius',
@@ -82,7 +84,7 @@ const FIELDS: {
     label: (t) => t.setupGenius,
     hint: (t) => t.setupGeniusHint,
     url: 'https://genius.com/api-clients',
-    secret: true,
+    secrets: ['MUSICBAZI_GENIUS_ACCESS_TOKEN'],
   },
   {
     id: 'acoustid',
@@ -97,20 +99,24 @@ const FIELDS: {
     label: (t) => t.setupAudd,
     hint: (t) => t.setupAuddHint,
     url: 'https://dashboard.audd.io',
-    secret: true,
+    secrets: ['MUSICBAZI_AUDD_TOKEN'],
   },
 ]
 
-export default function SetupWizard({ onDone }: { onDone?: () => void }) {
+export default function SetupWizard({ onDone, onServer }: { onDone?: () => void; onServer?: () => void }) {
+  useBackDismiss(Boolean(onDone), onDone ?? (() => {}))
   const { t } = useI18n()
   const [state, setState] = useState<SetupState | null>(null)
   const [values, setValues] = useState<Partial<Record<SetupKey, string>>>({})
+  const [showSecret, setShowSecret] = useState<Record<string, boolean>>({})
   const [probes, setProbes] = useState<Record<string, Probe>>({})
   const [cookieProbe, setCookieProbe] = useState<Probe>(EMPTY)
   const [busy, setBusy] = useState(false)
   const [waiting, setWaiting] = useState(false)
   const [fatal, setFatal] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const toggleSecret = (key: string) => setShowSecret((s) => ({ ...s, [key]: !s[key] }))
 
   useEffect(() => {
     let alive = true
@@ -155,6 +161,10 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
     setProbes((p) => ({ ...p, [field.id]: { kind: 'busy' } }))
     const sent: Partial<Record<SetupKey, string>> = {}
     for (const key of field.group) sent[key] = values[key] ?? ''
+    // اگر پروکسی در فرم وارد شده باشد، آن را هم بفرست تا تست تلگرام/جمینای پشت فیلتر نماند
+    if (values.MUSICBAZI_PROXY && !sent.MUSICBAZI_PROXY) {
+      sent.MUSICBAZI_PROXY = values.MUSICBAZI_PROXY
+    }
     try {
       const r = await testSetupKey(field.id, sent)
       if (testSeq.current[field.id] !== seq) return
@@ -341,71 +351,152 @@ export default function SetupWizard({ onDone }: { onDone?: () => void }) {
           <h2 className="text-sm font-bold">{t.setupKeysTitle}</h2>
           <p className="mt-1 text-xs leading-6 text-muted">{t.setupKeysBody}</p>
 
-          {FIELDS.map((f) => (
-            <div key={f.id} className="mt-5 first:mt-4">
-              <div className="flex flex-wrap items-center gap-x-2">
-                {f.id === 'gemini' && <GeminiLogo className="size-4 shrink-0" />}
-                {f.id === 'genius' && <GeniusLogo className="size-4 shrink-0 rounded" />}
-                {f.id === 'spotify' && <SpotifyLogo className="size-4 shrink-0" />}
-                {f.id === 'telegram' && <TelegramIcon className="size-4 shrink-0 text-[#229ED9]" />}
-                <h3 className="text-xs font-bold">{f.label(t)}</h3>
-                {f.url && (
-                  <a
-                    href={f.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    dir="ltr"
-                    className="text-[10.5px] text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
-                  >
-                    {f.url.replace(/^https?:\/\//, '')}
-                  </a>
-                )}
-                {state?.set[f.group[0]] && (
-                  <span className="text-[10.5px] text-muted-2">
-                    {t.setupAlreadySet(state.set[f.group[0]]!)}
-                  </span>
-                )}
-              </div>
-              <p className="mt-0.5 text-[11px] leading-5 text-muted-2">{f.hint(t)}</p>
+          {FIELDS.map((f) => {
+            const canTest =
+              probes[f.id]?.kind !== 'busy' &&
+              f.group.every((k) => (values[k] ?? '').trim() || Boolean(state?.set[k]))
+            const isMulti = f.group.length > 1
 
-              {f.group.map((key) => (
-                <label key={key} className="mt-2 block">
-                  <span className="mb-1 block text-[10.5px] font-semibold uppercase tracking-wide text-muted-2" dir="ltr">
-                    {key.replace('MUSICBAZI_', '')}
-                  </span>
-                  <div className="flex gap-2">
-                    <input
-                      type={f.secret ? 'password' : 'text'}
-                      value={values[key] ?? ''}
-                      onChange={(e) => set(key, e.target.value)}
-                      autoComplete="off"
-                      spellCheck={false}
+            return (
+              <div key={f.id} className="mt-5 first:mt-4">
+                <div className="flex flex-wrap items-center gap-x-2">
+                  {f.id === 'gemini' && <GeminiLogo className="size-4 shrink-0" />}
+                  {f.id === 'genius' && <GeniusLogo className="size-4 shrink-0 rounded" />}
+                  {f.id === 'spotify' && <SpotifyLogo className="size-4 shrink-0" />}
+                  {f.id === 'telegram' && <TelegramIcon className="size-4 shrink-0 text-[#229ED9]" />}
+                  <h3 className="text-xs font-bold">{f.label(t)}</h3>
+                  {f.url && (
+                    <a
+                      href={f.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
                       dir="ltr"
-                      className="min-w-0 flex-1 rounded-xl border border-line bg-panel-2 px-3 py-2.5 text-sm outline-none transition placeholder:text-muted-2 focus:border-accent/70"
-                    />
-                    <button
-                      onClick={() => void test(f)}
-                      disabled={
-                        probes[f.id]?.kind === 'busy' || !f.group.every((k) => (values[k] ?? '').trim())
-                      }
-                      className="shrink-0 rounded-xl border border-line px-3 text-xs transition enabled:hover:border-accent/60 disabled:opacity-40"
+                      className="text-[10.5px] text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
                     >
-                      {probes[f.id]?.kind === 'busy' ? <Spinner className="size-3.5" /> : t.setupTest}
+                      {f.url.replace(/^https?:\/\//, '')}
+                    </a>
+                  )}
+                  {!isMulti && state?.set[f.group[0]] && (
+                    <span className="text-[10.5px] text-muted-2">
+                      {t.setupAlreadySet(state.set[f.group[0]]!)}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11px] leading-5 text-muted-2">{f.hint(t)}</p>
+
+                {f.group.map((key) => {
+                  const isSecret = f.secrets?.includes(key)
+                  const isRevealed = Boolean(showSecret[key])
+                  const setValue = state?.set[key]
+
+                  return (
+                    <label key={key} className="mt-2 block">
+                      <div className="mb-1 flex items-center justify-between text-[10.5px]">
+                        <span className="font-semibold uppercase tracking-wide text-muted-2" dir="ltr">
+                          {key.replace('MUSICBAZI_', '')}
+                        </span>
+                        {isMulti && setValue && (
+                          <span className="text-muted-2">
+                            {t.setupAlreadySet(setValue)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="relative min-w-0 flex-1">
+                          <input
+                            type={isSecret && !isRevealed ? 'password' : 'text'}
+                            value={values[key] ?? ''}
+                            onChange={(e) => set(key, e.target.value)}
+                            placeholder={setValue ?? ''}
+                            autoComplete="off"
+                            spellCheck={false}
+                            dir="ltr"
+                            className={`w-full rounded-xl border border-line bg-panel-2 px-3 py-2.5 text-sm outline-none transition placeholder:text-muted-2/60 focus:border-accent/70 ${isSecret ? 'pe-9' : ''}`}
+                          />
+                          {isSecret && (
+                            <button
+                              type="button"
+                              onClick={() => toggleSecret(key)}
+                              title={isRevealed ? t.setupHideSecret : t.setupShowSecret}
+                              aria-label={isRevealed ? t.setupHideSecret : t.setupShowSecret}
+                              className="absolute inset-y-0 end-0 grid size-9 place-items-center text-muted-2 transition hover:text-fg"
+                            >
+                              {isRevealed ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+                            </button>
+                          )}
+                        </div>
+                        {!isMulti && (
+                          <button
+                            type="button"
+                            onClick={() => void test(f)}
+                            disabled={!canTest}
+                            className="shrink-0 rounded-xl border border-line px-3 text-xs transition enabled:hover:border-accent/60 disabled:opacity-40"
+                          >
+                            {probes[f.id]?.kind === 'busy' ? <Spinner className="size-3.5" /> : t.setupTest}
+                          </button>
+                        )}
+                      </div>
+                    </label>
+                  )
+                })}
+
+                {isMulti && (
+                  <div className="mt-2.5 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void test(f)}
+                      disabled={!canTest}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-line px-3.5 py-1.5 text-xs font-medium transition enabled:hover:border-accent/60 enabled:hover:text-fg disabled:opacity-40"
+                    >
+                      {probes[f.id]?.kind === 'busy' ? <Spinner className="size-3.5" /> : null}
+                      <span>{t.setupTest}</span>
                     </button>
                   </div>
-                </label>
-              ))}
-              {/* نتیجه یک خط است، حتی وقتی دو فیلد گروه‌اند */}
-              <ProbeLine probe={probes[f.id] ?? EMPTY} />
-            </div>
-          ))}
+                )}
+
+                {/* نتیجه یک خط است، حتی وقتی دو فیلد گروه‌اند */}
+                <ProbeLine probe={probes[f.id] ?? EMPTY} />
+
+                {/* وضعیت زنده و راهنمای تکمیلی بات تلگرام */}
+                {f.id === 'telegram' && (
+                  <div className="mt-3 space-y-2">
+                    {state?.telegram?.connected ? (
+                      <div className="flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                        <CheckIcon className="size-4 shrink-0" />
+                        <span dir="auto">{t.setupTelegramOnline(state.telegram.botUsername || 'MusicBazi')}</span>
+                      </div>
+                    ) : (state?.telegram?.botTokenSet || state?.set['MUSICBAZI_TELEGRAM_BOT_TOKEN']) ? (
+                      <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-5 text-amber-300">
+                        <WarnIcon className="mt-0.5 size-4 shrink-0 text-amber-400" />
+                        <span>{t.setupTelegramOffline}</span>
+                      </div>
+                    ) : null}
+                    <p className="text-[11px] leading-5 text-muted-2">
+                      {t.setupTelegramPairHint}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </section>
 
         {fatal && (
-          <p className="mt-5 flex items-start gap-1.5 rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs leading-6 text-danger">
-            <WarnIcon className="mt-0.5 size-3.5 shrink-0" />
-            <span>{fatal}</span>
-          </p>
+          <div className="mt-5 rounded-xl border border-danger/40 bg-danger/10 p-3 text-xs leading-6 text-danger">
+            <div className="flex items-start gap-1.5">
+              <WarnIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>{fatal}</span>
+            </div>
+            {onServer && (
+              <button
+                type="button"
+                onClick={onServer}
+                className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-danger/40 bg-panel px-2.5 py-1 text-xs font-semibold text-fg transition hover:border-danger hover:text-danger cursor-pointer"
+              >
+                {t.serverChange}
+              </button>
+            )}
+          </div>
         )}
 
         <div className="mt-6 flex gap-2">

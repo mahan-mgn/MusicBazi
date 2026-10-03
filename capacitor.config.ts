@@ -10,7 +10,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
  */
 const config: CapacitorConfig = {
   appId: 'app.musicbazi.client',
-  appName: 'موزیک بازی',
+  appName: 'Music Bazi',
   webDir: 'dist',
   android: {
     /*

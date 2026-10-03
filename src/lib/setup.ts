@@ -16,6 +16,7 @@ export type SetupKey =
   | 'MUSICBAZI_AUDD_TOKEN'
   | 'MUSICBAZI_GEMINI_API_KEY'
   | 'MUSICBAZI_TELEGRAM_BOT_TOKEN'
+  | 'MUSICBAZI_SOUNDCLOUD_CLIENT_ID'
   | 'MUSICBAZI_PROXY'
   | 'MUSICBAZI_YTDLP_PROXY'
   | 'MUSICBAZI_COOKIES_FILE'
@@ -44,6 +45,11 @@ export interface SetupState {
     proxy: boolean
     internet: boolean
     container: boolean
+  }
+  telegram?: {
+    botTokenSet: boolean
+    connected: boolean
+    botUsername: string | null
   }
 }
 

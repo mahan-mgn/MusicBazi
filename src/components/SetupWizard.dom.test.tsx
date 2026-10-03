@@ -140,7 +140,7 @@ describe('SetupWizard', () => {
     await render()
     const id = inputFor('SPOTIFY_CLIENT_ID')
     const secret = inputFor('SPOTIFY_CLIENT_SECRET')
-    const group = id.closest('div')!.parentElement!
+    const group = id.closest('label')!.parentElement!
     const btn = [...group.querySelectorAll('button')].find((b) =>
       b.textContent?.includes(txt('setupTest')),
     ) as HTMLButtonElement

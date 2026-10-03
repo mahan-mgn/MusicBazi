@@ -1,6 +1,5 @@
 import { useI18n } from '../lib/i18n'
 import { API_MODE } from '../lib/api'
-import { isNativeApp } from '../lib/server'
 import { TelegramConnection } from './TelegramLink'
 
 const AUTHORS = [
@@ -40,11 +39,8 @@ export default function Footer() {
        * راهِ برگشت به ویزاردِ راه‌اندازی. یک لینکِ معمولی با `href`، نه
        * ناوبریِ داخلی: صفحه از نو بار می‌شود و `App` خودش دوباره از سرور
        * می‌پرسد — همان مسیری که بارِ اول رفتیم، بدونِ هیچ stateِ تازه.
-       *
-       * در اپ نیتیو جایش نیست: آن‌جا سؤالِ «سرور کجاست» با `ServerSetup`
-       * پاسخ داده می‌شود و کلیدها روی آن سرور است نه این دستگاه.
        */}
-      {API_MODE === 'http' && !isNativeApp() && (
+      {API_MODE === 'http' && (
         <p className="mb-3">
           <a
             href="/?setup=1"

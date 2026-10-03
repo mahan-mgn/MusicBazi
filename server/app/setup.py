@@ -38,6 +38,7 @@ from pydantic import BaseModel
 
 from . import config as cfg
 from . import reach
+from . import telegram
 from .config import DATA_DIR
 
 router = APIRouter()
@@ -194,8 +195,8 @@ class TestRequest(BaseModel):
 
 
 async def _test_spotify(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    cid = v.get("MUSICBAZI_SPOTIFY_CLIENT_ID", "").strip()
-    secret = v.get("MUSICBAZI_SPOTIFY_CLIENT_SECRET", "").strip()
+    cid = (v.get("MUSICBAZI_SPOTIFY_CLIENT_ID") or os.getenv("MUSICBAZI_SPOTIFY_CLIENT_ID") or "").strip()
+    secret = (v.get("MUSICBAZI_SPOTIFY_CLIENT_SECRET") or os.getenv("MUSICBAZI_SPOTIFY_CLIENT_SECRET") or "").strip()
     if not cid or not secret:
         return False, "هر دو فیلد لازم است"
     res = await client.post(
@@ -212,7 +213,7 @@ async def _test_spotify(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[b
 
 
 async def _test_genius(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    token = v.get("MUSICBAZI_GENIUS_ACCESS_TOKEN", "").strip()
+    token = (v.get("MUSICBAZI_GENIUS_ACCESS_TOKEN") or os.getenv("MUSICBAZI_GENIUS_ACCESS_TOKEN") or "").strip()
     if not token:
         return False, "کلید خالی است"
     res = await client.get(
@@ -229,7 +230,7 @@ async def _test_genius(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bo
 
 
 async def _test_acoustid(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    key = v.get("MUSICBAZI_ACOUSTID_KEY", "").strip()
+    key = (v.get("MUSICBAZI_ACOUSTID_KEY") or os.getenv("MUSICBAZI_ACOUSTID_KEY") or "").strip()
     if not key:
         return False, "کلید خالی است"
     res = await client.get(
@@ -249,7 +250,7 @@ async def _test_acoustid(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[
 
 
 async def _test_audd(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    token = v.get("MUSICBAZI_AUDD_TOKEN", "").strip()
+    token = (v.get("MUSICBAZI_AUDD_TOKEN") or os.getenv("MUSICBAZI_AUDD_TOKEN") or "").strip()
     if not token:
         return False, "توکن خالی است"
     # بدونِ فایل می‌فرستیم: سرویس برای توکنِ درست می‌گوید «فایل لازم است» و برای
@@ -268,7 +269,7 @@ async def _test_audd(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool
 
 
 async def _test_gemini(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    key = v.get("MUSICBAZI_GEMINI_API_KEY", "").strip()
+    key = (v.get("MUSICBAZI_GEMINI_API_KEY") or os.getenv("MUSICBAZI_GEMINI_API_KEY") or "").strip()
     if not key:
         return False, "کلید خالی است"
     # کوچک‌ترین درخواستِ ممکن: maxOutputTokens=1 تا سهمیه‌ی رایگان با یک
@@ -298,7 +299,7 @@ async def _test_gemini(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bo
 
 
 async def _test_telegram(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    token = v.get("MUSICBAZI_TELEGRAM_BOT_TOKEN", "").strip()
+    token = (v.get("MUSICBAZI_TELEGRAM_BOT_TOKEN") or os.getenv("MUSICBAZI_TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
         return False, "توکن خالی است"
     res = await client.get(f"https://api.telegram.org/bot{token}/getMe", timeout=15.0)
@@ -312,7 +313,7 @@ async def _test_telegram(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[
 
 
 async def _test_proxy(client: httpx.AsyncClient, v: dict[str, str]) -> tuple[bool, str]:
-    proxy = v.get("MUSICBAZI_PROXY", "").strip()
+    proxy = (v.get("MUSICBAZI_PROXY") or os.getenv("MUSICBAZI_PROXY") or "").strip()
     if not proxy:
         return False, "آدرس خالی است"
     if "://" not in proxy:
@@ -483,6 +484,11 @@ async def setup_state() -> dict:
             "internet": reach.snapshot()["online"],
             "container": _in_container(),
         },
+        "telegram": {
+            "botTokenSet": bool(values.get("MUSICBAZI_TELEGRAM_BOT_TOKEN")),
+            "connected": telegram.connected(),
+            "botUsername": telegram.bot_username(),
+        },
     }
 
 
@@ -494,12 +500,29 @@ async def setup_test(req: TestRequest, request: Request) -> dict:
     unknown = set(req.values) - ALLOWED_KEYS
     if unknown:
         raise HTTPException(400, "کلیدِ مجاز نیست")
+
+    # پروکسی درخواستی یا ست‌شده را در نظر بگیر تا تست سرویس‌های خارجی فیلتر نشوند
+    req_proxy = (req.values.get("MUSICBAZI_PROXY") or "").strip()
+    active_proxy = req_proxy or os.getenv("MUSICBAZI_PROXY") or cfg.PROXY
+
+    server_http = getattr(request.app.state, "http", None)
+    custom_client: httpx.AsyncClient | None = None
+    if req_proxy and req_proxy != cfg.PROXY:
+        custom_client = httpx.AsyncClient(timeout=15.0, proxy=req_proxy)
+    client = custom_client or server_http
+    if client is None:
+        client = httpx.AsyncClient(timeout=15.0, proxy=active_proxy)
+        custom_client = client
+
     try:
-        ok, detail = await tester(request.app.state.http, req.values)
+        ok, detail = await tester(client, req.values)
     except httpx.RequestError as exc:
         # نرسیدن به خودِ سرویس (دیوارِ آتش، DNS، قطعیِ بین‌الملل) با «کلید غلط»
         # یکی نیست — کاربرِ ایرانی باید بداند تقصیرِ شبکه بوده نه تقصیرِ او
         return {"ok": False, "detail": f"به سرویس وصل نشد: {type(exc).__name__}"}
+    finally:
+        if custom_client is not None and custom_client is not server_http:
+            await custom_client.aclose()
     return {"ok": ok, "detail": detail}
 
 

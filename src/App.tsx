@@ -25,7 +25,7 @@ import { isArtistUrl, isUrl } from './lib/format'
 import { onBackButton, onSharedText, onShortcut, takeShortcutRoute, type ShortcutRoute } from './lib/native'
 import { useI18n } from './lib/i18n'
 import { fetchSetupState } from './lib/setup'
-import { isNativeApp, needsSetup } from './lib/server'
+import { needsSetup } from './lib/server'
 import { IntranetError } from './lib/types'
 import { useNet } from './store/net'
 import type {
@@ -283,6 +283,7 @@ export default function App() {
       // مودالِ شناسایی هم بخشی از تاریخچه است: «عقب» باید اول درِ مودال را
       // ببندد، نه این‌که کلِ صفحه را عوض کند
       setIdentifying(new URLSearchParams(location.search).has('identify'))
+      setWizard(new URLSearchParams(location.search).has('setup'))
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
@@ -302,16 +303,14 @@ export default function App() {
   }, [])
 
   /*
-   * دروازه‌ی راه‌اندازی — فقط مرورگر، فقط مودِ http.
+   * دروازه‌ی راه‌اندازی — فقط در مودِ http.
    *
-   * اپ نیتیو `ServerSetup` را دارد که سؤالش چیز دیگری است («سرور کجاست؟»)، و
-   * در مود دمو هیچ سروری نیست که بشود از کلید پرسید.
-   *
-   * `?setup=1` بازکردنِ اجباری است — برای وقتی که کاربر می‌خواهد کلیدها را
-   * نگاه کند یا چیزی را درست کند.
+   * در اپ نیتیو تا وقتی سرور مشخص نشده (`needsSetup`) ابتدا ServerSetup پاسخ داده می‌شود.
+   * پس از اتصال یا در مرورگر، اگر ستاپ هنوز کامل نباشد یا `?setup=1` در آدرس باشد،
+   * ویزارد باز می‌شود.
    */
   useEffect(() => {
-    if (API_MODE !== 'http' || isNativeApp()) return
+    if (API_MODE !== 'http' || needsSetup()) return
     if (new URLSearchParams(location.search).has('setup')) {
       setWizard(true)
       return
@@ -634,6 +633,10 @@ export default function App() {
           const qs = p.toString()
           history.replaceState(null, '', qs ? `/?${qs}` : '/')
         }}
+        onServer={() => {
+          setWizard(false)
+          setSetup(true)
+        }}
       />
     )
 
@@ -641,6 +644,12 @@ export default function App() {
     <div ref={shellRef} className="app-shell flex flex-col">
       <Header
         onServer={() => setSetup(true)}
+        onSetup={() => {
+          setWizard(true)
+          const p = new URLSearchParams(location.search)
+          p.set('setup', '1')
+          history.pushState(null, '', `/?${p}`)
+        }}
         onHome={goHome}
         onLibrary={goLibrary}
         onStats={goStats}

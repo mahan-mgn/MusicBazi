@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">موزیک بازی</string>
-    <string name="title_activity_main">موزیک بازی</string>
+    <string name="app_name">Music Bazi</string>
+    <string name="title_activity_main">Music Bazi</string>
     <string name="package_name">app.musicbazi.client</string>
     <string name="custom_url_scheme">app.musicbazi.client</string>
 
