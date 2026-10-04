@@ -111,7 +111,7 @@ def _entry_to_track(entry: dict[str, Any], source: Source, album: str | None) ->
     return Track(
         id=f"{'sc' if source == 'soundcloud' else 'yt'}:track:{vid}",
         title=title or raw or _title_from_url(source_url),
-        artist=artist or uploader or "ناشناس",
+        artist=soundcloud.clean_artist(artist or uploader or "ناشناس"),
         album=album or entry.get("album"),
         albumId=album_id,
         durationMs=int(float(entry.get("duration") or 0) * 1000),
@@ -399,7 +399,7 @@ def extract(url: str) -> AlbumDetail | None:
     return AlbumDetail(
         id=f"{'sc' if source == 'soundcloud' else 'yt'}:{kind}:{info.get('id') or ''}",
         title=title,
-        artist=info.get("uploader") or info.get("channel") or (tracks[0].artist if tracks else ""),
+        artist=soundcloud.clean_artist(info.get("uploader") or info.get("channel") or (tracks[0].artist if tracks else "")),
         year=_year(info.get("release_year") or info.get("upload_date")),
         artworkUrl=art,
         trackCount=len(tracks),

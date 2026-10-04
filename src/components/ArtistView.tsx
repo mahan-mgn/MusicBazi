@@ -408,6 +408,30 @@ export default function ArtistView({
     promise = (async () => {
       setLoadingAll(true)
       try {
+        // ۱. تلاش برای واکشی کامل و پرسرعت دیسکوگرافی از بک‌اند (بدون ریت‌لیمیت و با بچ اسپاتیفای)
+        try {
+          const backendTracks = await api.getArtistDiscography(artist.sourceUrl || artist.id)
+          if (backendTracks && backendTracks.length > 0) {
+            const seenIds = new Set<string>()
+            const seenKeys = new Set<string>()
+            const deduped: Track[] = []
+            for (const t of backendTracks) {
+              if (!t || !t.id || seenIds.has(t.id)) continue
+              const key = trackDedupeKey(t, artist.name)
+              if (seenKeys.has(key)) continue
+              seenIds.add(t.id)
+              seenKeys.add(key)
+              deduped.push(t)
+            }
+            if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
+              setAllTracks(deduped)
+            }
+            return deduped
+          }
+        } catch {
+          // فالبک به واکشی کلاینتی
+        }
+
         const seenIds = new Set<string>()
         const seenKeys = new Set<string>()
         const deduped: Track[] = []
@@ -467,18 +491,8 @@ export default function ArtistView({
           }
         }
 
-        // سقف حداکثر ۳۰ آلبوم با اولویت آلبوم‌های کامل برای جلوگیری از Rate Limit
-        const sortedAlbums = [...albumsToFetch]
-          .sort((a, b) => {
-            const aCount = 'trackCount' in a ? a.trackCount : 0
-            const bCount = 'trackCount' in b ? b.trackCount : 0
-            if (aCount > 1 && bCount <= 1) return -1
-            if (bCount > 1 && aCount <= 1) return 1
-            return 0
-          })
-          .slice(0, 30)
-
-        const details = await mapLimit(sortedAlbums, ALBUM_FETCH_CONCURRENCY, (item) =>
+        // همه آلبوم‌ها و سینگل‌ها را واکشی می‌کنیم تا اثری از قلم نیفتد
+        const details = await mapLimit(albumsToFetch, ALBUM_FETCH_CONCURRENCY, (item) =>
           api.getAlbum(item.sourceUrl || item.id).catch(() => null),
         )
 
@@ -873,7 +887,7 @@ export default function ArtistView({
       {/* ─── هیرو: بک‌دراپ محیطی تمام‌عرض با فِید نرم به پس‌زمینه ─── */}
       <div
         ref={heroRef}
-        className="relative -mx-2 -mt-2 mb-6 overflow-hidden rounded-3xl p-5 sm:-mx-4 sm:p-7 md:p-8"
+        className="relative -mx-2 -mt-2 mb-6 overflow-hidden rounded-3xl p-4 sm:-mx-4 sm:p-7 md:p-8"
         style={{
           background: `
             radial-gradient(ellipse 90% 70% at 50% -10%, rgb(${anyTint} / 0.45), transparent 75%),
@@ -910,7 +924,7 @@ export default function ArtistView({
                 alt={artist.name}
                 seed={artist.id}
                 rounded="rounded-full"
-                className="size-36 object-cover sm:size-44 md:size-52"
+                className="size-32 object-cover sm:size-44 md:size-52"
               />
               {/* برق شیشه‌ای */}
               <div className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-tr from-white/15 via-transparent to-white/5 opacity-70" />
@@ -920,7 +934,7 @@ export default function ArtistView({
           {/* متادیتای هنرمند */}
           <div className="min-w-0 flex-1 text-center sm:text-start">
             {/* ردیف بج‌های شیشه‌ای */}
-            <div className="mb-2.5 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+            <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 sm:justify-start">
               {isUser ? (
                 <span className="glass-chip inline-flex items-center gap-1.5 rounded-full border border-white/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
                   <span>{t.typeUser}</span>
@@ -962,7 +976,7 @@ export default function ArtistView({
             </h1>
 
             {/* خط جزئیات و آمار آثار */}
-            <div className="relative z-10 mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-muted drop-shadow-[0_1px_6px_rgb(0_0_0/0.6)] sm:justify-start">
+            <div className="relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:text-sm text-muted drop-shadow-[0_1px_6px_rgb(0_0_0/0.6)] sm:justify-start">
               {artist.subtitle && <span>{digits(artist.subtitle, lang)}</span>}
 
               {artist.topTracks.length > 0 && (
@@ -990,7 +1004,7 @@ export default function ArtistView({
             </div>
 
             {/* اکشن‌بار منسجم در هیرو */}
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2 sm:mt-6 sm:gap-3 sm:justify-start">
               {/* دکمه بزرگ پخش اصلی */}
               {hasPlayable && (
                 <ClickSpark>
@@ -999,14 +1013,14 @@ export default function ArtistView({
                     disabled={loadingPlayAll}
                     aria-label={isThisArtistCollectionPlaying ? t.pause : t.playAll}
                     title={isThisArtistCollectionPlaying ? t.pause : t.playAll}
-                    className="grid size-14 place-items-center rounded-full bg-accent text-accent-fg shadow-xl shadow-accent/25 transition enabled:hover:scale-105 enabled:active:scale-95 disabled:opacity-75"
+                    className="grid size-12 place-items-center rounded-full bg-accent text-accent-fg shadow-xl shadow-accent/25 transition enabled:hover:scale-105 enabled:active:scale-95 disabled:opacity-75 sm:size-14"
                   >
                     {loadingPlayAll ? (
-                      <Spinner className="size-6 text-accent-fg" />
+                      <Spinner className="size-5 sm:size-6 text-accent-fg" />
                     ) : isThisArtistCollectionPlaying ? (
-                      <PauseIcon className="size-6" />
+                      <PauseIcon className="size-5 sm:size-6" />
                     ) : (
-                      <PlayIcon className="size-6 ms-0.5" />
+                      <PlayIcon className="size-5 sm:size-6 ms-0.5" />
                     )}
                   </button>
                 </ClickSpark>
@@ -1018,9 +1032,9 @@ export default function ArtistView({
                   onClick={handleShufflePlay}
                   aria-label={t.shufflePlay}
                   title={t.shufflePlay}
-                  className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 text-fg backdrop-blur-md transition hover:border-accent/40 hover:bg-white/10 hover:text-accent active:scale-95"
+                  className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-fg backdrop-blur-md transition hover:border-accent/40 hover:bg-white/10 hover:text-accent active:scale-95 sm:size-11"
                 >
-                  <ShuffleIcon className="size-5" />
+                  <ShuffleIcon className="size-4.5 sm:size-5" />
                 </button>
               )}
 
@@ -1029,11 +1043,11 @@ export default function ArtistView({
 
               {/* دکمه دانلود دیسکوگرافی کامل */}
               {hasAnything && (activeCount > 0 || loadingAll || hasMore) && (
-                <ClickSpark className="flex-1 sm:flex-none">
+                <ClickSpark>
                   <button
                     onClick={downloadAll}
                     disabled={loadingAll || activeCount > 0}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-accent px-5 py-3 text-sm font-bold text-accent-fg shadow-lg shadow-accent/20 transition enabled:hover:brightness-110 disabled:opacity-60 active:scale-95 sm:w-auto"
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-4 py-2.5 text-xs font-bold text-accent-fg shadow-lg shadow-accent/20 transition enabled:hover:brightness-110 disabled:opacity-60 active:scale-95 sm:px-5 sm:py-3 sm:text-sm"
                   >
                     {loadingAll ? (
                       <>
@@ -1061,7 +1075,7 @@ export default function ArtistView({
                   onClick={downloadZip}
                   disabled={zipping}
                   title={t.zipTitle}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-medium text-fg backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 disabled:opacity-45"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-fg backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 disabled:opacity-45 sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm"
                 >
                   {zipping ? <Spinner className="size-4" /> : <ZipIcon className="size-4" />}
                   <span>{t.zip(readyJobs.length)}</span>
@@ -1073,7 +1087,7 @@ export default function ArtistView({
                 onClick={copyArtistLink}
                 title={t.copyLink}
                 aria-label={t.copyLink}
-                className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95"
+                className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95 sm:size-11"
               >
                 <LinkIcon className="size-4" />
               </button>
@@ -1083,7 +1097,7 @@ export default function ArtistView({
                 onClick={() => setShowAboutModal(true)}
                 title={t.aboutArtist}
                 aria-label={t.aboutArtist}
-                className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95"
+                className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95 sm:size-11"
               >
                 <InfoIcon className="size-4" />
               </button>
@@ -1096,7 +1110,7 @@ export default function ArtistView({
                   rel="noreferrer"
                   title={t.openSource}
                   aria-label={t.openSource}
-                  className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95"
+                  className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95 sm:size-11"
                 >
                   <SourceLogo source={artist.source} className="size-4" />
                 </a>
@@ -1108,13 +1122,13 @@ export default function ArtistView({
 
       {/* ─── نوار چسبان: نمایش کنترل‌ها و مینی‌پلیر هنگام اسکرول ─── */}
       {isScrolledPast && (
-        <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-4 flex items-center justify-between gap-3 rounded-2xl border-b border-line-soft px-3 py-2.5 shadow-lg sm:px-4">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-4 flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 shadow-lg sm:gap-3 sm:px-4 sm:py-2.5">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
             <Artwork
               src={artist.artworkUrl}
               alt=""
               seed={artist.id}
-              className="size-9 shrink-0 shadow-sm"
+              className="size-8 sm:size-9 shrink-0 shadow-sm"
               rounded="rounded-full"
             />
             <div className="min-w-0">
@@ -1122,7 +1136,7 @@ export default function ArtistView({
                 <p className="bidi truncate text-xs font-bold text-fg sm:text-sm">{artist.name}</p>
                 {isVerified && <VerifiedBadgeIcon className="size-3.5 shrink-0 text-accent" />}
               </div>
-              <p className="bidi truncate text-[11px] text-muted">
+              <p className="bidi truncate text-[10px] sm:text-[11px] text-muted">
                 {artist.albums.length
                   ? t.albumCount(artist.albums.length)
                   : isUser && artist.playlists.length
@@ -1149,14 +1163,14 @@ export default function ArtistView({
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2">
             {!isUser && <FollowButton artist={artist} />}
           </div>
         </div>
       )}
 
       {/* ─── فیلد جستجوی سریع در آثار هنرمند (فاز ۵) ─── */}
-      <div className="mb-6 px-1">
+      <div className="mb-5 sm:mb-6 px-1">
         <div className="relative">
           <SearchIcon className="pointer-events-none absolute start-3.5 top-1/2 size-4 -translate-y-1/2 text-muted" />
           <input
@@ -1167,7 +1181,7 @@ export default function ArtistView({
               if (e.key === 'Escape') setSearchQuery('')
             }}
             placeholder={t.searchArtistWorks(artist.name)}
-            className="w-full rounded-2xl border border-line bg-panel/60 py-2.5 pe-9 ps-10 text-xs text-fg placeholder:text-muted transition focus:border-accent focus:bg-panel focus:outline-none"
+            className="w-full rounded-xl sm:rounded-2xl border border-line bg-panel/60 py-2 sm:py-2.5 pe-9 ps-10 text-xs text-fg placeholder:text-muted transition focus:border-accent focus:bg-panel focus:outline-none"
           />
           {searchQuery && (
             <button
@@ -1283,63 +1297,112 @@ export default function ArtistView({
 
         {/* ─── فاز ۳: کارت ویژه «جدیدترین انتشار» (Latest Release Spotlight) ─── */}
         {latestRelease && !cleanQ && (
-          <div className="relative overflow-hidden rounded-2xl border border-line-soft bg-panel/40 p-4 transition hover:border-muted-2/60 sm:p-5">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
-              <button
-                type="button"
-                onClick={() => {
-                  if (latestRelease.kind === 'album') {
-                    onOpenAlbum(latestRelease.album)
-                  } else {
-                    handleTopTrackToggle(latestRelease.track)
-                  }
-                }}
-                aria-label={
-                  latestRelease.kind === 'album'
-                    ? t.viewRelease
-                    : isLatestTrackPlaying
-                      ? t.pause
-                      : t.playTrack(latestRelease.track.title)
-                }
-                className="group/spotlight relative size-24 shrink-0 overflow-hidden rounded-xl border border-white/10 shadow-lg shadow-black/40 text-start transition hover:scale-[1.02] sm:size-28"
-              >
-                <Artwork
-                  src={
+          <div className="relative overflow-hidden rounded-2xl border border-line-soft bg-panel/40 p-3.5 transition hover:border-muted-2/60 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+              <div className="flex items-center gap-3 sm:block">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (latestRelease.kind === 'album') {
+                      onOpenAlbum(latestRelease.album)
+                    } else {
+                      handleTopTrackToggle(latestRelease.track)
+                    }
+                  }}
+                  aria-label={
                     latestRelease.kind === 'album'
-                      ? latestRelease.album.artworkUrl
-                      : latestRelease.track.artworkUrl
+                      ? t.viewRelease
+                      : isLatestTrackPlaying
+                        ? t.pause
+                        : t.playTrack(latestRelease.track.title)
                   }
-                  alt={
-                    latestRelease.kind === 'album'
-                      ? latestRelease.album.title
-                      : latestRelease.track.title
-                  }
-                  seed={
-                    latestRelease.kind === 'album'
-                      ? latestRelease.album.id
-                      : latestRelease.track.id
-                  }
-                  className="size-full object-cover"
-                />
-                <span
-                  className={`absolute inset-0 grid place-items-center bg-black/45 transition-opacity ${
-                    isLatestTrackPlaying
-                      ? 'opacity-100'
-                      : 'opacity-0 group-hover/spotlight:opacity-100'
-                  }`}
+                  className="group/spotlight relative size-20 shrink-0 overflow-hidden rounded-xl border border-white/10 shadow-lg shadow-black/40 text-start transition hover:scale-[1.02] sm:size-28"
                 >
-                  <span className="grid size-9 place-items-center rounded-full bg-accent text-accent-fg shadow-lg">
-                    {latestRelease.kind === 'album' ? (
-                      <ArrowIcon className="size-4 -scale-x-100 rtl:scale-x-100" />
-                    ) : isLatestTrackPlaying ? (
-                      <PauseIcon className="size-4" />
-                    ) : (
-                      <PlayIcon className="size-4 ms-0.5" />
-                    )}
+                  <Artwork
+                    src={
+                      latestRelease.kind === 'album'
+                        ? latestRelease.album.artworkUrl
+                        : latestRelease.track.artworkUrl
+                    }
+                    alt={
+                      latestRelease.kind === 'album'
+                        ? latestRelease.album.title
+                        : latestRelease.track.title
+                    }
+                    seed={
+                      latestRelease.kind === 'album'
+                        ? latestRelease.album.id
+                        : latestRelease.track.id
+                    }
+                    className="size-full object-cover"
+                  />
+                  <span
+                    className={`absolute inset-0 grid place-items-center bg-black/45 transition-opacity ${
+                      isLatestTrackPlaying
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover/spotlight:opacity-100'
+                    }`}
+                  >
+                    <span className="grid size-8 sm:size-9 place-items-center rounded-full bg-accent text-accent-fg shadow-lg">
+                      {latestRelease.kind === 'album' ? (
+                        <ArrowIcon className="size-3.5 sm:size-4 -scale-x-100 rtl:scale-x-100" />
+                      ) : isLatestTrackPlaying ? (
+                        <PauseIcon className="size-3.5 sm:size-4" />
+                      ) : (
+                        <PlayIcon className="size-3.5 sm:size-4 ms-0.5" />
+                      )}
+                    </span>
                   </span>
-                </span>
-              </button>
-              <div className="min-w-0 flex-1">
+                </button>
+
+                <div className="min-w-0 flex-1 sm:hidden">
+                  <div className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2 py-0.5 text-[9px] font-bold text-accent">
+                      <SparkleIcon className="size-2.5" />
+                      <span>{t.latestRelease}</span>
+                    </span>
+                    <span className="text-[11px] text-muted">
+                      {latestRelease.kind === 'album'
+                        ? releaseLabel(latestRelease.album, t)
+                        : t.typeSong}
+                    </span>
+                    {(latestRelease.kind === 'album'
+                      ? latestRelease.album.year
+                      : latestRelease.track.year) ? (
+                      <span className="text-[11px] text-muted">
+                        ·{' '}
+                        {digits(
+                          latestRelease.kind === 'album'
+                            ? latestRelease.album.year
+                            : (latestRelease.track.year ?? ''),
+                          lang,
+                        )}
+                      </span>
+                    ) : null}
+                  </div>
+                  <h3
+                    onClick={() => {
+                      if (latestRelease.kind === 'album') {
+                        onOpenAlbum(latestRelease.album)
+                      } else {
+                        handleTopTrackToggle(latestRelease.track)
+                      }
+                    }}
+                    className="bidi mt-1 cursor-pointer truncate text-sm font-bold text-fg transition-colors hover:text-accent"
+                  >
+                    {latestRelease.kind === 'album'
+                      ? latestRelease.album.title
+                      : latestRelease.track.title}
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-muted truncate">
+                    {latestRelease.kind === 'album'
+                      ? t.trackCount(latestRelease.album.trackCount)
+                      : latestRelease.track.artist}
+                  </p>
+                </div>
+              </div>
+
+              <div className="hidden min-w-0 flex-1 sm:block">
                 <div className="flex items-center gap-2">
                   <span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2.5 py-0.5 text-[10px] font-bold text-accent">
                     <SparkleIcon className="size-3" />
@@ -1384,6 +1447,7 @@ export default function ArtistView({
                     : latestRelease.track.artist}
                 </p>
               </div>
+
               <button
                 onClick={() => {
                   if (latestRelease.kind === 'album') {
@@ -1392,7 +1456,7 @@ export default function ArtistView({
                     handleTopTrackToggle(latestRelease.track)
                   }
                 }}
-                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-line bg-panel px-4 py-2.5 text-xs font-semibold text-fg transition hover:border-muted-2 hover:bg-panel-2 active:scale-95"
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-full border border-line bg-panel px-4 py-2 text-xs font-semibold text-fg transition hover:border-muted-2 hover:bg-panel-2 active:scale-95 sm:py-2.5"
               >
                 <span>
                   {latestRelease.kind === 'album'
@@ -1488,12 +1552,12 @@ export default function ArtistView({
               </div>
 
               {/* نوار ابزار فیلتر و تغییر نما */}
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
                 {/* چیپ‌های فیلتر: همه / آلبوم‌ها / سینگل‌ها */}
                 <div className="flex items-center rounded-lg border border-line bg-panel/60 p-0.5 text-xs">
                   <button
                     onClick={() => setDiscographyFilter('all')}
-                    className={`rounded-md px-2.5 py-1 transition ${
+                    className={`rounded-md px-2 py-1 sm:px-2.5 transition ${
                       discographyFilter === 'all'
                         ? 'bg-accent text-accent-fg font-bold'
                         : 'text-muted hover:text-fg'
@@ -1503,7 +1567,7 @@ export default function ArtistView({
                   </button>
                   <button
                     onClick={() => setDiscographyFilter('albums')}
-                    className={`rounded-md px-2.5 py-1 transition ${
+                    className={`rounded-md px-2 py-1 sm:px-2.5 transition ${
                       discographyFilter === 'albums'
                         ? 'bg-accent text-accent-fg font-bold'
                         : 'text-muted hover:text-fg'
@@ -1513,7 +1577,7 @@ export default function ArtistView({
                   </button>
                   <button
                     onClick={() => setDiscographyFilter('singles')}
-                    className={`rounded-md px-2.5 py-1 transition ${
+                    className={`rounded-md px-2 py-1 sm:px-2.5 transition ${
                       discographyFilter === 'singles'
                         ? 'bg-accent text-accent-fg font-bold'
                         : 'text-muted hover:text-fg'
@@ -1523,48 +1587,50 @@ export default function ArtistView({
                   </button>
                 </div>
 
-                {/* مرتب‌سازی سال: جدیدترین / قدیمی‌ترین با انیمیشن چرخش فلش (BitChord Arrow Flip) */}
-                <button
-                  onClick={() =>
-                    setDiscographySort((s) => (s === 'newest' ? 'oldest' : 'newest'))
-                  }
-                  title={discographySort === 'newest' ? t.sortNewest : t.sortOldest}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel/60 px-2.5 py-1.5 text-xs text-muted hover:border-muted-2 hover:text-fg transition cursor-pointer"
-                >
-                  <ArrowUpIcon
-                    className={`size-3.5 transition-transform duration-200 ease-out ${
-                      discographySort === 'oldest' ? 'rotate-180' : 'rotate-0'
-                    }`}
-                  />
-                  <span>{discographySort === 'newest' ? t.sortNewest : t.sortOldest}</span>
-                </button>
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  {/* مرتب‌سازی سال: جدیدترین / قدیمی‌ترین با انیمیشن چرخش فلش (BitChord Arrow Flip) */}
+                  <button
+                    onClick={() =>
+                      setDiscographySort((s) => (s === 'newest' ? 'oldest' : 'newest'))
+                    }
+                    title={discographySort === 'newest' ? t.sortNewest : t.sortOldest}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel/60 px-2.5 py-1.5 text-xs text-muted hover:border-muted-2 hover:text-fg transition cursor-pointer"
+                  >
+                    <ArrowUpIcon
+                      className={`size-3.5 transition-transform duration-200 ease-out ${
+                        discographySort === 'oldest' ? 'rotate-180' : 'rotate-0'
+                      }`}
+                    />
+                    <span>{discographySort === 'newest' ? t.sortNewest : t.sortOldest}</span>
+                  </button>
 
-                {/* سوییچ گرید / لیست */}
-                <div className="flex items-center rounded-lg border border-line bg-panel/60 p-0.5">
-                  <button
-                    onClick={() => setDiscographyView('grid')}
-                    title={t.viewGrid}
-                    aria-label={t.viewGrid}
-                    className={`grid size-7 place-items-center rounded-md transition ${
-                      discographyView === 'grid'
-                        ? 'bg-white/10 text-fg'
-                        : 'text-muted hover:text-fg'
-                    }`}
-                  >
-                    <GridIcon className="size-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setDiscographyView('list')}
-                    title={t.viewList}
-                    aria-label={t.viewList}
-                    className={`grid size-7 place-items-center rounded-md transition ${
-                      discographyView === 'list'
-                        ? 'bg-white/10 text-fg'
-                        : 'text-muted hover:text-fg'
-                    }`}
-                  >
-                    <ListIcon className="size-3.5" />
-                  </button>
+                  {/* سوییچ گرید / لیست */}
+                  <div className="flex items-center rounded-lg border border-line bg-panel/60 p-0.5">
+                    <button
+                      onClick={() => setDiscographyView('grid')}
+                      title={t.viewGrid}
+                      aria-label={t.viewGrid}
+                      className={`grid size-7 place-items-center rounded-md transition ${
+                        discographyView === 'grid'
+                          ? 'bg-white/10 text-fg'
+                          : 'text-muted hover:text-fg'
+                      }`}
+                    >
+                      <GridIcon className="size-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setDiscographyView('list')}
+                      title={t.viewList}
+                      aria-label={t.viewList}
+                      className={`grid size-7 place-items-center rounded-md transition ${
+                        discographyView === 'list'
+                          ? 'bg-white/10 text-fg'
+                          : 'text-muted hover:text-fg'
+                      }`}
+                    >
+                      <ListIcon className="size-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

@@ -74,6 +74,7 @@ class TestTelegramFilesCache:
             artist="Singer",
             duration_sec=210,
             quality="mp3 320",
+            artwork_url="https://example.com/cover.jpg",
         )
         cached = store.get_telegram_file("track-1:320")
         assert cached is not None
@@ -81,6 +82,7 @@ class TestTelegramFilesCache:
         assert cached["title"] == "Song"
         assert cached["duration_sec"] == 210
         assert cached["quality"] == "mp3 320"
+        assert cached["artwork_url"] == "https://example.com/cover.jpg"
 
     def test_get_missing_key_returns_none(self):
         assert store.get_telegram_file("nonexistent") is None
@@ -90,6 +92,21 @@ class TestTelegramFilesCache:
         assert store.get_telegram_file("track-1:320") is not None
         store.delete_telegram_file("track-1:320")
         assert store.get_telegram_file("track-1:320") is None
+
+    def test_delete_telegram_files_for_track(self):
+        store.save_telegram_file("track-1", file_id="f1")
+        store.save_telegram_file("track-1:320", file_id="f2")
+        store.save_telegram_file("track-1:default", file_id="f3")
+        store.save_telegram_file("https://soundcloud.com/sc-1:320", file_id="f4")
+        store.save_telegram_file("track-2:320", file_id="f5")
+
+        store.delete_telegram_files_for_track("track-1", "https://soundcloud.com/sc-1")
+
+        assert store.get_telegram_file("track-1") is None
+        assert store.get_telegram_file("track-1:320") is None
+        assert store.get_telegram_file("track-1:default") is None
+        assert store.get_telegram_file("https://soundcloud.com/sc-1:320") is None
+        assert store.get_telegram_file("track-2:320") is not None
 
     def test_empty_or_invalid_inputs_handled_safely(self):
         store.save_telegram_file("", "")

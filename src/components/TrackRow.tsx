@@ -1,5 +1,6 @@
 import { api } from '../lib/api'
 import {
+  cleanArtist,
   duration as fmtDuration,
   percent as fmtPercent,
   digits,
@@ -189,7 +190,7 @@ export default function TrackRow({
           </button>
           {showSource && <SourceBadge source={track.source} />}
         </div>
-        <p className="bidi truncate text-xs text-muted">{track.artist}</p>
+        <p className="bidi truncate text-xs text-muted">{cleanArtist(track.artist)}</p>
       </div>
 
       <div className="relative flex shrink-0 items-center gap-0.5 sm:gap-1">

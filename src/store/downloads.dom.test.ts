@@ -79,3 +79,23 @@ describe('انتخابِ کارِ یک ردیف', () => {
     expect(selectTrackJob([], 't1', '320')).toBeUndefined()
   })
 })
+
+describe('enqueueMany و صف کلاینت', () => {
+  it('در ثبت دسته‌ای ترک‌ها، همه در استور قرار می‌گیرند', async () => {
+    const { useDownloads } = await import('./downloads')
+    useDownloads.setState({ jobs: [], batches: [] })
+    const tracks = Array.from({ length: 6 }, (_, i) => track(`track-${i + 1}`))
+    useDownloads.getState().enqueueMany(tracks, '320', { title: 'Batch 1' })
+
+    const jobs = useDownloads.getState().jobs
+    expect(jobs.length).toBe(6)
+    expect(jobs.map((j) => j.track.id)).toEqual([
+      'track-1',
+      'track-2',
+      'track-3',
+      'track-4',
+      'track-5',
+      'track-6',
+    ])
+  })
+})

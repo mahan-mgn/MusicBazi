@@ -527,6 +527,16 @@ async def artist(ref: str, request: Request) -> ArtistDetail:
     return artcache.localize(detail)
 
 
+@app.get("/api/artist/discography", response_model=list[Track])
+async def artist_discography(ref: str, request: Request) -> list[Track]:
+    """تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها و تک‌آهنگ‌ها) — برای دانلود یا پخش کامل."""
+    try:
+        tracks = await catalog.resolve_artist_discography(request.app.state.http, ref)
+    except Exception as exc:
+        raise HTTPException(502, f"دریافت دیسکوگرافی ناموفق بود: {exc}") from exc
+    return [artcache.localize(t) for t in tracks]
+
+
 @app.get("/api/songinfo", response_model=SongInfo)
 async def song_info(title: str, artist: str) -> SongInfo:
     """

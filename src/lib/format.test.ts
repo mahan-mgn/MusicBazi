@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   bytes,
+  cleanArtist,
   digits,
   duration,
   fa,
@@ -190,5 +191,24 @@ describe('shortDate', () => {
 
   it('does not throw on nonsense input', () => {
     expect(() => shortDate(Number.NaN, 'en')).not.toThrow()
+  })
+})
+
+describe('cleanArtist', () => {
+  it('normalizes irregular spaces around commas', () => {
+    expect(cleanArtist('Gucciflame ,  Ashkan Kagan')).toBe('Gucciflame, Ashkan Kagan')
+    expect(cleanArtist('Gucciflame,Ashkan Kagan')).toBe('Gucciflame, Ashkan Kagan')
+    expect(cleanArtist('Gucciflame  ,   Ashkan Kagan')).toBe('Gucciflame, Ashkan Kagan')
+    expect(cleanArtist('Arown， Kagan')).toBe('Arown, Kagan')
+  })
+
+  it('handles persian commas and trims edges', () => {
+    expect(cleanArtist('  آرتیست یک ،  آرتیست دو  ')).toBe('آرتیست یک، آرتیست دو')
+  })
+
+  it('handles empty or nullish input safely', () => {
+    expect(cleanArtist('')).toBe('')
+    expect(cleanArtist(undefined)).toBe('')
+    expect(cleanArtist(null)).toBe('')
   })
 })

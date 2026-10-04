@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS telegram_files (
     duration_sec        INTEGER,
     quality             TEXT,
     job_id              TEXT,
+    artwork_url         TEXT,
     created_at          REAL NOT NULL
 );
 
@@ -85,6 +86,11 @@ def _db() -> sqlite3.Connection:
         _conn.executescript(SCHEMA)
         try:
             _conn.execute("ALTER TABLE telegram_files ADD COLUMN job_id TEXT")
+            _conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        try:
+            _conn.execute("ALTER TABLE telegram_files ADD COLUMN artwork_url TEXT")
             _conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -152,6 +158,7 @@ def save_telegram_file(
     duration_sec: int | None = None,
     quality: str | None = None,
     job_id: str | None = None,
+    artwork_url: str | None = None,
 ) -> None:
     """ذخیره شناسه فایل ارسال‌شده در تلگرام برای تحویل فوری دفعات بعدی."""
     if not cache_key or not file_id:
@@ -160,8 +167,8 @@ def save_telegram_file(
         conn = _db()
         conn.execute(
             """INSERT OR REPLACE INTO telegram_files
-               (cache_key, file_id, file_unique_id, title, artist, duration_sec, quality, job_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (cache_key, file_id, file_unique_id, title, artist, duration_sec, quality, job_id, artwork_url, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 cache_key,
                 file_id,
@@ -171,6 +178,7 @@ def save_telegram_file(
                 duration_sec,
                 quality,
                 job_id,
+                artwork_url,
                 time.time(),
             ),
         )
@@ -183,7 +191,7 @@ def get_telegram_file(cache_key: str) -> dict | None:
         return None
     with _lock:
         row = _db().execute(
-            "SELECT file_id, file_unique_id, title, artist, duration_sec, quality, job_id FROM telegram_files WHERE cache_key = ?",
+            "SELECT file_id, file_unique_id, title, artist, duration_sec, quality, job_id, artwork_url FROM telegram_files WHERE cache_key = ?",
             (cache_key,),
         ).fetchone()
         if row is None:
@@ -198,6 +206,24 @@ def delete_telegram_file(cache_key: str) -> None:
     with _lock:
         conn = _db()
         conn.execute("DELETE FROM telegram_files WHERE cache_key = ?", (cache_key,))
+        conn.commit()
+
+
+def delete_telegram_files_for_track(track_id: str, source_url: str | None = None) -> None:
+    """حذف تمامی ردیف‌های کش یک ترک در صورت تغییر متادیتا یا نامعتبر شدن."""
+    if not track_id:
+        return
+    with _lock:
+        conn = _db()
+        conn.execute(
+            "DELETE FROM telegram_files WHERE cache_key = ? OR cache_key LIKE ?",
+            (track_id, f"{track_id}:%"),
+        )
+        if source_url:
+            conn.execute(
+                "DELETE FROM telegram_files WHERE cache_key = ? OR cache_key LIKE ?",
+                (source_url, f"{source_url}:%"),
+            )
         conn.commit()
 
 

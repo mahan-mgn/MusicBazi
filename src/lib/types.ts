@@ -467,6 +467,8 @@ export interface MusicApi {
   getAlbum(idOrUrl: string, signal?: AbortSignal): Promise<AlbumDetail>
   /** ورودی id داخلی هنرمند یا لینک اپل‌موزیک/دیزر */
   getArtist(idOrUrl: string, signal?: AbortSignal): Promise<ArtistDetail>
+  /** تمام ترک‌های دیسکوگرافی هنرمند بدون سقف برای دانلود کامل یا پخش */
+  getArtistDiscography(idOrUrl: string, signal?: AbortSignal): Promise<Track[]>
   /**
    * کتابخانه‌ی محلی — فایل‌هایی که قبلاً دانلود شده‌اند و هنوز روی دیسک سرورند.
    * null یعنی این لایه کتابخانه ندارد (مود دمو).

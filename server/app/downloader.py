@@ -472,24 +472,42 @@ def _retag_mp3(path: Path, track: Track) -> None:
     if audio.tags is None:
         audio.add_tags()
     assert audio.tags is not None
+    if track.title:
+        audio.tags.delall("TIT2")
+        audio.tags.add(TIT2(encoding=3, text=track.title))
+    if track.artist:
+        audio.tags.delall("TPE1")
+        audio.tags.add(TPE1(encoding=3, text=track.artist))
     _id3_album(audio.tags, track)
     audio.save(v2_version=3)
 
 
 def _retag_mp4(path: Path, track: Track) -> None:
     audio = MP4(path)
+    if track.title:
+        audio["\xa9nam"] = [track.title]
+    if track.artist:
+        audio["\xa9ART"] = [track.artist]
     _mp4_album(audio, track)
     audio.save()
 
 
 def _retag_flac(path: Path, track: Track) -> None:
     audio = FLAC(path)
+    if track.title:
+        audio["title"] = [track.title]
+    if track.artist:
+        audio["artist"] = [track.artist]
     _vorbis_album(audio, track)
     audio.save()
 
 
 def _retag_opus(path: Path, track: Track) -> None:
     audio = OggOpus(path)
+    if track.title:
+        audio["title"] = [track.title]
+    if track.artist:
+        audio["artist"] = [track.artist]
     _vorbis_album(audio, track)
     audio.save()
 

@@ -1959,6 +1959,29 @@ async def _download_and_send(
         if bare and bare.get("quality") == target_quality:
             cached = bare
 
+    if cached:
+        cached_title = (cached.get("title") or "").strip()
+        cached_artist = (cached.get("artist") or "").strip()
+        cached_artwork = (cached.get("artwork_url") or "").strip()
+        current_title = (track.title or "").strip()
+        current_artist = (track.artist or "").strip()
+        current_artwork = (track.artworkUrl or "").strip()
+
+        if (
+            (cached_title and cached_title != current_title)
+            or (cached_artist and cached_artist != current_artist)
+            or (cached_artwork and cached_artwork != current_artwork)
+        ):
+            log.info(
+                "متادیتای ترک تغییر کرده است (قدیم: «%s - %s»، جدید: «%s - %s») — حذف کش تلگرام و دریافت مجدد",
+                cached_artist,
+                cached_title,
+                current_artist,
+                current_title,
+            )
+            store.delete_telegram_files_for_track(track.id, track.sourceUrl)
+            cached = None
+
     if cached and cached.get("file_id"):
         try:
             status = await _telegram_retry(
@@ -2011,10 +2034,7 @@ async def _download_and_send(
             return cached_job_id
         except Exception as exc:
             log.warning("ارسال با file_id کش تلگرام شکست خورد (%s) — دانلود معمول انجام می‌شود", exc)
-            store.delete_telegram_file(f"{track.id}:{target_quality}")
-            if track.sourceUrl:
-                store.delete_telegram_file(f"{track.sourceUrl}:{target_quality}")
-            store.delete_telegram_file(track.id)
+            store.delete_telegram_files_for_track(track.id, track.sourceUrl)
             if "sink" in locals():
                 await sink.delete()
 
@@ -2144,6 +2164,7 @@ async def _upload_audio(
                             duration_sec=duration,
                             quality=format_label,
                             job_id=job_id,
+                            artwork_url=track.artworkUrl,
                         )
                     if track.sourceUrl:
                         store.save_telegram_file(
@@ -2155,6 +2176,7 @@ async def _upload_audio(
                             duration_sec=duration,
                             quality=format_label,
                             job_id=job_id,
+                            artwork_url=track.artworkUrl,
                         )
             return msg
         except (BadRequest, Forbidden):
@@ -3335,7 +3357,7 @@ def _api_from_app(application: Application) -> ApiClient:
     return application.bot_data["api"]
 
 
-def main() -> None:
+def _run_bot() -> None:
     if not TELEGRAM_BOT_TOKEN:
         log.info("MUSICBAZI_TELEGRAM_BOT_TOKEN ست نشده — بات غیرفعال می‌ماند.")
         sys.exit(0)
@@ -3435,6 +3457,20 @@ def main() -> None:
 
     log.info("بات تلگرام بالا آمد.")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+def main() -> None:
+    if "--reload" in sys.argv:
+        try:
+            import watchfiles
+
+            server_dir = Path(__file__).resolve().parent.parent
+            log.info("اجرای بات با قابلیت بارگذاری خودکار روی %s", server_dir)
+            watchfiles.run_process(server_dir, target="app.bot.run._run_bot")
+            return
+        except ImportError:
+            pass
+    _run_bot()
 
 
 if __name__ == "__main__":

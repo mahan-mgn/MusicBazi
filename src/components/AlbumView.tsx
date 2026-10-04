@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { digits, safeFilename } from '../lib/format'
+import { cleanArtist, digits, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { dominantColor } from '../lib/artColor'
 import { findBestJob, toPlayItem } from '../lib/stream'
@@ -350,7 +350,7 @@ export default function AlbumView({
       {/* ─── هیرو: بک‌دراپ محیطی تمام‌عرض با فِید نرم به پس‌زمینه ─── */}
       <div
         ref={heroRef}
-        className="relative -mx-2 -mt-2 mb-6 overflow-hidden rounded-3xl p-5 sm:-mx-4 sm:p-7 md:p-8"
+        className="relative -mx-2 -mt-2 mb-6 overflow-hidden rounded-3xl p-4 sm:-mx-4 sm:p-7 md:p-8"
         style={{
           background: `
             radial-gradient(ellipse 90% 70% at 50% -10%, rgb(${anyTint} / 0.42), transparent 75%),
@@ -373,11 +373,13 @@ export default function AlbumView({
         <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end sm:gap-8">
           {/* بخش کاور با دیسک وینیل */}
           <div className="group/cover relative shrink-0 self-center sm:self-auto">
-            <VinylDisc
-              artworkUrl={album.artworkUrl}
-              seed={album.id}
-              isPlaying={isThisAlbumPlaying}
-            />
+            <div className="hidden sm:block">
+              <VinylDisc
+                artworkUrl={album.artworkUrl}
+                seed={album.id}
+                isPlaying={isThisAlbumPlaying}
+              />
+            </div>
 
             {/* هاله‌ی درخشان رنگ کاور */}
             <div
@@ -392,7 +394,7 @@ export default function AlbumView({
                 src={album.artworkUrl}
                 alt={album.title}
                 seed={album.id}
-                className="size-44 object-cover sm:size-48 md:size-56"
+                className="size-40 object-cover sm:size-48 md:size-56"
                 rounded="rounded-2xl"
               />
               {/* برق شیشه‌ای روی کاور */}
@@ -437,7 +439,7 @@ export default function AlbumView({
             </h1>
 
             {/* خط جزئیات: هنرمند، تعداد ترک، مدت، سال */}
-            <div className="relative z-10 mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-muted drop-shadow-[0_1px_6px_rgb(0_0_0/0.6)] sm:justify-start">
+            <div className="relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:text-sm text-muted drop-shadow-[0_1px_6px_rgb(0_0_0/0.6)] sm:justify-start">
               {onOpenArtist && album.artistId ? (
                 <button
                   onClick={() => onOpenArtist(album.artistId!)}
@@ -452,12 +454,12 @@ export default function AlbumView({
                     className="size-5 ring-1 ring-white/20"
                   />
                   <bdi className="underline-offset-2 group-hover/artist:underline">
-                    {album.artist}
+                    {cleanArtist(album.artist)}
                   </bdi>
                 </button>
               ) : (
                 <span className="inline-flex items-center gap-1.5 font-semibold text-fg">
-                  <bdi>{album.artist}</bdi>
+                  <bdi>{cleanArtist(album.artist)}</bdi>
                 </span>
               )}
 
@@ -474,16 +476,20 @@ export default function AlbumView({
             </div>
 
             {/* اکشن‌بار منسجم */}
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-3 sm:justify-start">
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-2 sm:mt-6 sm:gap-3 sm:justify-start">
               {album.tracks.length > 0 && (
                 <ClickSpark>
                   <button
                     onClick={togglePlayAll}
                     aria-label={isThisAlbumPlaying ? t.pause : t.playAll}
                     title={isThisAlbumPlaying ? t.pause : t.playAll}
-                    className="grid size-14 place-items-center rounded-full bg-accent text-accent-fg shadow-xl shadow-accent/25 transition enabled:hover:scale-105 enabled:active:scale-95"
+                    className="grid size-12 place-items-center rounded-full bg-accent text-accent-fg shadow-xl shadow-accent/25 transition enabled:hover:scale-105 enabled:active:scale-95 sm:size-14"
                   >
-                    {isThisAlbumPlaying ? <PauseIcon className="size-6" /> : <PlayIcon className="size-6 ms-0.5" />}
+                    {isThisAlbumPlaying ? (
+                      <PauseIcon className="size-5 sm:size-6" />
+                    ) : (
+                      <PlayIcon className="size-5 sm:size-6 ms-0.5" />
+                    )}
                   </button>
                 </ClickSpark>
               )}
@@ -494,15 +500,15 @@ export default function AlbumView({
                   onClick={handleShufflePlay}
                   aria-label={t.shufflePlay}
                   title={t.shufflePlay}
-                  className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 text-fg backdrop-blur-md transition hover:border-accent/40 hover:bg-white/10 hover:text-accent active:scale-95"
+                  className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-fg backdrop-blur-md transition hover:border-accent/40 hover:bg-white/10 hover:text-accent active:scale-95 sm:size-11"
                 >
-                  <ShuffleIcon className="size-5" />
+                  <ShuffleIcon className="size-4.5 sm:size-5" />
                 </button>
               )}
 
               {/* دکمه دانلود همه */}
               {(activeCount > 0 || readyJobs.length < album.tracks.length) && (
-                <ClickSpark className="flex-1 sm:flex-none">
+                <ClickSpark>
                   <button
                     onClick={() =>
                       enqueueMany(targets, quality, {
@@ -511,7 +517,7 @@ export default function AlbumView({
                       })
                     }
                     disabled={targets.length === 0 || activeCount > 0}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-accent px-5 py-3 text-sm font-bold text-accent-fg shadow-lg shadow-accent/20 transition enabled:hover:brightness-110 disabled:opacity-60 active:scale-95 sm:w-auto"
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-4 py-2.5 text-xs font-bold text-accent-fg shadow-lg shadow-accent/20 transition enabled:hover:brightness-110 disabled:opacity-60 active:scale-95 sm:px-5 sm:py-3 sm:text-sm"
                   >
                     {activeCount > 0 ? (
                       <>
@@ -531,7 +537,7 @@ export default function AlbumView({
               {/* تلگرام */}
               <SendToTelegram
                 target={{ kind: 'album', ref: album.sourceUrl || album.id, title: album.title }}
-                className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 backdrop-blur-md transition hover:border-white/30 hover:bg-white/10"
+                className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 sm:size-11"
               />
 
               {/* کپی لینک */}
@@ -540,7 +546,7 @@ export default function AlbumView({
                   onClick={copyAlbumLink}
                   title={t.copyLink}
                   aria-label={t.copyLink}
-                  className="grid size-11 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95"
+                  className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-muted backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 hover:text-fg active:scale-95 sm:size-11"
                 >
                   <LinkIcon className="size-4" />
                 </button>
@@ -552,7 +558,7 @@ export default function AlbumView({
                   onClick={downloadZip}
                   disabled={zipping}
                   title={t.zipTitle}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-medium text-fg backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 disabled:opacity-45"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-xs font-medium text-fg backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 disabled:opacity-45 sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm"
                 >
                   {zipping ? <Spinner className="size-4" /> : <ZipIcon className="size-4" />}
                   <span>{t.zip(readyJobs.length)}</span>
@@ -571,10 +577,10 @@ export default function AlbumView({
       )}
 
       {/* نوار چسبان: نمایش کنترل‌ها و مینی‌پلیر هنگام اسکرول */}
-      <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border-b border-line-soft px-3 py-2.5 sm:px-4">
+      <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-3 flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 sm:gap-3 sm:px-4 sm:py-2.5">
         {/* در حالت اسکرول: مینی پلیر آلبوم ظاهر می‌شود */}
         {isScrolledPast ? (
-          <div className="flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
             <Artwork
               src={album.artworkUrl}
               alt=""
@@ -596,7 +602,7 @@ export default function AlbumView({
           </div>
         ) : (
           /* در بالای صفحه: دکمه انتخاب چندتایی و راهنما */
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={() => {
                 if (!selectionMode) {
@@ -605,7 +611,7 @@ export default function AlbumView({
                   toggleAll()
                 }
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-fg transition hover:border-muted-2 hover:bg-panel-2"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line px-2.5 py-1 text-xs font-medium text-fg transition hover:border-muted-2 hover:bg-panel-2"
             >
               <span
                 className={`grid size-4 place-items-center rounded border transition ${
@@ -620,7 +626,7 @@ export default function AlbumView({
             </button>
 
             {selectionMode && (
-              <span className="text-[11px] text-muted-2">
+              <span className="truncate text-[11px] text-muted-2">
                 {selected.size ? t.downloadN(selected.size) : t.tickHint(album.trackCount)}
               </span>
             )}
@@ -628,7 +634,7 @@ export default function AlbumView({
         )}
 
         {/* سمت دیگر نوار چسبان: اکشن‌های انتخابی */}
-        <div className="ms-auto flex items-center gap-2">
+        <div className="ms-auto flex shrink-0 items-center gap-2">
           {selectionMode && selected.size > 0 && (
             <button
               onClick={() =>
@@ -703,7 +709,7 @@ export default function AlbumView({
 
       {/* شناسنامه و کپی‌رایت انتهای آلبوم */}
       <footer className="mt-8 border-t border-line-soft/60 px-3 pt-6 text-xs text-muted-2">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-col items-center gap-1 text-center sm:flex-row sm:items-center sm:justify-between sm:text-start">
           <p className="bidi font-medium">
             {album.year ? `℗ ${digits(album.year, lang)} ${album.artist}` : `℗ ${album.artist}`}
           </p>

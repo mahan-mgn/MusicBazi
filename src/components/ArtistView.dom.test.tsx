@@ -1295,4 +1295,44 @@ describe('ArtistView', () => {
     expect(queue.some((i) => i.track.title === 'Liked Track 1')).toBe(true)
     expect(queue.some((i) => i.track.title === 'Reposted Track 1')).toBe(true)
   })
+
+  it('downloads all artist tracks using getArtistDiscography when available', async () => {
+    const discoTracks = [
+      createTrack('d-1', 'Track D1'),
+      createTrack('d-2', 'Track D2'),
+      createTrack('d-3', 'Track D3'),
+    ]
+    const discoSpy = vi.spyOn(api, 'getArtistDiscography').mockResolvedValue(discoTracks)
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={mockArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const downloadAllBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('دانلود همه'),
+    )
+    expect(downloadAllBtn).toBeDefined()
+
+    await act(async () => {
+      downloadAllBtn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(discoSpy).toHaveBeenCalled()
+    expect(useDownloads.getState().jobs.some((j) => j.track.title === 'Track D1')).toBe(true)
+    expect(useDownloads.getState().jobs.some((j) => j.track.title === 'Track D2')).toBe(true)
+    expect(useDownloads.getState().jobs.some((j) => j.track.title === 'Track D3')).toBe(true)
+
+    discoSpy.mockRestore()
+  })
 })

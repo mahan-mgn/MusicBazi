@@ -105,14 +105,20 @@ async def _access_token(client: httpx.AsyncClient) -> str:
 
 
 async def _get(client: httpx.AsyncClient, path: str, **params: Any) -> dict[str, Any]:
-    token = await _access_token(client)
-    res = await client.get(
-        f"{SPOTIFY_API}{path}",
-        params=params,
-        headers={"authorization": f"Bearer {token}"},
-    )
-    res.raise_for_status()
-    return res.json()
+    for attempt in range(3):
+        token = await _access_token(client)
+        res = await client.get(
+            f"{SPOTIFY_API}{path}",
+            params=params,
+            headers={"authorization": f"Bearer {token}"},
+        )
+        if res.status_code == 429 and attempt < 2:
+            retry_after = int(res.headers.get("Retry-After") or "1")
+            await asyncio.sleep(min(retry_after, 5))
+            continue
+        res.raise_for_status()
+        return res.json()
+    return {}
 
 
 def _art(images: list[dict] | None) -> str | None:
@@ -538,6 +544,45 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         # خالی می‌ماند. تعداد آلبوم را همین‌جا داریم و مثل دیزر گویاتر است.
         base.subtitle = f"{len(discography)} آلبوم"
     return ArtistDetail(**base.model_dump(), topTracks=tracks, albums=discography)
+
+
+async def artist_discography(client: httpx.AsyncClient, artist_id: str) -> list[Track]:
+    """
+    تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها + تک‌آهنگ‌ها + برترین‌ها) با دریافت دسته‌ای ۲۰تایی.
+    """
+    detail = await artist(client, artist_id)
+    if detail is None:
+        return []
+
+    tracks: list[Track] = []
+    seen_ids: set[str] = set()
+
+    for t in detail.topTracks:
+        if t.id not in seen_ids:
+            seen_ids.add(t.id)
+            tracks.append(t)
+
+    raw_ids = [a.id.rsplit(":", 1)[-1] for a in detail.albums if a.id]
+
+    for i in range(0, len(raw_ids), 20):
+        chunk = raw_ids[i : i + 20]
+        try:
+            body = await _get(client, "/albums", ids=",".join(chunk))
+        except Exception:
+            continue
+        for alb_row in body.get("albums") or []:
+            if not alb_row:
+                continue
+            item_rows = (alb_row.get("tracks") or {}).get("items") or []
+            for item in item_rows:
+                t = _track(item, alb_row)
+                if t and t.id not in seen_ids:
+                    if detail.artworkUrl and not t.artistArtworkUrl:
+                        t.artistArtworkUrl = detail.artworkUrl
+                    seen_ids.add(t.id)
+                    tracks.append(t)
+
+    return tracks
 
 
 # ---------- صفحه‌ی کاربر ----------

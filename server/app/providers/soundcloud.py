@@ -38,6 +38,17 @@ _SCRIPT_SRC = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']')
 _CLIENT_ID = re.compile(r'client_id\s*:\s*["\']([0-9a-zA-Z]{32})["\']')
 # اندازه در نام فایلِ کاور است؛ large یعنی ۱۰۰ پیکسل و برای گرید کم است
 _ARTWORK_SIZE = re.compile(r"-[0-9a-z]+\.(jpg|png)$", re.I)
+_COMMA_SPACING = re.compile(r"\s*([,،])\s*")
+
+
+def clean_artist(name: str) -> str:
+    """فاصله‌های زائد دور کاما، کامای تمام‌عرض، و فاصله‌های پیاپی در نام هنرمند را تمیز می‌کند."""
+    # ponytail: فقط نرمال‌سازی کاما و فاصله‌ها؛ جداسازی کامل چندآرتیستی در صورت نیاز به ساختار آرایه‌ای اضافه شود.
+    if not name:
+        return ""
+    name = name.replace("，", ",")
+    cleaned = _COMMA_SPACING.sub(r"\1 ", name)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 # شناسه‌های عمومی شناخته‌شده برای مواقعی که اسکرپ مستقیم شکست می‌خورد
 _FALLBACK_CLIENT_IDS = [
@@ -215,8 +226,8 @@ def as_entry(row: dict[str, Any]) -> dict[str, Any]:
         "title": row.get("title") or "",
         # فقط ترکِ رسماً منتشرشده ناشر دارد؛ بقیه با جدا کردن «هنرمند - عنوان»
         # از خودِ تیتر حدس زده می‌شوند
-        "artist": publisher.get("artist") or "",
-        "uploader": user.get("username") or "",
+        "artist": clean_artist(publisher.get("artist") or ""),
+        "uploader": clean_artist(user.get("username") or ""),
         "uploader_id": str(user.get("id")) if user.get("id") else "",
         "user_id": str(user.get("id")) if user.get("id") else "",
         "album": album_title,
@@ -350,7 +361,7 @@ def _album(row: dict[str, Any]) -> Album:
         # همین شناسه را می‌سازد؛ دو جور نامیدنش صفحه‌ی آلبوم را می‌شکست
         id=f"sc:playlist:{row['id']}",
         title=row.get("title") or "",
-        artist=(row.get("user") or {}).get("username") or "ناشناس",
+        artist=clean_artist((row.get("user") or {}).get("username") or "ناشناس"),
         year=_year(row.get("release_date") or row.get("created_at")),
         artworkUrl=_artwork(row),
         trackCount=tracks,
@@ -424,7 +435,7 @@ def _user(row: dict[str, Any]) -> Artist:
         subtitle = "ساندکلاد"
     return Artist(
         id=f"sc:artist:{row['id']}",
-        name=row.get("username") or row.get("permalink") or "",
+        name=clean_artist(row.get("username") or row.get("permalink") or ""),
         artworkUrl=_avatar(row.get("avatar_url")),
         source="soundcloud",
         sourceUrl=row["permalink_url"],
@@ -531,7 +542,7 @@ def _track_as_single(
     return Album(
         id=f"sc:track:{entry.get('id') or ''}",
         title=(title or entry.get("title") or "").strip(),
-        artist=artist.name,
+        artist=clean_artist(artist.name),
         year=_year(date),
         artworkUrl=entry.get("thumbnail"),
         trackCount=track_count,

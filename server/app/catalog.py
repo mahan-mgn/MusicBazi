@@ -408,6 +408,62 @@ async def resolve_artist(client: httpx.AsyncClient, ref: str) -> ArtistDetail | 
     return None if detail is None else await _fill_tracks(client, detail)
 
 
+async def resolve_artist_discography(client: httpx.AsyncClient, ref: str) -> list[Track]:
+    """
+    تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها + تک‌آهنگ‌ها + برترین‌ها) برای دانلود/پخش کامل.
+    """
+    clean_ref = _canonical_ref(ref.strip())
+    ident = ""
+    is_spotify = False
+
+    if m := ID.match(clean_ref):
+        provider, kind, ident = m.groups()
+        if kind == "artist" and provider == "sp":
+            is_spotify = True
+    elif parsed := spotify.parse_url(clean_ref):
+        if parsed[0] == "artist":
+            is_spotify = True
+            ident = parsed[1]
+
+    if is_spotify and spotify.enabled() and ident:
+        tracks = await spotify.artist_discography(client, ident)
+        if tracks:
+            return tracks
+
+    detail = await resolve_artist(client, ref)
+    if detail is None:
+        return []
+
+    tracks: list[Track] = []
+    seen: set[str] = set()
+
+    def add(t: Track) -> None:
+        if t and t.id and t.id not in seen:
+            seen.add(t.id)
+            tracks.append(t)
+
+    for t in detail.topTracks:
+        add(t)
+    for t in detail.likedTracks or []:
+        add(t)
+    for t in detail.repostedTracks or []:
+        add(t)
+    for t in detail.radio or []:
+        add(t)
+
+    if detail.albums:
+        found = await asyncio.gather(
+            *(resolve_ref(client, a.sourceUrl or a.id) for a in detail.albums),
+            return_exceptions=True,
+        )
+        for outcome in found:
+            if isinstance(outcome, AlbumDetail):
+                for t in outcome.tracks:
+                    add(t)
+
+    return tracks
+
+
 async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | None:
     ref = _canonical_ref(ref.strip())
     if m := ID.match(ref):

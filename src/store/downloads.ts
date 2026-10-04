@@ -75,6 +75,9 @@ function queuedToast(title: string): void {
 /** کنسل‌کننده‌ی هر کار، بیرون از state نگه داشته می‌شود */
 const cancelers = new Map<string, () => void>()
 
+/** سقف دانلودهای فعال هم‌زمان در فرانت — جلوگیری از اشباع ۶ سوکت HTTP/1.1 مرورگر */
+const MAX_CONCURRENT_ACTIVE_DOWNLOADS = 3
+
 let batchSeq = 0
 
 export interface BatchView {
@@ -110,6 +113,21 @@ interface DownloadState {
 }
 
 export const useDownloads = create<DownloadState>((set, get) => {
+  function drainQueue() {
+    const currentJobs = get().jobs
+    // تعداد کارهای فعال که همین الان اتصال زنده با سرور دارند
+    const runningCount = currentJobs.filter(
+      (j) => cancelers.has(j.id) && isActive(j.status),
+    ).length
+    const availableSlots = MAX_CONCURRENT_ACTIVE_DOWNLOADS - runningCount
+    if (availableSlots <= 0) return
+
+    const pending = currentJobs.filter((j) => j.status === 'queued' && !cancelers.has(j.id))
+    for (const nextJob of pending.slice(0, availableSlots)) {
+      start(nextJob)
+    }
+  }
+
   function start(job: Job) {
     const req = { track: job.track, quality: job.quality, candidateUrl: job.candidateUrl }
     const stop = api.download(req, (p: DownloadProgress) => {
@@ -150,9 +168,14 @@ export const useDownloads = create<DownloadState>((set, get) => {
           label: t.goToLibrary,
           run: () => window.dispatchEvent(new CustomEvent('musicbazi:open-library')),
         })
+        drainQueue()
       } else if (p.status === 'error') {
         cancelers.delete(job.id)
         useToasts.getState().push(t.toastFailed(job.track.title), 'error')
+        drainQueue()
+      } else if (p.status === 'canceled') {
+        cancelers.delete(job.id)
+        drainQueue()
       }
     })
     cancelers.set(job.id, stop)
@@ -197,7 +220,7 @@ export const useDownloads = create<DownloadState>((set, get) => {
       createdAt: Date.now(),
     }
     set({ jobs: [...get().jobs, job] })
-    start(job)
+    drainQueue()
     return true
   }
 
@@ -220,10 +243,37 @@ export const useDownloads = create<DownloadState>((set, get) => {
     enqueueMany: (tracks, quality, seed) => {
       if (!tracks.length) return
       const batch = makeBatch(seed, quality, tracks[0].album ?? tracks[0].title)
-      const added = tracks.filter((t) => add(t, quality, batch, true)).length
-      if (!added) return
-      set({ batches: [batch, ...get().batches], collapsed: false })
+      const currentJobs = get().jobs
+      const newJobs: Job[] = []
+      const seen = new Set<string>()
+
+      for (const track of tracks) {
+        const key = `${track.id}-${quality}`
+        if (seen.has(key)) continue
+        const existing = currentJobs.find(
+          (j) => j.track.id === track.id && j.quality === quality && isActive(j.status),
+        )
+        if (existing) continue
+        seen.add(key)
+        newJobs.push({
+          id: `job-${track.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          batchId: batch.id,
+          track,
+          quality,
+          status: 'queued',
+          percent: 0,
+          createdAt: Date.now(),
+        })
+      }
+
+      if (!newJobs.length) return
+      set({
+        jobs: [...currentJobs, ...newJobs],
+        batches: [batch, ...get().batches],
+        collapsed: false,
+      })
       queuedToast(batch.title)
+      drainQueue()
     },
 
     pickSource: (track, quality, candidateUrl) => {
@@ -243,6 +293,7 @@ export const useDownloads = create<DownloadState>((set, get) => {
           j.id === jobId ? { ...j, status: 'canceled', percent: 0 } : j,
         ),
       })
+      drainQueue()
     },
 
     retry: (jobId) => {
@@ -265,13 +316,14 @@ export const useDownloads = create<DownloadState>((set, get) => {
         finishedAt: undefined,
       }
       set({ jobs: get().jobs.map((j) => (j.id === jobId ? fresh : j)) })
-      start(fresh)
+      drainQueue()
     },
 
     remove: (jobId) => {
       cancelers.get(jobId)?.()
       cancelers.delete(jobId)
       set({ jobs: get().jobs.filter((j) => j.id !== jobId) })
+      drainQueue()
     },
 
     dismissBatch: (batchId) => {
@@ -285,6 +337,7 @@ export const useDownloads = create<DownloadState>((set, get) => {
         jobs: get().jobs.filter((j) => j.batchId !== batchId),
         batches: get().batches.filter((b) => b.id !== batchId),
       })
+      drainQueue()
     },
 
     clearFinished: () => {

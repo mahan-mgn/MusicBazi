@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { dominantColor, tintVars } from '../lib/artColor'
-import { digits, duration as fmtDuration } from '../lib/format'
+import { cleanArtist, digits, duration as fmtDuration } from '../lib/format'
 import { haptic } from '../lib/native'
 import { useI18n } from '../lib/i18n'
 import { useSwipe } from '../lib/useSwipe'
@@ -148,7 +148,7 @@ export default function PlayerBar() {
       {t.playFailed}
     </span>
   ) : (
-    <bdi>{track.artist}</bdi>
+    <bdi>{cleanArtist(track.artist)}</bdi>
   )
 
   return (

@@ -96,6 +96,10 @@ export const mockApi: MusicApi = {
     return artistDetail(artist)
   },
 
+  async getArtistDiscography(_idOrUrl, _signal) {
+    throw new Error('Not available in mock')
+  },
+
   async library() {
     // کتابخانه فایل واقعی روی دیسک سرور است؛ در مود دمو سروری در کار نیست
     return null

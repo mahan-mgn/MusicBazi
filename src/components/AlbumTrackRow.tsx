@@ -1,5 +1,6 @@
 import { api } from '../lib/api'
 import {
+  cleanArtist,
   digits,
   duration as fmtDuration,
   fileExt,
@@ -218,10 +219,10 @@ export default function AlbumTrackRow({
               }}
               className="bidi block max-w-full truncate text-xs text-muted transition hover:text-accent hover:underline"
             >
-              {track.artist}
+              {cleanArtist(track.artist)}
             </button>
           ) : (
-            <p className="bidi truncate text-xs text-muted">{track.artist}</p>
+            <p className="bidi truncate text-xs text-muted">{cleanArtist(track.artist)}</p>
           )}
         </div>
       </div>
@@ -236,10 +237,10 @@ export default function AlbumTrackRow({
             }}
             className="bidi block max-w-full truncate text-xs text-muted transition hover:text-accent hover:underline"
           >
-            {track.artist}
+            {cleanArtist(track.artist)}
           </button>
         ) : (
-          <p className="bidi truncate text-xs text-muted">{track.artist}</p>
+          <p className="bidi truncate text-xs text-muted">{cleanArtist(track.artist)}</p>
         )}
       </div>
 
@@ -279,7 +280,7 @@ export default function AlbumTrackRow({
           />
         )}
 
-        <div className="transition-opacity sm:opacity-80 sm:group-hover:opacity-100">
+        <div className="hidden sm:block transition-opacity sm:opacity-80 sm:group-hover:opacity-100">
           <SendToTelegram target={{ kind: 'track', track }} />
         </div>
 
@@ -289,7 +290,7 @@ export default function AlbumTrackRow({
             download
             title={t.lyrics}
             aria-label={t.lyrics}
-            className="grid size-7 place-items-center rounded-md text-muted opacity-80 transition hover:bg-panel-2 hover:text-fg group-hover:opacity-100"
+            className="hidden sm:grid size-7 place-items-center rounded-md text-muted opacity-80 transition hover:bg-panel-2 hover:text-fg group-hover:opacity-100"
           >
             <LyricsIcon className="size-4" />
           </a>

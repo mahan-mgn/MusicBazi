@@ -156,6 +156,10 @@ export const httpApi: MusicApi = {
     return json<ArtistDetail>(`/artist?ref=${encodeURIComponent(idOrUrl)}`, signal)
   },
 
+  getArtistDiscography(idOrUrl, signal) {
+    return json<Track[]>(`/artist/discography?ref=${encodeURIComponent(idOrUrl)}`, signal)
+  },
+
   library(query, signal) {
     return json<LibraryPage>(`/library?q=${encodeURIComponent(query)}&limit=200`, signal)
   },

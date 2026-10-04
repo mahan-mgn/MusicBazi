@@ -63,6 +63,19 @@ class TestMapping:
 
         assert soundcloud.as_entry(row)["artist"] == "Dorcci"
 
+    def test_artist_comma_spacing_is_normalized(self):
+        """فاصله‌های زائد قبل و بعد از کاما و کامای تمام‌عرض در نام آرتیست‌های هم‌کار باید پاک شوند."""
+        row = _row(1, "HOLLYWOODY", publisher_metadata={"artist": "Gucciflame ,  Ashkan Kagan"})
+        entry = soundcloud.as_entry(row)
+        assert entry["artist"] == "Gucciflame, Ashkan Kagan"
+        track = ytdlp._entry_to_track(entry, "soundcloud", "HOLLYWOODY")
+        assert track.artist == "Gucciflame, Ashkan Kagan"
+
+        # کامای تمام‌عرض ， که yt-dlp می‌گذارد
+        entry2 = soundcloud.as_entry(_row(2, "NKAR", user={"username": "Arown， Kagan"}))
+        track2 = ytdlp._entry_to_track(entry2, "soundcloud", "NKAR")
+        assert track2.artist == "Arown, Kagan"
+
     def test_artwork_is_upgraded_from_the_thumbnail_size(self):
         """large یعنی ۱۰۰ پیکسل — روی کاور آلبوم لک می‌شود."""
         art = soundcloud.as_entry(_row(1, "GONAH"))["thumbnail"]

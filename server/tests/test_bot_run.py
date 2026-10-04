@@ -1246,6 +1246,102 @@ class TestFileIdCacheDelivery:
         context.bot.send_audio.assert_awaited_once()
         assert context.bot.send_audio.await_args.kwargs["audio"] == "cached_file_id_999"
 
+    def test_cache_invalidated_when_artist_changed(self, track, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "BOT_DB_PATH", tmp_path / "bot.db")
+        monkeypatch.setattr(run, "too_large_for_telegram", lambda n: False)
+        store.save_telegram_file(
+            f"{track.id}:320",
+            file_id="cached_file_old_artist",
+            title=track.title,
+            artist="Gucciflame",
+            quality="mp3 320",
+        )
+
+        api = FakeApi(
+            progress_events=[DownloadProgress(status="ready")],
+            file_bytes=b"new-file-bytes",
+        )
+        context = _context(api)
+        context.chat_data["quality"] = "320"
+        context.bot.send_audio.return_value = SimpleNamespace(
+            audio=SimpleNamespace(file_id="new_file_id_123", file_unique_id="u2", duration=200)
+        )
+
+        updated_track = track.model_copy(update={"artist": "Gucciflame, Ashkan Kagan"})
+        _run(run._download_and_send(context, 12345, updated_track, quality="320"))
+
+        # چون آرتیست عوض شده نباید از کش ارسال شود و باید دانلود جدید انجام گیرد
+        assert len(api.created_tracks) == 1
+        assert api.created_tracks[0].artist == "Gucciflame, Ashkan Kagan"
+        # کش تلگرام باید با اطلاعات جدید به‌روزرسانی شده باشد
+        cached = store.get_telegram_file(f"{track.id}:320")
+        assert cached is not None
+        assert cached["file_id"] == "new_file_id_123"
+        assert cached["artist"] == "Gucciflame, Ashkan Kagan"
+
+    def test_cache_invalidated_when_title_changed(self, track, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "BOT_DB_PATH", tmp_path / "bot.db")
+        monkeypatch.setattr(run, "too_large_for_telegram", lambda n: False)
+        store.save_telegram_file(
+            f"{track.id}:320",
+            file_id="cached_file_old_title",
+            title="OLD HOLLYWOOD",
+            artist=track.artist,
+            quality="mp3 320",
+        )
+
+        api = FakeApi(
+            progress_events=[DownloadProgress(status="ready")],
+            file_bytes=b"new-file-bytes",
+        )
+        context = _context(api)
+        context.chat_data["quality"] = "320"
+        context.bot.send_audio.return_value = SimpleNamespace(
+            audio=SimpleNamespace(file_id="new_file_id_456", file_unique_id="u3", duration=200)
+        )
+
+        updated_track = track.model_copy(update={"title": "HOLLYWOODY"})
+        _run(run._download_and_send(context, 12345, updated_track, quality="320"))
+
+        assert len(api.created_tracks) == 1
+        assert api.created_tracks[0].title == "HOLLYWOODY"
+        cached = store.get_telegram_file(f"{track.id}:320")
+        assert cached is not None
+        assert cached["file_id"] == "new_file_id_456"
+        assert cached["title"] == "HOLLYWOODY"
+
+    def test_cache_invalidated_when_artwork_changed(self, track, tmp_path, monkeypatch):
+        monkeypatch.setattr(store, "BOT_DB_PATH", tmp_path / "bot.db")
+        monkeypatch.setattr(run, "too_large_for_telegram", lambda n: False)
+        store.save_telegram_file(
+            f"{track.id}:320",
+            file_id="cached_file_old_art",
+            title=track.title,
+            artist=track.artist,
+            quality="mp3 320",
+            artwork_url="https://example.com/old_cover.jpg",
+        )
+
+        api = FakeApi(
+            progress_events=[DownloadProgress(status="ready")],
+            file_bytes=b"new-file-bytes",
+        )
+        context = _context(api)
+        context.chat_data["quality"] = "320"
+        context.bot.send_audio.return_value = SimpleNamespace(
+            audio=SimpleNamespace(file_id="new_file_id_789", file_unique_id="u4", duration=200)
+        )
+
+        updated_track = track.model_copy(update={"artworkUrl": "https://example.com/new_cover.jpg"})
+        _run(run._download_and_send(context, 12345, updated_track, quality="320"))
+
+        assert len(api.created_tracks) == 1
+        assert api.created_tracks[0].artworkUrl == "https://example.com/new_cover.jpg"
+        cached = store.get_telegram_file(f"{track.id}:320")
+        assert cached is not None
+        assert cached["file_id"] == "new_file_id_789"
+        assert cached["artwork_url"] == "https://example.com/new_cover.jpg"
+
     def test_cache_failure_falls_back_to_normal_download(self, track, tmp_path, monkeypatch):
         monkeypatch.setattr(store, "BOT_DB_PATH", tmp_path / "bot.db")
         monkeypatch.setattr(run, "too_large_for_telegram", lambda n: False)

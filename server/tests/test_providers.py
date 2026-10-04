@@ -626,6 +626,59 @@ class TestSpotifyArtistPage:
         assert sent == [0, 10, 20]
         assert len(albums) == 30
 
+    def test_artist_discography_fetches_all_tracks_in_batches(self, monkeypatch):
+        """دیسکوگرافی کامل تمام آلبوم‌ها و سینگل‌ها را با بچ دریافت می‌کند."""
+        albums_list = [self._album_row("a1", "Alb 1", "2025-01-01"), self._album_row("a2", "Alb 2", "2024-01-01")]
+
+        def _track_item(tid: str, title: str):
+            return {"id": tid, "name": title, "duration_ms": 180000, "artists": [{"name": "Dorcci", "id": "art1"}]}
+
+        async def fake_get(client, path, **params):
+            if path == "/artists/art1":
+                return self.HEAD
+            if path == "/artists/art1/top-tracks":
+                return {"tracks": [_track_item("top1", "Top Track")]}
+            if path == "/albums":
+                ids = params.get("ids", "").split(",")
+                return {
+                    "albums": [
+                        {
+                            "id": aid,
+                            "name": f"Album {aid}",
+                            "images": [{"url": "http://cover"}],
+                            "release_date": "2025-01-01",
+                            "tracks": {"items": [_track_item(f"t_{aid}", f"Track {aid}")]},
+                        }
+                        for aid in ids
+                    ]
+                }
+            if path.endswith("/albums"):
+                return {"items": albums_list, "next": None}
+            return {}
+
+        monkeypatch.setattr(spotify, "_get", fake_get)
+        monkeypatch.setattr(spotify, "enabled", lambda: True)
+
+        tracks = asyncio.run(spotify.artist_discography(None, "art1"))
+        assert len(tracks) == 3
+        assert [t.title for t in tracks] == ["Top Track", "Track a1", "Track a2"]
+
+    def test_catalog_resolve_artist_discography_routes_to_spotify(self, monkeypatch):
+        from app import catalog
+
+        called = []
+        async def fake_spot_discography(client, artist_id):
+            called.append(artist_id)
+            return [_track("S1", "A", "spotify")]
+
+        monkeypatch.setattr(spotify, "artist_discography", fake_spot_discography)
+        monkeypatch.setattr(spotify, "enabled", lambda: True)
+
+        tracks = asyncio.run(catalog.resolve_artist_discography(None, "sp:artist:art123"))
+        assert called == ["art123"]
+        assert len(tracks) == 1
+        assert tracks[0].title == "S1"
+
 
 class TestInterleave:
     """

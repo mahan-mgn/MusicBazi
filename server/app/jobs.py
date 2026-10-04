@@ -377,14 +377,20 @@ class JobManager:
                 filled["albumId"] = track.albumId
             if track.trackNumber:
                 filled["trackNumber"] = track.trackNumber
+            if track.year:
+                filled["year"] = track.year
 
-        # کاور: اگر کاور جدیدی از آلبوم آمده
+        # عنوان یا هنرمند: در صورت تغییر یا اصلاح متادیتا
+        if track.title and track.title.strip() != job.track.title.strip():
+            filled["title"] = track.title.strip()
+        if track.artist and track.artist.strip() != job.track.artist.strip():
+            filled["artist"] = track.artist.strip()
+
+        # کاور: در صورت تغییر یا اصلاح کاور
         artwork_changed = False
         if track.artworkUrl and track.artworkUrl != job.track.artworkUrl:
-            # اگر فایل قبلی کاور نداشت یا ترک در قالب یک آلبوم خواسته شده
-            if job.track.artworkUrl is None or track.album:
-                filled["artworkUrl"] = track.artworkUrl
-                artwork_changed = True
+            filled["artworkUrl"] = track.artworkUrl
+            artwork_changed = True
 
         if not filled and not artwork_changed:
             return

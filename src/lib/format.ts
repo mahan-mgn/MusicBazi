@@ -133,3 +133,17 @@ export function clock(seconds: number, lang = 'fa'): string {
     return ''
   }
 }
+
+/**
+ * تمیزکردن فاصله‌های زائد نام هنرمند (به‌خصوص فاصله‌های دور کاما و کامای تمام‌عرض در ساندکلاد)
+ */
+export function cleanArtist(artist: string | undefined | null): string {
+  // ponytail: فقط نرمال‌سازی کاما و فاصله‌ها؛ جداسازی آرایه‌ای در صورت نیاز اضافه شود.
+  if (!artist) return ''
+  return artist
+    .replace(/，/g, ',')
+    .replace(/\s*([,،])\s*/g, '$1 ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
