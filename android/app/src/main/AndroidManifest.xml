@@ -68,6 +68,16 @@
             </intent-filter>
         </service>
 
+        <!-- Native Audiophile Playback Service (Media3 MediaSession) -->
+        <service
+            android:name=".audio.service.NativePlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </service>
+
         <!-- دکمه‌های رسانه‌ایِ هدفون و بلوتوث را به سرویسِ بالا می‌رساند -->
         <receiver
             android:name="androidx.media.session.MediaButtonReceiver"

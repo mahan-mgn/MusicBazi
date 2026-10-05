@@ -1,10 +1,11 @@
 import { create } from 'zustand'
 import { engine, MAX_BOOST_DB, type EqPreset } from '../lib/audioEngine'
-import { syncStatusBar } from '../lib/native'
+import { nativeSetEqualizer, nativeSetSpatialAudio, syncStatusBar } from '../lib/native'
 import { readStored, readStoredAs, readStoredNumber, writeStored } from '../lib/storage'
 import type { Quality } from '../lib/types'
 
 type Theme = 'dark' | 'light'
+export type NativeAudioEngineMode = 'auto' | 'on' | 'off'
 
 /** بیشترین کراس‌فیدِ مجاز (ثانیه) — بالاتر از این، دو ترک روی هم می‌مانند نه محو */
 export const MAX_CROSSFADE = 12
@@ -19,6 +20,8 @@ interface SettingsState {
   /** ثانیه؛ صفر یعنی خاموش */
   crossfade: number
   eq: EqPreset
+  spatialAudio: boolean
+  nativeAudioEngine: NativeAudioEngineMode
   /** تقویتِ سراسریِ صدا به دسی‌بل — برای گوشی‌هایی که صدایشان کم است */
   boost: number
   setQuality: (q: Quality) => void
@@ -27,6 +30,8 @@ interface SettingsState {
   setNormalize: (on: boolean) => void
   setCrossfade: (seconds: number) => void
   setEq: (preset: EqPreset) => void
+  setSpatialAudio: (on: boolean) => void
+  setNativeAudioEngine: (mode: NativeAudioEngineMode) => void
   setBoost: (db: number) => void
 }
 
@@ -63,6 +68,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
   normalize: readStored('audio:normalize') !== '0',
   crossfade: readStoredNumber('audio:crossfade', 0, { max: MAX_CROSSFADE }),
   eq: readStoredAs<EqPreset>('audio:eq', 'off'),
+  spatialAudio: readStored('audio:spatial') === '1',
+  nativeAudioEngine: readStoredAs<NativeAudioEngineMode>('audio:nativeEngine', 'auto'),
   boost: readStoredNumber('audio:boost', 0, { min: 0, max: MAX_BOOST_DB }),
 
   setQuality: (quality) => {
@@ -100,7 +107,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setEq: (preset) => {
     writeStored('audio:eq', preset)
     engine.setEq(preset)
+    nativeSetEqualizer(preset !== 'off')
     set({ eq: preset })
+  },
+
+  setSpatialAudio: (on) => {
+    writeStored('audio:spatial', on ? '1' : '0')
+    nativeSetSpatialAudio(on)
+    set({ spatialAudio: on })
+  },
+
+  setNativeAudioEngine: (mode) => {
+    writeStored('audio:nativeEngine', mode)
+    set({ nativeAudioEngine: mode })
   },
 
   setBoost: (db) => {

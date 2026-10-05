@@ -100,6 +100,156 @@ const Playback = registerPlugin<PlaybackPlugin>('Playback')
 const Shell = registerPlugin<ShellPlugin>('Shell')
 const Downloads = registerPlugin<DownloadsPlugin>('Downloads')
 
+/* ---------- موتور صوتی نیتیو (BitChord v1.8 Audio Stack) ---------- */
+
+export interface NativeAudioStreamOptions {
+  url: string
+  mimeType?: string
+  codec?: string
+  bitrate?: number
+  sampleRate?: number
+  bitDepth?: number
+  duration?: number
+  isLossless?: boolean
+  gainDb?: number
+  sourceId: string
+  title: string
+  artist: string
+  album?: string
+  artworkUrl?: string
+  streamType?: 'PROGRESSIVE' | 'HLS' | 'DASH' | 'LOCAL_FILE' | 'LAN_STREAM'
+}
+
+export interface AudioDiagnostics {
+  sink: string
+  deviceName: string
+  routeKind: string
+  actualEncoding: number | null
+  actualSampleRateHz: number | null
+  systemMixerRateHz: number | null
+  decoderName: string | null
+  decoderOutputEncoding: string | null
+  dspFormat: string
+  dspAvailable: boolean
+  directPlaybackSupported: boolean
+  directPlaybackActual: boolean
+  outputExact: boolean
+  outputExactDetail: string | null
+  loudnessGainDb: number | null
+  loudnessLufs: number | null
+}
+
+interface AudioEnginePlugin {
+  play(options: NativeAudioStreamOptions): Promise<void>
+  pause(): Promise<void>
+  resume(): Promise<void>
+  stop(): Promise<void>
+  seek(options: { position: number }): Promise<void>
+  setVolume(options: { volume: number }): Promise<void>
+  setEqualizer(options: { enabled: boolean; bands?: number[] }): Promise<void>
+  setSpatialAudio(options: { enabled: boolean }): Promise<void>
+  getPlaybackState(): Promise<{
+    status: string
+    isPlaying: boolean
+    currentTrackId: string | null
+    position: number
+    duration: number
+    volume: number
+    isBuffering: boolean
+    errorMessage: string | null
+  }>
+  getAudioDiagnostics(): Promise<AudioDiagnostics>
+  addListener(
+    event: 'playbackStateChanged',
+    handler: (data: { status: string; isPlaying: boolean; isBuffering: boolean; currentTrackId: string | null; duration: number }) => void,
+  ): Promise<PluginListenerHandle>
+  addListener(
+    event: 'positionChanged',
+    handler: (data: { position: number; duration: number }) => void,
+  ): Promise<PluginListenerHandle>
+  addListener(
+    event: 'transport',
+    handler: (data: { action: TransportAction; value: number }) => void,
+  ): Promise<PluginListenerHandle>
+}
+
+const AudioEngine = registerPlugin<AudioEnginePlugin>('AudioEngine')
+
+export async function nativePlay(options: NativeAudioStreamOptions): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.play(options)
+}
+
+export async function nativePause(): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.pause()
+}
+
+export async function nativeResume(): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.resume()
+}
+
+export async function nativeStop(): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.stop()
+}
+
+export async function nativeSeek(positionSeconds: number): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.seek({ position: positionSeconds })
+}
+
+export async function nativeSetVolume(volume: number): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.setVolume({ volume })
+}
+
+export async function nativeSetEqualizer(enabled: boolean, bands?: number[]): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.setEqualizer({ enabled, bands })
+}
+
+export async function nativeSetSpatialAudio(enabled: boolean): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.setSpatialAudio({ enabled })
+}
+
+export async function getNativeAudioDiagnostics(): Promise<AudioDiagnostics | null> {
+  if (!isNativeApp()) return null
+  try {
+    return await AudioEngine.getAudioDiagnostics()
+  } catch {
+    return null
+  }
+}
+
+export function onNativePlaybackStateChanged(
+  handler: (data: { status: string; isPlaying: boolean; isBuffering: boolean; currentTrackId: string | null; duration: number }) => void,
+): () => void {
+  if (!isNativeApp()) return () => {}
+  let sub: PluginListenerHandle | null = null
+  void AudioEngine.addListener('playbackStateChanged', handler).then((h) => {
+    sub = h
+  })
+  return () => {
+    sub?.remove()
+  }
+}
+
+export function onNativePositionChanged(
+  handler: (data: { position: number; duration: number }) => void,
+): () => void {
+  if (!isNativeApp()) return () => {}
+  let sub: PluginListenerHandle | null = null
+  void AudioEngine.addListener('positionChanged', handler).then((h) => {
+    sub = h
+  })
+  return () => {
+    sub?.remove()
+  }
+}
+
 /* ---------- نوتیفیکیشن و کنترل پخش ---------- */
 
 /**

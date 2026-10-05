@@ -18,6 +18,7 @@ public class MainActivity extends BridgeActivity {
         // ثبت باید *قبل* از super باشد؛ Capacitor پل را همان‌جا می‌سازد و
         // پلاگینی که دیرتر معرفی شود دیگر سوار نمی‌شود
         registerPlugin(PlaybackPlugin.class);
+        registerPlugin(app.musicbazi.client.audio.bridge.AudioEnginePlugin.class);
         registerPlugin(ShellPlugin.class);
         registerPlugin(DownloadsPlugin.class);
         super.onCreate(savedInstanceState);

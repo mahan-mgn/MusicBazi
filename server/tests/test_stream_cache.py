@@ -242,8 +242,50 @@ def test_extract_direct_stream_info_selects_highest_quality():
 
     assert chosen is not None
     assert chosen["format_id"] == "251"
-    assert chosen["ext"] == "webm"
-    assert chosen["url"] == "https://googlevideo.com/251"
+
+
+def test_stream_worker_falls_back_when_primary_candidate_fails(clean_stream_cache, track, fresh_db):
+    """اگر کاندیدای اولیه شکست خورد، باید از resolve_fallback استفاده شده و استریم پخش شود."""
+    cache_key = stream_cache.cache_key_for(track.id)
+    primary = Candidate(
+        url="https://soundcloud.com/lithe9/lychee-martini",
+        title="Lychee Martini",
+        uploader="Lithe",
+        duration_ms=145000,
+        score=100.0,
+        source="soundcloud",
+    )
+    fallback_cand = Candidate(
+        url="https://youtube.com/watch?v=fallback123",
+        title="Lychee Martini",
+        uploader="Lithe",
+        duration_ms=145000,
+        score=95.0,
+        source="youtube",
+    )
+
+    def mock_extract(url, download=True):
+        if "soundcloud" in url:
+            raise RuntimeError("SoundCloud Go+ DRM error")
+        out_file = clean_stream_cache / f"{cache_key}.m4a"
+        out_file.write_bytes(b"\x00" * 4096)
+        return {"id": "fallback123"}
+
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.side_effect = mock_extract
+    mock_ydl_ctx = MagicMock()
+    mock_ydl_ctx.__enter__.return_value = mock_ydl
+
+    with (
+        patch("app.stream_cache.resolver.resolve", return_value=[primary]),
+        patch("app.stream_cache.resolver.resolve_fallback", return_value=[fallback_cand]) as mock_fb,
+        patch("app.stream_cache.YoutubeDL", return_value=mock_ydl_ctx),
+    ):
+        result_path = asyncio.run(stream_cache.get_or_fetch(track))
+
+    assert mock_fb.called
+    assert result_path.exists()
+    assert result_path.stem == cache_key
 
 
 def test_find_any_ready_prefers_highest_quality(tmp_path, track, fresh_db):

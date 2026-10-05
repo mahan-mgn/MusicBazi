@@ -6,6 +6,7 @@ import { useI18n } from '../lib/i18n'
 import { usePlayer } from '../store/player'
 import { MAX_CROSSFADE, useSettings } from '../store/settings'
 import Range from './Range'
+import AudioPipelineModal from './AudioPipelineModal'
 import { SlidersIcon, TimerIcon } from './icons'
 
 const SLEEP_CHOICES = [15, 30, 45, 60]
@@ -31,6 +32,7 @@ export default function AudioSettings() {
   const sleepAt = usePlayer((s) => s.sleepAt)
   const setSleepTimer = usePlayer((s) => s.setSleepTimer)
   const [open, setOpen] = useState(false)
+  const [showPipeline, setShowPipeline] = useState(false)
   const [, tick] = useState(0)
   const box = usePopover<HTMLDivElement>(open, () => setOpen(false))
 
@@ -189,6 +191,19 @@ export default function AudioSettings() {
             </div>
           </div>
 
+          <div className="border-t border-line-soft pt-2">
+            <button
+              onClick={() => {
+                setOpen(false)
+                setShowPipeline(true)
+              }}
+              className="w-full flex items-center justify-between rounded-lg border border-line bg-panel-soft px-2.5 py-1.5 text-xs font-medium text-muted hover:text-fg transition"
+            >
+              <span>{lang === 'fa' ? 'مسیر صوتی و دیاگنوستیک' : 'Audio Pipeline'}</span>
+              <span className="text-[11px] text-accent">➔</span>
+            </button>
+          </div>
+
           {unsupported && (
             <p className="border-t border-line-soft pt-2 text-[11px] text-muted-2">
               {t.audioGraphMissing}
@@ -196,6 +211,8 @@ export default function AudioSettings() {
           )}
         </div>
       )}
+
+      <AudioPipelineModal open={showPipeline} onClose={() => setShowPipeline(false)} />
     </div>
   )
 }

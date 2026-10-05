@@ -8,7 +8,16 @@ import {
   setNativeSleepTimer,
   stopPlaybackNotification,
   syncPlayback,
+  nativePlay,
+  nativePause,
+  nativeResume,
+  nativeStop,
+  nativeSeek,
+  nativeSetVolume,
+  onNativePlaybackStateChanged,
+  onNativePositionChanged,
 } from '../lib/native'
+import { isNativeApp } from '../lib/server'
 import { useI18n } from '../lib/i18n'
 import { downloadRadioTrack, findRadioTrack, radioKey } from '../lib/radio'
 import { pickShuffleIndex } from '../lib/shuffle'
@@ -250,7 +259,48 @@ export const usePlayer = create<PlayerState>((set, get) => {
     engine.setBoost(settings.boost)
     engine.setVolume(get().volume)
 
-    registerAudio('player', () => engine.pause())
+    registerAudio('player', () => {
+      if (isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off') {
+        void nativePause()
+      } else {
+        engine.pause()
+      }
+    })
+
+    if (isNativeApp()) {
+      onNativePlaybackStateChanged((state) => {
+        if (state.status === 'ENDED') {
+          if (get().sleepAt === 'track_end') {
+            get().pause()
+            set({ sleepAt: null })
+            return
+          }
+          if (get().repeat === 'one') {
+            get().seek(0)
+            void nativeResume()
+            return
+          }
+          get().next()
+        } else if (state.status === 'ERROR') {
+          set({ playing: false, failed: true })
+        } else {
+          set({
+            playing: state.isPlaying,
+            failed: false,
+            duration: state.duration > 0 ? state.duration : get().duration,
+          })
+          if (state.isPlaying) {
+            save(true)
+          }
+        }
+      })
+
+      onNativePositionChanged((data) => {
+        set({ position: data.position })
+        save()
+        updatePositionState()
+      })
+    }
 
     /*
      * دکمه‌های نوتیفیکیشن، صفحه‌ی قفل و هدفون همگی به همین اکشن‌ها می‌رسند —
@@ -384,7 +434,25 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     syncNative(true)
 
-    engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, at, autoplay })
+    const useNative = isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off'
+    if (useNative) {
+      void nativePlay({
+        url: item.streamUrl,
+        gainDb: item.gainDb,
+        sourceId: item.id,
+        title: item.track.title,
+        artist: item.track.artist,
+        album: item.track.album ?? '',
+        artworkUrl: item.track.artworkUrl ?? '',
+        duration: item.track.durationMs / 1000,
+      }).catch(() => {
+        // Fallback to web engine if native playback encounters startup failure
+        engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, at, autoplay })
+      })
+    } else {
+      engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, at, autoplay })
+    }
+
     scheduleNext()
   }
 
@@ -577,6 +645,18 @@ export const usePlayer = create<PlayerState>((set, get) => {
       const item = current()
       if (!item) return
       setup()
+      const useNative = isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off'
+      if (useNative) {
+        if (get().playing) {
+          void nativePause()
+          set({ playing: false })
+        } else {
+          claimAudio('player')
+          void nativeResume()
+          set({ playing: true })
+        }
+        return
+      }
       if (!engine.hasSource()) {
         load(item, { at: get().position })
         return
@@ -589,7 +669,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
       }
     },
 
-    pause: () => engine.pause(),
+    pause: () => {
+      if (isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off') {
+        void nativePause()
+        set({ playing: false })
+      } else {
+        engine.pause()
+      }
+    },
 
     next: () => {
       const target = nextIndex()
@@ -643,7 +730,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
       setup()
       const max = get().duration || engine.duration() || 0
       const value = Math.max(0, Math.min(seconds, max))
-      engine.seek(value)
+      if (isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off') {
+        void nativeSeek(value)
+      } else {
+        engine.seek(value)
+      }
       set({ position: value })
       syncNative(true)
     },
@@ -651,7 +742,11 @@ export const usePlayer = create<PlayerState>((set, get) => {
     setVolume: (v) => {
       const value = Math.max(0, Math.min(1, v))
       if (value > 0) beforeMute = value
-      engine.setVolume(value)
+      if (isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off') {
+        void nativeSetVolume(value)
+      } else {
+        engine.setVolume(value)
+      }
       // بالا بردنِ نوارِ بلندی خودش یعنی «دیگر بی‌صدا نباش» — وگرنه اگر قبلش
       // دکمه‌ی بی‌صدا زده شده بود، نوار حرکت می‌کرد و هیچ صدایی نمی‌آمد
       if (value > 0 && get().muted) engine.setMuted(false)
@@ -740,6 +835,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     close: () => {
       engine.stop()
+      if (isNativeApp()) void nativeStop()
       stopPlaybackNotification()
       removeStored(RESUME_KEY)
       clearTimeout(sleepTimer)

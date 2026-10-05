@@ -369,18 +369,6 @@ def resolve(track: Track, use_cache: bool = False) -> list[Candidate]:
     بود، `resolve_fallback` همان‌جا که صدا زده می‌شود (jobs._run) جایگزینش را
     پیدا می‌کند — فقط وقتی که واقعاً لازم شود.
     """
-    if track.source in ("youtube", "soundcloud") and track.sourceUrl:
-        return [
-            Candidate(
-                url=track.sourceUrl,
-                title=track.title,
-                uploader=track.artist,
-                duration_ms=track.durationMs,
-                score=100.0,
-                source=track.source,
-            )
-        ]
-
     if use_cache:
         if track.id in _mem_candidate_cache:
             return _mem_candidate_cache[track.id]
@@ -392,6 +380,18 @@ def resolve(track: Track, use_cache: bool = False) -> list[Candidate]:
                 return candidates
         except Exception:
             pass
+
+    if track.source in ("youtube", "soundcloud") and track.sourceUrl:
+        return [
+            Candidate(
+                url=track.sourceUrl,
+                title=track.title,
+                uploader=track.artist,
+                duration_ms=track.durationMs,
+                score=100.0,
+                source=track.source,
+            )
+        ]
 
     found = _search_all_sources(track)
     if found and use_cache:

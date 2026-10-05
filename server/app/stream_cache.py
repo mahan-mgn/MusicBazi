@@ -15,6 +15,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import Response
@@ -328,7 +329,9 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         if p.is_file() and p.stem == out_stem.name:
             p.unlink(missing_ok=True)
 
-    format_selector = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio/best"
+    format_selector = (
+        "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio/best[height<=360]/best"
+    )
     if quality == "m4a":
         format_selector = "bestaudio[ext=m4a]/bestaudio/best"
     elif quality == "opus":
@@ -343,6 +346,9 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         no_warnings=True,
         noprogress=True,
         concurrent_fragment_downloads=4,
+        retries=1,
+        fragment_retries=1,
+        socket_timeout=5,
     )
 
     if quality == "flac":
@@ -361,6 +367,29 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         except Exception as exc:
             last_error = exc
             log.warning("تلاش استریم از %s ناموفق بود: %s", candidate.url, exc)
+            continue
+
+    # اگر کاندیداهای اولیه شکست خوردند (DRM، Go+، فیلتر یا خطای استخراج)، از منابع دیگر کمک می‌گیریم
+    resolver.invalidate_cache(track.id)
+    tried_sources = frozenset(c.source for c in candidates)
+    fallback = resolver.resolve_fallback(track, tried_sources)
+    for candidate in fallback:
+        try:
+            log.info("دانلود استریم فال‌بک برای «%s» از %s (%s)", track.title, candidate.source, candidate.url)
+            with YoutubeDL(ydl_opts) as y:
+                y.extract_info(candidate.url, download=True)
+
+            cached = _find_cached_audio(out_stem.name)
+            if cached and cached.exists():
+                try:
+                    resolver._mem_candidate_cache[track.id] = [candidate]
+                    db.put_resolved_candidates(track.id, [asdict(candidate)])
+                except Exception:
+                    pass
+                return cached
+        except Exception as exc:
+            last_error = exc
+            log.warning("تلاش استریم فال‌بک از %s ناموفق بود: %s", candidate.url, exc)
             continue
 
     raise RuntimeError(f"دانلود استریم برای «{track.title}» شکست خورد: {last_error}")
