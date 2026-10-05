@@ -57,6 +57,12 @@ NEGATIVE = (
     "mashup",
     "snippet",
     "teaser",
+    "m&m",
+    "mix & master",
+    "mix and master",
+    "type beat",
+    "leak",
+    "demo",
     "اجرای زنده",
     "کاور",
     "ریمیکس",
@@ -134,8 +140,22 @@ def score_candidate(track: Track, title: str, uploader: str, duration_ms: int) -
     haystack = _tokens(f"{title} {uploader}")
 
     title_match = _overlap(_tokens(track.title), haystack)
-    artist_match = _overlap(_tokens(track.artist), haystack)
+
+    primary = _primary_artist(track.artist)
+    primary_tokens = _tokens(primary)
+    artist_tokens = _tokens(track.artist)
+    primary_match = _overlap(primary_tokens, haystack)
+    all_match = _overlap(artist_tokens, haystack)
+    artist_match = max(all_match, 0.7 * primary_match + 0.3 * all_match)
+
+    uploader_is_artist = bool(primary_tokens and _overlap(primary_tokens, _tokens(uploader)) >= 0.8)
+    if uploader_is_artist:
+        artist_match = max(artist_match, primary_match)
+
     score = title_match * 45 + artist_match * 25
+    # ponytail: بانس ترک رسمی با عنوان تمیز؛ در صورت نیاز به بررسی پیچیده‌تر با متادیتای آلبوم ارتقا یابد
+    if uploader_is_artist and _tokens(title) == _tokens(track.title):
+        score += 2
 
     if track.durationMs and duration_ms:
         delta = abs(track.durationMs - duration_ms) / 1000

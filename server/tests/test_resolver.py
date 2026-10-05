@@ -153,6 +153,9 @@ class TestModifiedReuploads:
             # همان چیزی که به‌جای ترکِ ساندکلادِ «KIR TO RAPFARSI» دانلود شد:
             # بازنشرِ کلیپ‌شده، با همان عنوان و همان طول
             "Sweater Weather[Distort Version]",
+            "Sweater Weather (New) M&M",
+            "Sweater Weather (Mix & Master)",
+            "Sweater Weather Type Beat",
         ],
     )
     def test_scores_below_the_plain_version(self, track, title):
@@ -163,6 +166,39 @@ class TestModifiedReuploads:
         official = score(track, f"{track.artist} - {track.title} (Official Audio)", track.artist)
         plain = score(track, f"{track.artist} - {track.title}", track.artist)
         assert official > plain
+
+    def test_multi_artist_official_upload_beats_unofficial_keyword_stuffed_reupload(self):
+        from app.models import Track
+
+        collab = Track(
+            id="sp:track:1ms0yxJHPwKPvWNmJYBdFG",
+            title="Later",
+            artist="Therichpia, Tlkhoon, Matin Fattahi",
+            durationMs=168_947,
+            source="spotify",
+            sourceUrl="https://open.spotify.com/track/1ms0yxJHPwKPvWNmJYBdFG",
+        )
+        official = score_candidate(
+            collab,
+            title="Later",
+            uploader="TheRichPia",
+            duration_ms=168_993,
+        )
+        unofficial = score_candidate(
+            collab,
+            title="Matin Fattahi x Tlkhoon x Therichpia - Later (New) M&M",
+            uploader="Hustler Beatz",
+            duration_ms=170_234,
+        )
+        unofficial_clean = score_candidate(
+            collab,
+            title="Matin Fattahi x Tlkhoon x Therichpia - Later",
+            uploader="Hustler Beatz",
+            duration_ms=170_234,
+        )
+        assert official >= GOOD_ENOUGH
+        assert official > unofficial
+        assert official > unofficial_clean
 
 
 class TestNegativeWordBoundaries:
