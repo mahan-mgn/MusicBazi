@@ -11,6 +11,8 @@ services:
     # سرور یک بار بالا می‌آید و برای هر توکن، node را از نو اجرا نمی‌کند.
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     restart: unless-stopped
+    ports:
+      - "${MUSICBAZI_POT_PORT:-4416}:4416"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4416/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -33,6 +35,8 @@ services:
       MUSICBAZI_YTDLP_PROXY: ${MUSICBAZI_YTDLP_PROXY:-}
       MUSICBAZI_CONCURRENCY: ${MUSICBAZI_CONCURRENCY:-3}
       MUSICBAZI_FILE_RETENTION: ${MUSICBAZI_FILE_RETENTION:-604800}
+    ports:
+      - "${MUSICBAZI_SERVER_PORT:-8000}:8000"
     # پروکسیِ روی هاست از داخل کانتینر با این نام دیده می‌شود. روی داکر دسکتاپ
     # خودکار هست، روی داکرِ لینوکس نه — و آن‌جا MUSICBAZI_PROXY بی‌صدا شکست می‌خورد.
     extra_hosts:
@@ -49,7 +53,7 @@ services:
     depends_on:
       - server
     ports:
-      - "${MUSICBAZI_PORT:-8080}:80"
+      - "${MUSICBAZI_WEB_PORT:-${MUSICBAZI_PORT:-8080}}:80"
 
   # اختیاری — «docker compose --profile tunnel up -d» و بعد
   # «docker compose logs tunnel» که آدرسِ https://…trycloudflare.com را چاپ می‌کند.

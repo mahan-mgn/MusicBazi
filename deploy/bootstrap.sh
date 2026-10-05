@@ -73,10 +73,10 @@ for _ in $(seq 1 40); do
 done
 [ -n "$URL" ] || die "آدرس تونل پیدا نشد. خودت ببین: docker compose logs tunnel"
 
-# صبر تا بک‌اند واقعاً جواب بدهد، نه فقط بالا آمده باشد. از پورت ۸۰۸۰ روی
+# صبر تا بک‌اند واقعاً جواب بدهد، نه فقط بالا آمده باشد. از پورت وب روی
 # هاست می‌زنیم: کانتینر web همان را map کرده و nginx داخلش /api/ را به بک‌اند
 # پروکسی می‌کند — پس اگر /api/health ۲۰۰ داد، کل زنجیره سالم است.
-PORT="$(grep -E '^MUSICBAZI_PORT=' .env 2>/dev/null | cut -d= -f2)"
+PORT="$(grep -E '^(MUSICBAZI_WEB_PORT|MUSICBAZI_PORT)=' .env 2>/dev/null | tail -1 | cut -d= -f2)"
 PORT="${PORT:-8080}"
 log "چک سلامت بک‌اند روی پورت $PORT…"
 HEALTHY=""

@@ -129,7 +129,7 @@ The easiest and most reliable deployment method. Packages the React frontend beh
    ```bash
    cp .env.docker.example .env
    ```
-   *(All default values work out of the box. Edit `.env` to supply optional Spotify, Genius, or Proxy configurations).*
+   *(All default values work out of the box. Edit `.env` to change host ports like `MUSICBAZI_WEB_PORT`, `MUSICBAZI_SERVER_PORT`, `MUSICBAZI_POT_PORT`, or supply optional Spotify, Genius, and Proxy configurations).*
 
 3. **Start the containers:**
    ```bash
@@ -137,7 +137,7 @@ The easiest and most reliable deployment method. Packages the React frontend beh
    ```
 
 4. **Access the application:**
-   Open your browser at `http://localhost:8080`.
+   Open your browser at `http://localhost:8080` (or your custom `MUSICBAZI_WEB_PORT`). Backend API is available at `http://localhost:8000` (or `MUSICBAZI_SERVER_PORT`).
 
 To enable the optional Telegram Bot service alongside the stack:
 ```bash
