@@ -89,6 +89,10 @@ android {
         buildConfig true
     }
 
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
     bundle {
         language {
             enableSplit = false
