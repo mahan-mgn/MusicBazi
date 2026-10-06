@@ -492,9 +492,14 @@ export default function ArtistView({
         }
 
         // همه آلبوم‌ها و سینگل‌ها را واکشی می‌کنیم تا اثری از قلم نیفتد
-        const details = await mapLimit(albumsToFetch, ALBUM_FETCH_CONCURRENCY, (item) =>
-          api.getAlbum(item.sourceUrl || item.id).catch(() => null),
-        )
+        if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return deduped
+
+        const details = await mapLimit(albumsToFetch, ALBUM_FETCH_CONCURRENCY, (item) => {
+          if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return Promise.resolve(null)
+          return api.getAlbum(item.sourceUrl || item.id).catch(() => null)
+        })
+
+        if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return deduped
 
         for (const detail of details) {
           if (!detail) continue
@@ -596,6 +601,8 @@ export default function ArtistView({
         const initialKeysSet = new Set(initialTracks.map((t) => trackDedupeKey(t, artist.name)))
         try {
           const fullTracks = await loadDiscography()
+
+          if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return
 
           // بررسی اینکه کاربر وسط لودینگ آهنگ آرتیست دیگری را نزده باشد
           const currentQ = usePlayer.getState().queue

@@ -90,6 +90,7 @@ describe('ArtistView', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+    vi.restoreAllMocks()
   })
 
   it('renders artist name, platform chip and metadata without a fake verified badge', () => {
@@ -582,6 +583,12 @@ describe('ArtistView', () => {
   })
 
   it('starts playback immediately when Play All is clicked and responds to play/pause state', () => {
+    const getAlbumSpy = vi.spyOn(api, 'getAlbum').mockResolvedValue({
+      ...mockArtist.albums[0],
+      durationMs: 400000,
+      tracks: [],
+    })
+
     act(() => {
       root.render(
         <ArtistView
@@ -620,6 +627,8 @@ describe('ArtistView', () => {
       pauseBtn.click()
     })
     expect(pauseSpy).toHaveBeenCalled()
+
+    getAlbumSpy.mockRestore()
   })
 
   it('expands queue in background with deduplicated discography tracks', async () => {
@@ -1138,6 +1147,12 @@ describe('ArtistView', () => {
       )
     })
 
+    const getAlbumSpy = vi.spyOn(api, 'getAlbum').mockResolvedValue({
+      ...mockArtist.albums[0],
+      durationMs: 400000,
+      tracks: [],
+    })
+
     const playAllBtn = container.querySelector('button[aria-label="پخش همه"]') as HTMLButtonElement
     expect(playAllBtn).not.toBeNull()
 
@@ -1147,6 +1162,8 @@ describe('ArtistView', () => {
 
     expect(usePlayer.getState().shuffle).toBe(false)
     expect(usePlayer.getState().index).toBe(0)
+
+    getAlbumSpy.mockRestore()
   })
 
   it('loads artist top tracks when user had a single search track playing and clicks Play All', () => {
@@ -1155,6 +1172,12 @@ describe('ArtistView', () => {
       queue: [{ id: '1', track: mockArtist.topTracks[0], streamUrl: 'https://example.com/single.mp3' }],
       index: 0,
       playing: true,
+    })
+
+    const getAlbumSpy = vi.spyOn(api, 'getAlbum').mockResolvedValue({
+      ...mockArtist.albums[0],
+      durationMs: 400000,
+      tracks: [],
     })
 
     act(() => {
@@ -1179,6 +1202,8 @@ describe('ArtistView', () => {
 
     // Now queue should have all 7 top tracks
     expect(usePlayer.getState().queue.length).toBe(7)
+
+    getAlbumSpy.mockRestore()
   })
 
   it('expands background discography for tracks without artistId or featuring artists', async () => {
@@ -1280,6 +1305,12 @@ describe('ArtistView', () => {
       )
     })
 
+    const getAlbumSpy = vi.spyOn(api, 'getAlbum').mockResolvedValue({
+      ...mockArtist.albums[0],
+      durationMs: 400000,
+      tracks: [],
+    })
+
     const playAllBtn = container.querySelector('button[aria-label="پخش همه"]') as HTMLButtonElement
     expect(playAllBtn).not.toBeNull()
 
@@ -1294,6 +1325,8 @@ describe('ArtistView', () => {
     expect(queue.some((i) => i.track.title === 'Single 1')).toBe(true)
     expect(queue.some((i) => i.track.title === 'Liked Track 1')).toBe(true)
     expect(queue.some((i) => i.track.title === 'Reposted Track 1')).toBe(true)
+
+    getAlbumSpy.mockRestore()
   })
 
   it('downloads all artist tracks using getArtistDiscography when available', async () => {
