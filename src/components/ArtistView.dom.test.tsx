@@ -85,11 +85,17 @@ describe('ArtistView', () => {
       playing: false,
       shuffle: false,
     })
+    useDownloads.setState({
+      jobs: [],
+    })
   })
 
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
+    useDownloads.setState({
+      jobs: [],
+    })
     vi.restoreAllMocks()
   })
 
@@ -1351,7 +1357,7 @@ describe('ArtistView', () => {
     })
 
     const downloadAllBtn = Array.from(container.querySelectorAll('button')).find((b) =>
-      b.textContent?.includes('دانلود همه'),
+      b.textContent?.includes('دانلود همه') || b.textContent?.includes('Download all'),
     )
     expect(downloadAllBtn).toBeDefined()
 
