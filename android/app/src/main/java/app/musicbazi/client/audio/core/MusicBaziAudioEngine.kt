@@ -18,6 +18,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
@@ -25,13 +26,15 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import app.musicbazi.client.audio.dsp.DspChain
 import app.musicbazi.client.audio.dsp.EqualizerPreset
+import app.musicbazi.client.audio.dsp.EqCurve
 import app.musicbazi.client.audio.dsp.PrecisionAudioSink
 import app.musicbazi.client.audio.dsp.manualCurve
 import app.musicbazi.client.audio.output.AudioOutputStatus
-import app.musicbazi.client.audio.output.AudioRouting
+import app.musicbazi.client.audio.stream.AudioCacheManager
 import app.musicbazi.client.audio.stream.MusicBaziDataSource
 import app.musicbazi.client.audio.stream.ResolvedAudioStream
 import app.musicbazi.client.audio.stream.StreamType
+import app.musicbazi.client.audio.transition.CrossfadeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,31 +48,77 @@ import kotlinx.coroutines.launch
 /**
  * Native Audiophile Audio Engine for Music Bazi on Android.
  *
- * Provider-independent audio runtime using Media3 ExoPlayer + PrecisionAudioSink + Float32 DspChain.
- * Serves as the authoritative playback state on Android.
+ * Implements a Dual-ExoPlayer peer architecture with:
+ * - Two full ExoPlayers (Player A and Player B) that trade roles upon handoff
+ * - Dedicated per-player Float32 DspChain and PrecisionAudioSink instances
+ * - CrossfadeController driving equal-power transitions and blend headroom trim
+ * - Temporary LRU stream caching via Media3 SimpleCache
+ * - Direct hardware / AudioTrack output negotiation telemetry
  */
 @UnstableApi
 class MusicBaziAudioEngine(
     private val context: Context,
-    val dspChain: DspChain = DspChain(),
+    val dspChainA: DspChain = DspChain(),
+    val dspChainB: DspChain = DspChain(),
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main),
 ) {
+
+    val dspChain: DspChain
+        get() = activeDspChain
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val _state = MutableStateFlow(AudioState())
     val state: StateFlow<AudioState> = _state.asStateFlow()
 
-    private var player: ExoPlayer? = null
+    private var playerA: ExoPlayer? = null
+    private var playerB: ExoPlayer? = null
+
+    private var activePlayer: ExoPlayer? = null
+    private var sparePlayer: ExoPlayer? = null
+    private var activeDspChain: DspChain = dspChainA
+    private var spareDspChain: DspChain = dspChainB
+
+    private var crossfadeController: CrossfadeController? = null
+    var crossfadeSeconds: Float = 0f
+
     private var progressJob: Job? = null
     private var currentStream: ResolvedAudioStream? = null
 
     init {
         runOnMain {
-            initPlayer()
+            initPlayers()
         }
     }
 
-    private fun initPlayer() {
+    private fun initPlayers() {
+        playerA = buildPlayer(dspChainA) { activePlayer === playerA }
+        playerB = buildPlayer(dspChainB) { activePlayer === playerB }
+
+        activePlayer = playerA
+        sparePlayer = playerB
+        activeDspChain = dspChainA
+        spareDspChain = dspChainB
+
+        crossfadeController = CrossfadeController(
+            scope = scope,
+            active = { activePlayer ?: playerA!! },
+            standby = { sparePlayer ?: playerB!! },
+            onHandoff = { outgoing, incoming ->
+                activePlayer = incoming
+                sparePlayer = outgoing
+                activeDspChain = if (incoming === playerA) dspChainA else dspChainB
+                spareDspChain = if (incoming === playerA) dspChainB else dspChainA
+            },
+            crossfadeSeconds = { crossfadeSeconds },
+            onBlendHeadroom = { /* Headroom scaling managed in sink */ },
+        )
+        crossfadeController?.start()
+    }
+
+    private fun buildPlayer(
+        chain: DspChain,
+        isAudibleFunc: () -> Boolean,
+    ): ExoPlayer {
         val renderersFactory = object : DefaultRenderersFactory(context) {
             override fun buildAudioSink(
                 context: Context,
@@ -83,9 +132,9 @@ class MusicBaziAudioEngine(
 
                 return PrecisionAudioSink(
                     delegate = defaultSink,
-                    dspChain = dspChain,
+                    dspChain = chain,
                     enableFloatOutput = enableFloatOutput,
-                    isAudible = { true },
+                    isAudible = isAudibleFunc,
                 )
             }
         }
@@ -96,8 +145,16 @@ class MusicBaziAudioEngine(
             .setReadTimeoutMs(15000)
 
         val upstreamDataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
+
+        // Integrated Media3 SimpleCache with LRU eviction for smooth streaming
+        val cache = AudioCacheManager.getCache(context)
+        val cacheDataSourceFactory = CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory(upstreamDataSourceFactory)
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
         val musicBaziDataSourceFactory = androidx.media3.datasource.DataSource.Factory {
-            MusicBaziDataSource(upstream = upstreamDataSourceFactory.createDataSource())
+            MusicBaziDataSource(upstream = cacheDataSourceFactory.createDataSource())
         }
 
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
@@ -108,25 +165,25 @@ class MusicBaziAudioEngine(
             .setUsage(C.USAGE_MEDIA)
             .build()
 
-        player = ExoPlayer.Builder(context, renderersFactory)
+        return ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
-            .setAudioAttributes(audioAttributes, true) // true = handle audio focus automatically
+            .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build().apply {
-                addListener(PlayerEventListener())
+                addListener(PlayerEventListener(this))
             }
     }
 
     fun play(stream: ResolvedAudioStream) {
         runOnMain {
             currentStream = stream
-            val p = player ?: return@runOnMain
+            val p = activePlayer ?: return@runOnMain
 
-            // Notify loudness processor of the new track's gain
+            // Level current track's loudness
             stream.gainDb?.let { gain ->
-                dspChain.loudness.gainFor = { id -> if (id == stream.sourceId) gain else 1f }
-                dspChain.loudness.track(stream.sourceId, null)
+                activeDspChain.loudness.gainFor = { id -> if (id == stream.sourceId) gain else 1f }
+                activeDspChain.loudness.track(stream.sourceId, null)
                 AudioOutputStatus.publishLoudness(gain, null)
             }
 
@@ -147,21 +204,24 @@ class MusicBaziAudioEngine(
 
     fun pause() {
         runOnMain {
-            player?.pause()
+            activePlayer?.pause()
+            sparePlayer?.pause()
             _state.value = _state.value.copy(isPlaying = false)
         }
     }
 
     fun resume() {
         runOnMain {
-            player?.play()
+            activePlayer?.play()
             _state.value = _state.value.copy(isPlaying = true)
         }
     }
 
     fun stop() {
         runOnMain {
-            player?.stop()
+            crossfadeController?.bail()
+            activePlayer?.stop()
+            sparePlayer?.stop()
             stopProgressTracker()
             _state.value = _state.value.copy(
                 status = AudioState.Status.IDLE,
@@ -174,7 +234,8 @@ class MusicBaziAudioEngine(
 
     fun seekTo(positionMs: Long) {
         runOnMain {
-            player?.seekTo(positionMs)
+            crossfadeController?.onSkipRequested()
+            activePlayer?.seekTo(positionMs)
             _state.value = _state.value.copy(positionMs = positionMs)
         }
     }
@@ -182,46 +243,46 @@ class MusicBaziAudioEngine(
     fun setVolume(volume: Float) {
         runOnMain {
             val clamped = volume.coerceIn(0.0f, 1.0f)
-            player?.volume = clamped
+            activePlayer?.volume = clamped
             _state.value = _state.value.copy(volume = clamped)
         }
     }
 
-    // ---- DSP Controls ------------------------------------------------------
+    // ---- DSP Controls (applied synchronously to both A & B peer chains) -----
 
     fun setEqualizerEnabled(enabled: Boolean) {
-        dspChain.equalizer.setTuning(
-            enabled = enabled,
-            curve = app.musicbazi.client.audio.dsp.EqCurve.FLAT,
-            balance = 0f,
-        )
+        dspChainA.equalizer.setTuning(enabled, EqCurve.FLAT, 0f)
+        dspChainB.equalizer.setTuning(enabled, EqCurve.FLAT, 0f)
     }
 
     fun setEqualizerPreset(preset: EqualizerPreset) {
-        dspChain.equalizer.setTuning(
-            enabled = true,
-            curve = manualCurve(preset.bands),
-            balance = 0f,
-        )
+        val curve = manualCurve(preset.bands)
+        dspChainA.equalizer.setTuning(true, curve, 0f)
+        dspChainB.equalizer.setTuning(true, curve, 0f)
     }
 
     fun setEqualizerBands(bandsDb: List<Float>) {
-        dspChain.equalizer.setTuning(
-            enabled = true,
-            curve = manualCurve(bandsDb),
-            balance = 0f,
-        )
+        val curve = manualCurve(bandsDb)
+        dspChainA.equalizer.setTuning(true, curve, 0f)
+        dspChainB.equalizer.setTuning(true, curve, 0f)
     }
 
     fun setSpatialAudioEnabled(enabled: Boolean) {
-        dspChain.spatial.enabled = enabled
+        dspChainA.spatial.enabled = enabled
+        dspChainB.spatial.enabled = enabled
     }
 
     fun release() {
         runOnMain {
             stopProgressTracker()
-            player?.release()
-            player = null
+            crossfadeController?.release()
+            crossfadeController = null
+            playerA?.release()
+            playerB?.release()
+            playerA = null
+            playerB = null
+            activePlayer = null
+            sparePlayer = null
         }
     }
 
@@ -243,7 +304,7 @@ class MusicBaziAudioEngine(
         progressJob?.cancel()
         progressJob = scope.launch {
             while (isActive) {
-                player?.let { p ->
+                activePlayer?.let { p ->
                     if (p.isPlaying) {
                         _state.value = _state.value.copy(
                             positionMs = p.currentPosition,
@@ -270,8 +331,10 @@ class MusicBaziAudioEngine(
         }
     }
 
-    private inner class PlayerEventListener : Player.Listener {
+    private inner class PlayerEventListener(private val sourcePlayer: ExoPlayer) : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (sourcePlayer !== activePlayer) return
+
             val status = when (playbackState) {
                 Player.STATE_IDLE -> AudioState.Status.IDLE
                 Player.STATE_BUFFERING -> AudioState.Status.BUFFERING
@@ -280,29 +343,32 @@ class MusicBaziAudioEngine(
                 else -> AudioState.Status.IDLE
             }
 
-            val p = player
-            val duration = if (p != null && p.duration > 0) p.duration else 0L
+            val duration = if (sourcePlayer.duration > 0) sourcePlayer.duration else 0L
 
             _state.value = _state.value.copy(
                 status = status,
                 isBuffering = playbackState == Player.STATE_BUFFERING,
                 durationMs = duration,
-                isPlaying = p?.isPlaying == true,
+                isPlaying = sourcePlayer.isPlaying,
             )
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _state.value = _state.value.copy(isPlaying = isPlaying)
+            if (sourcePlayer === activePlayer) {
+                _state.value = _state.value.copy(isPlaying = isPlaying)
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            Log.e(TAG, "ExoPlayer error [${error.errorCode}]: ${error.message}", error)
-            _state.value = _state.value.copy(
-                status = AudioState.Status.ERROR,
-                isPlaying = false,
-                isBuffering = false,
-                errorMessage = error.message,
-            )
+            if (sourcePlayer === activePlayer) {
+                Log.e(TAG, "ExoPlayer error [${error.errorCode}]: ${error.message}", error)
+                _state.value = _state.value.copy(
+                    status = AudioState.Status.ERROR,
+                    isPlaying = false,
+                    isBuffering = false,
+                    errorMessage = error.message,
+                )
+            }
         }
     }
 

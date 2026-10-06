@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { engine, MAX_BOOST_DB, type EqPreset } from '../lib/audioEngine'
-import { nativeSetEqualizer, nativeSetSpatialAudio, syncStatusBar } from '../lib/native'
+import { nativeSetCrossfade, nativeSetEqualizer, nativeSetSpatialAudio, syncStatusBar } from '../lib/native'
 import { readStored, readStoredAs, readStoredNumber, writeStored } from '../lib/storage'
 import type { Quality } from '../lib/types'
 
@@ -101,6 +101,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     const value = Math.max(0, Math.min(MAX_CROSSFADE, Math.round(seconds)))
     writeStored('audio:crossfade', String(value))
     engine.setCrossfade(value)
+    nativeSetCrossfade(value)
     set({ crossfade: value })
   },
 

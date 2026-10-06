@@ -148,6 +148,7 @@ interface AudioEnginePlugin {
   setVolume(options: { volume: number }): Promise<void>
   setEqualizer(options: { enabled: boolean; bands?: number[] }): Promise<void>
   setSpatialAudio(options: { enabled: boolean }): Promise<void>
+  setCrossfade(options: { seconds: number }): Promise<void>
   getPlaybackState(): Promise<{
     status: string
     isPlaying: boolean
@@ -213,6 +214,11 @@ export async function nativeSetEqualizer(enabled: boolean, bands?: number[]): Pr
 export async function nativeSetSpatialAudio(enabled: boolean): Promise<void> {
   if (!isNativeApp()) return
   await AudioEngine.setSpatialAudio({ enabled })
+}
+
+export async function nativeSetCrossfade(seconds: number): Promise<void> {
+  if (!isNativeApp()) return
+  await AudioEngine.setCrossfade({ seconds })
 }
 
 export async function getNativeAudioDiagnostics(): Promise<AudioDiagnostics | null> {

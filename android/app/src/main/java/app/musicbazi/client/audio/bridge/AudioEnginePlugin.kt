@@ -152,6 +152,13 @@ class AudioEnginePlugin : Plugin() {
     }
 
     @PluginMethod
+    fun setCrossfade(call: PluginCall) {
+        val seconds = (call.getDouble("seconds") ?: 0.0).toFloat()
+        audioEngine.crossfadeSeconds = seconds
+        call.resolve()
+    }
+
+    @PluginMethod
     fun getPlaybackState(call: PluginCall) {
         val state = audioEngine.state.value
         val result = JSObject().apply {
