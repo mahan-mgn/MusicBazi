@@ -194,6 +194,10 @@ class AudioEnginePlugin : Plugin() {
             put("outputExactDetail", snapshot.outputExactDetail)
             put("loudnessGainDb", snapshot.loudnessGainDb)
             put("loudnessLufs", snapshot.loudnessLufs)
+            put("bluetoothCodec", snapshot.bluetoothCodec)
+            put("bluetoothBitrate", snapshot.bluetoothBitrate)
+            put("usbProductName", snapshot.usbProductName)
+            put("usbUacVersion", snapshot.usbUacVersion)
         }
         call.resolve(result)
     }

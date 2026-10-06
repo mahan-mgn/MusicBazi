@@ -36,10 +36,28 @@ object AudioOutputStatus {
         val outputExactDetail: String? = null,
         val loudnessGainDb: Float? = null,
         val loudnessLufs: Float? = null,
+        val bluetoothCodec: String? = null,
+        val bluetoothBitrate: String? = null,
+        val usbProductName: String? = null,
+        val usbUacVersion: Int? = null,
     )
 
     private val _current = MutableStateFlow(Snapshot())
     val current: StateFlow<Snapshot> = _current.asStateFlow()
+
+    fun publishBluetooth(codec: String?, bitrate: String?) {
+        _current.value = _current.value.copy(
+            bluetoothCodec = codec,
+            bluetoothBitrate = bitrate,
+        )
+    }
+
+    fun publishUsb(productName: String?, uacVersion: Int?) {
+        _current.value = _current.value.copy(
+            usbProductName = productName,
+            usbUacVersion = uacVersion,
+        )
+    }
 
     fun publishDecoder(decoderName: String?) {
         _current.value = _current.value.copy(decoderName = decoderName)

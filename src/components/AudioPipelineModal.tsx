@@ -164,6 +164,20 @@ export default function AudioPipelineModal({ open, onClose }: Props) {
                 <span>{isFa ? 'نوع مسیر' : 'Route Kind'}</span>
                 <span className="font-mono text-fg">{diag?.routeKind || 'PHONE'}</span>
               </div>
+              {diag?.bluetoothCodec && (
+                <div className="flex justify-between text-muted-2">
+                  <span>{isFa ? 'کدک بلوتوث' : 'Bluetooth Codec'}</span>
+                  <span className="font-mono text-accent">{diag.bluetoothCodec}</span>
+                </div>
+              )}
+              {diag?.usbProductName && (
+                <div className="flex justify-between text-muted-2">
+                  <span>{isFa ? 'دک USB' : 'USB DAC'}</span>
+                  <span className="font-mono text-emerald-400">
+                    {diag.usbProductName} {diag.usbUacVersion ? `(UAC${diag.usbUacVersion})` : ''}
+                  </span>
+                </div>
+              )}
               {diag?.outputExactDetail && (
                 <div className="flex justify-between text-muted-2 text-[11px]">
                   <span>{isFa ? 'تطابق نمونه' : 'Exactness Note'}</span>

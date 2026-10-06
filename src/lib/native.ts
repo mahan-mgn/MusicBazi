@@ -137,6 +137,10 @@ export interface AudioDiagnostics {
   outputExactDetail: string | null
   loudnessGainDb: number | null
   loudnessLufs: number | null
+  bluetoothCodec?: string | null
+  bluetoothBitrate?: string | null
+  usbProductName?: string | null
+  usbUacVersion?: number | null
 }
 
 interface AudioEnginePlugin {

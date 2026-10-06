@@ -26,9 +26,12 @@ import androidx.media.session.MediaButtonReceiver
 import androidx.media3.common.util.UnstableApi
 import app.musicbazi.client.MainActivity
 import app.musicbazi.client.R
+import app.musicbazi.client.audio.bluetooth.BluetoothAudioTracker
 import app.musicbazi.client.audio.core.AudioState
 import app.musicbazi.client.audio.core.MusicBaziAudioEngine
+import app.musicbazi.client.audio.output.AudioOutputStatus
 import app.musicbazi.client.audio.stream.ResolvedAudioStream
+import app.musicbazi.client.audio.usb.UsbDirectManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +52,7 @@ class NativePlaybackService : Service() {
     private val scope = CoroutineScope(Dispatchers.Main)
     private val imageExecutor = Executors.newSingleThreadExecutor()
     private var stateObserverJob: Job? = null
+    private var bluetoothTracker: BluetoothAudioTracker? = null
 
     private lateinit var mediaSession: MediaSessionCompat
     private var notificationManager: NotificationManager? = null
@@ -66,6 +70,27 @@ class NativePlaybackService : Service() {
         createNotificationChannel()
         initMediaSession()
         observeAudioEngineState()
+
+        bluetoothTracker = BluetoothAudioTracker(this).apply {
+            start()
+            scope.launch {
+                telemetry.collect { bt ->
+                    if (bt.isConnected) {
+                        AudioOutputStatus.publishBluetooth(bt.codecName, bt.bitrateLabel)
+                    } else {
+                        AudioOutputStatus.publishBluetooth(null, null)
+                    }
+                }
+            }
+        }
+
+        try {
+            val usbProbe = UsbDirectManager.probe(this)
+            if (usbProbe.productName != null) {
+                AudioOutputStatus.publishUsb(usbProbe.productName, usbProbe.uacVersion)
+            }
+        } catch (_: Exception) {
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -86,6 +111,8 @@ class NativePlaybackService : Service() {
 
     override fun onDestroy() {
         stateObserverJob?.cancel()
+        bluetoothTracker?.stop()
+        bluetoothTracker = null
         mediaSession.release()
         imageExecutor.shutdown()
         super.onDestroy()
