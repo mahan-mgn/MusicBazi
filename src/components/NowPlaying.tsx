@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { deriveHarmonics, dominantColor, fallbackTint, tidalBgColor } from '../lib/artColor'
 import { engine } from '../lib/audioEngine'
@@ -162,7 +162,7 @@ function NowPlayingSeekBar({
 
   return (
     <div className="w-full space-y-2 select-none" dir="ltr">
-      <div className="relative w-full">
+      <div className="relative w-full" onPointerCancel={() => setScrubPosition(null)}>
         <ThinSlider
           value={currentPos}
           max={total || 1}
@@ -252,6 +252,9 @@ export default function NowPlaying({
   } = usePlayer()
   const { t, lang } = useI18n()
   const [closing, setClosing] = useState(false)
+  const closeStarted = useRef(false)
+  const closeFinished = useRef(false)
+  const closeTimer = useRef<number | null>(null)
   const [panel, setPanel] = useState<PanelView>('cover')
   const [lyrics, setLyrics] = useState<LyricsState>({ kind: 'loading' })
   const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false)
@@ -338,8 +341,19 @@ export default function NowPlaying({
     run()
   }
 
+  const finishDismiss = () => {
+    if (closeFinished.current) return
+    closeFinished.current = true
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+    onClose()
+  }
+
   const dismiss = () => {
-    if (closing) return
+    if (closing || closeStarted.current || closeFinished.current) return
+    closeStarted.current = true
     if (getFullscreenElement()) {
       const doc = document as unknown as {
         exitFullscreen?: () => Promise<void>
@@ -350,15 +364,19 @@ export default function NowPlaying({
     }
     const reduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (reduced) {
-      onClose()
+      finishDismiss()
       return
     }
     setClosing(true)
-    window.setTimeout(onClose, 290)
+    closeTimer.current = window.setTimeout(finishDismiss, 290)
   }
 
+  useEffect(() => () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
+  }, [])
+
   const onPhone = typeof window !== 'undefined' && !window.matchMedia('(min-width: 640px)').matches
-  const drag = useSheetDrag({ onClose, enabled: onPhone })
+  const drag = useSheetDrag({ onClose: finishDismiss, enabled: onPhone })
   const dialog = useDialog<HTMLDivElement>(true, dismiss)
 
   const item = queue[index]
@@ -455,7 +473,7 @@ export default function NowPlaying({
   }, [panel, item?.lyricsUrl])
 
   useEffect(() => {
-    if (!item) onClose()
+    if (!item) finishDismiss()
   }, [item, onClose])
 
   if (!item) return null
@@ -673,7 +691,6 @@ export default function NowPlaying({
         </button>
         {playlistPickerOpen && (
           <div
-            role="menu"
             className="absolute end-0 bottom-full mb-2 z-50 w-60 rounded-2xl bg-black/90 p-2.5 shadow-2xl backdrop-blur-xl border border-white/15"
           >
             <PlaylistPicker
@@ -806,7 +823,6 @@ export default function NowPlaying({
 
           {moreMenuOpen && (
             <div
-              role="menu"
               className="absolute end-0 bottom-full mb-2 z-50 w-52 rounded-2xl bg-black/90 p-2 shadow-2xl backdrop-blur-xl border border-white/15 space-y-1"
             >
               {jobId && (
@@ -877,8 +893,11 @@ export default function NowPlaying({
   // ۶. محتوای صف پخش
   const renderQueueContent = () => {
     const clearText = lang === 'fa' ? 'پاک کردن صف' : 'Clear queue'
-    const tracksCountText = lang === 'fa' ? `${queue.length} آهنگ در صف` : `${queue.length} tracks in queue`
+    const tracksCountText = lang === 'fa'
+      ? `${digits(queue.length, lang)} آهنگ در صف`
+      : `${queue.length} tracks in queue`
     const upcomingCount = queue.length - 1
+    const upcomingCountLabel = digits(upcomingCount, lang)
 
     return (
       <div className="h-full w-full flex flex-col overflow-hidden">
@@ -919,7 +938,7 @@ export default function NowPlaying({
           {upcomingCount > 0 ? (
             <div className="space-y-1 pt-1">
               <span className="text-[11px] font-bold uppercase tracking-wider text-white/40 px-2">
-                {t.upNext} ({upcomingCount})
+                {t.upNext} ({upcomingCountLabel})
               </span>
               <div className="space-y-1.5">
                 {queue.map((qItem, i) => {
@@ -967,7 +986,7 @@ export default function NowPlaying({
         }}
         onClick={(e) => e.stopPropagation()}
         onAnimationEnd={(e) => {
-          if (closing && e.target === e.currentTarget) onClose()
+          if (closing && e.target === e.currentTarget) finishDismiss()
         }}
         style={{
           backgroundColor: tidalBg,

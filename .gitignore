@@ -46,6 +46,13 @@ secrets/*
 .agents/
 .playwright-mcp/
 .vros/
+.zcode/
+
+# خروجی‌های گریدل میکروسرویس Bridge
+server/bridge/.gradle/
+server/bridge/build/
+server/bridge/bin/
+server/bridge/.kotlin/
 
 # موکاپ‌های دورریختنیِ طراحی — محصول نیستند
 sketches/

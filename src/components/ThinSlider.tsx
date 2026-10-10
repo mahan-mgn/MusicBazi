@@ -111,8 +111,8 @@ export default function ThinSlider({
     const finalVal = min + frac * range
     setDragging(false)
     setDragFraction(null)
-    onChangeFinished?.(finalVal)
     onChange?.(finalVal)
+    onChangeFinished?.(finalVal)
   }
 
   const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {

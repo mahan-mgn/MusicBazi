@@ -255,6 +255,7 @@ describe('NowPlaying component', () => {
         b.getAttribute('aria-label')?.toLowerCase().includes('lyrics'),
     )
     expect(lyricsBtn).toBeDefined()
+    expect(lyricsBtn?.textContent?.trim()).toBe('Lyrics')
 
     act(() => {
       lyricsBtn?.click()
@@ -299,6 +300,95 @@ describe('NowPlaying component', () => {
     )
     expect(updatedQueueBtn?.getAttribute('aria-pressed')).toBe('true')
     expect(host.textContent).toContain('Next Song')
+    expect(host.textContent).toContain('۲ آهنگ در صف')
+    expect(host.textContent).toContain('بعدی در صف (۱)')
+  })
+
+  it('updates the seek preview while dragging and follows playback after release', () => {
+    act(() => {
+      root.render(<NowPlaying onClose={vi.fn()} />)
+    })
+
+    const slider = host.querySelector('[role="slider"]') as HTMLDivElement
+    const bar = slider.querySelector('div') as HTMLDivElement
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 100,
+      top: 0,
+      bottom: 6,
+      width: 100,
+      height: 6,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+
+    const pointerEvent = (type: string, clientX: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperties(event, {
+        pointerId: { value: 1 },
+        clientX: { value: clientX },
+      })
+      return event
+    }
+
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointerdown', 75))
+    })
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointermove', 75))
+    })
+    expect(host.textContent).toContain('۰۱:۴۱')
+
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointerup', 75))
+    })
+    act(() => {
+      usePlayer.setState({ position: 110 })
+    })
+    expect(host.textContent).toContain('۰۱:۵۰')
+  })
+
+  it('clears the seek preview when a pointer drag is cancelled', () => {
+    act(() => {
+      root.render(<NowPlaying onClose={vi.fn()} />)
+    })
+
+    const slider = host.querySelector('[role="slider"]') as HTMLDivElement
+    const bar = slider.querySelector('div') as HTMLDivElement
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 100,
+      top: 0,
+      bottom: 6,
+      width: 100,
+      height: 6,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+
+    const pointerEvent = (type: string, clientX: number) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperties(event, {
+        pointerId: { value: 1 },
+        clientX: { value: clientX },
+      })
+      return event
+    }
+
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointerdown', 75))
+    })
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointermove', 75))
+    })
+    expect(host.textContent).toContain('۰۱:۴۱')
+
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointercancel', 75))
+    })
+    expect(host.textContent).toContain('۰۰:۳۰')
   })
 
   it('renders explicit [E] badge when track.explicit is true', () => {
@@ -373,8 +463,8 @@ describe('NowPlaying component', () => {
       plusBtn?.click()
     })
 
-    const menu = host.querySelector('[role="menu"]')
-    expect(menu).toBeDefined()
+    expect(host.querySelector('[role="menu"]')).toBeNull()
+    expect(plusBtn?.parentElement?.querySelector('.absolute')).toBeDefined()
   })
 
   it('renders with sheet-in and backdrop-in classes, and applies exit animation on dismiss', () => {

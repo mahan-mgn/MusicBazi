@@ -70,6 +70,58 @@ describe('ThinSlider component', () => {
     expect(onChangeFinished).toHaveBeenCalledWith(45)
   })
 
+  it('reports the final pointer value before marking the change finished', () => {
+    const onChange = vi.fn()
+    const onChangeFinished = vi.fn()
+
+    act(() => {
+      root.render(
+        <ThinSlider
+          value={0}
+          max={100}
+          onChange={onChange}
+          onChangeFinished={onChangeFinished}
+        />,
+      )
+    })
+
+    const slider = host.querySelector('[role="slider"]') as HTMLDivElement
+    const bar = slider.querySelector('div') as HTMLDivElement
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      right: 100,
+      top: 0,
+      bottom: 6,
+      width: 100,
+      height: 6,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+
+    const pointerEvent = (type: string) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperties(event, {
+        pointerId: { value: 1 },
+        clientX: { value: 75 },
+      })
+      return event
+    }
+
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointerdown'))
+    })
+    act(() => {
+      slider.dispatchEvent(pointerEvent('pointerup'))
+    })
+
+    expect(onChange).toHaveBeenLastCalledWith(75)
+    expect(onChangeFinished).toHaveBeenCalledWith(75)
+    expect(onChange.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      onChangeFinished.mock.invocationCallOrder[0],
+    )
+  })
+
   it('respects disabled prop', () => {
     const onChange = vi.fn()
 
