@@ -304,7 +304,7 @@ export default function ArtistView({
   // استخراج رنگ غالب عکس هنرمند برای گرادیان هیرو
   useEffect(() => {
     let cancelled = false
-    void dominantColor(artist.artworkUrl || artist.bannerUrl).then((c) => {
+    void dominantColor(artist.artworkUrl || artist.bannerUrl || null).then((c) => {
       if (!cancelled) setTint(c)
     })
     return () => {
@@ -1462,7 +1462,7 @@ export default function ArtistView({
         <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-4 flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 shadow-lg sm:gap-3 sm:px-4 sm:py-2.5">
           <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
             <Artwork
-              src={artist.artworkUrl || artist.bannerUrl}
+              src={artist.artworkUrl || artist.bannerUrl || null}
               alt=""
               seed={artist.id}
               className="size-8 sm:size-9 shrink-0 shadow-sm"
@@ -2817,7 +2817,7 @@ export default function ArtistView({
             <div className="flex flex-col items-center text-center">
               <div className="relative size-28 overflow-hidden rounded-full border-2 border-white/20 shadow-xl">
                 <Artwork
-                  src={artist.artworkUrl || artist.bannerUrl}
+                  src={artist.artworkUrl || artist.bannerUrl || null}
                   alt={artist.name}
                   seed={artist.id}
                   rounded="rounded-full"

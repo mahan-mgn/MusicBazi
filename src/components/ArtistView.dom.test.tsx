@@ -1615,6 +1615,7 @@ describe('ArtistView', () => {
           {
             id: 'dz:art:2',
             name: 'Related Artist',
+            artworkUrl: null,
             source: 'deezer',
             sourceUrl: 'https://deezer.com/artist/2',
             subtitle: '5 آلبوم',

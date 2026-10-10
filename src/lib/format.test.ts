@@ -73,7 +73,7 @@ describe('formatArtistSubtitle', () => {
 describe('formatViews', () => {
   it('keeps persian view suffix in fa mode', () => {
     expect(formatViews('1,200 بازدید', 'fa')).toBe('۱,۲۰۰ بازدید')
-    expect(formatViews('1200', 'fa')).toBe('۱,۲۰۰' ? formatViews('1200', 'fa') : '')
+    expect(formatViews('1200', 'fa')).toBe('۱۲۰۰ بازدید')
   })
 
   it('translates views into english without persian leakage', () => {

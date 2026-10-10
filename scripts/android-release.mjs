@@ -56,7 +56,8 @@ function run(task) {
 function syncWebAssets() {
   if (process.argv.includes('--no-sync')) return
   console.log('› npm run android:sync')
-  const res = spawnSync('npm', ['run', 'android:sync'], {
+  const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  const res = spawnSync(npmCmd, ['run', 'android:sync'], {
     cwd: ROOT,
     stdio: 'inherit',
     shell: process.platform === 'win32',
