@@ -546,6 +546,12 @@ async def setup_save(req: SaveRequest) -> dict:
     # هنوز مقدارِ کهنه را دارند و برای همین ری‌استارت لازم است.
     for k, v in values.items():
         os.environ[k] = v
+    if any(k in values for k in ("MUSICBAZI_COOKIES_FILE", "MUSICBAZI_COOKIES_BROWSER")):
+        try:
+            from .stream.playback import get_live_playback
+            get_live_playback().on_session_changed()
+        except Exception as exc:
+            log.warning("failed to notify stream resolver of cookie update: %s", exc)
     restarting = False
     # driftِ اجرایِ قبلی (بنر «ری‌استارت لازم است») هم دلیلِ ری‌استارت است، نه
     # فقط تغییرِ تازه: بی‌این، کاربر «ادامه» را می‌زند، سرور `changed=[]`
@@ -597,6 +603,14 @@ async def setup_cookies(file: UploadFile = File(...)) -> dict:
     COOKIES_PATH.write_bytes(raw)
     changed = write_env({"MUSICBAZI_COOKIES_FILE": str(COOKIES_PATH)})
     os.environ["MUSICBAZI_COOKIES_FILE"] = str(COOKIES_PATH)
+
+    # ابطال کش خطاهای قطعی و بازنشانی سلامت کلاینت‌ها پس از آپلود کوکی جدید
+    try:
+        from .stream.playback import get_live_playback
+        get_live_playback().on_session_changed()
+    except Exception as exc:
+        log.warning("failed to notify stream resolver of cookie update: %s", exc)
+
     return {
         "ok": True,
         "path": str(COOKIES_PATH),

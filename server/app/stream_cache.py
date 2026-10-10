@@ -395,6 +395,29 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
     raise RuntimeError(f"دانلود استریم برای «{track.title}» شکست خورد: {last_error}")
 
 
+async def find_ready_file(track: Track, quality: str | None = None) -> Path | None:
+    """
+    فقط جستجوی فایل آماده در کتابخانه/کش استریم — بدون هیچ دانلودی (فاز ۱۱).
+    مسیر v2 وقتی flag روشن است این را صدا می‌زند تا فایل‌های از-قبل-آماده
+    همچنان اولویت داشته باشند و رفتار cache عیناً حفظ شود؛ اگر چیزی نبود،
+    مسیر live جدید امتحان می‌شود. خودش هیچ resolve یا دانلودی انجام نمی‌دهد.
+    """
+    ready = db.find_any_ready(track.id, preferred_quality=quality)
+    if ready and ready["path"]:
+        lib_path = Path(ready["path"])
+        if lib_path.exists():
+            return lib_path
+
+    cached = _find_cached_audio(cache_key_for(track.id, quality=quality))
+    if cached and cached.exists():
+        try:
+            os.utime(cached, None)
+        except OSError:
+            pass
+        return cached
+    return None
+
+
 async def get_or_fetch(track: Track, quality: str | None = None) -> Path:
     """دریافت مسیر کامل فایل از کتابخانه، کش استریم، یا دانلود جدید."""
     # ۱. بررسی کتابخانه دائمی با اولویت بهترین کیفیت

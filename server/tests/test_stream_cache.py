@@ -129,7 +129,8 @@ def test_stream_lyrics_endpoint(clean_stream_cache, track):
 
 
 def test_stream_prefetch_endpoint(clean_stream_cache, track):
-    """اندپوینت /api/stream/prefetch تسک واکشی پس‌زمینه را فراخوانی می‌کند."""
+    """اندپوینت /api/stream/prefetch تا آماده‌شدن فایل صبر می‌کند."""
+    from unittest.mock import AsyncMock
     from app.models import TrackRef
 
     req = TrackRef(
@@ -141,9 +142,32 @@ def test_stream_prefetch_endpoint(clean_stream_cache, track):
         durationMs=track.durationMs,
     )
 
-    with patch("app.stream_cache.get_or_fetch") as mock_fetch:
+    with patch("app.stream_cache.get_or_fetch", new_callable=AsyncMock) as mock_fetch:
         res = asyncio.run(main.stream_prefetch(req))
         assert res == {"ok": True}
+        mock_fetch.assert_awaited_once()
+
+
+def test_stream_prefetch_endpoint_reports_download_failure(track):
+    """شکست آماده‌سازی باید پاسخ ناموفق بدهد تا زمان‌بندی کل صف ادامه یابد."""
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException
+    from app.models import TrackRef
+
+    req = TrackRef(
+        trackId=track.id,
+        sourceUrl=track.sourceUrl,
+        title=track.title,
+        artist=track.artist,
+        quality="320",
+    )
+    with patch("app.stream_cache.get_or_fetch", new_callable=AsyncMock, side_effect=RuntimeError):
+        try:
+            asyncio.run(main.stream_prefetch(req))
+        except HTTPException as exc:
+            assert exc.status_code == 502
+        else:
+            raise AssertionError("prefetch failure should return HTTP 502")
 
 
 def test_resolver_candidate_caching(track, fresh_db):

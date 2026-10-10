@@ -21,6 +21,7 @@ import { isNativeApp } from '../lib/server'
 import { useI18n } from '../lib/i18n'
 import { downloadRadioTrack, findRadioTrack, radioKey } from '../lib/radio'
 import { pickShuffleIndex } from '../lib/shuffle'
+import { QueuePrefetcher } from '../lib/queuePrefetch'
 import { readStored, readStoredNumber, removeStored, writeStored } from '../lib/storage'
 import type { Track } from '../lib/types'
 import { useRecent } from './recent'
@@ -136,6 +137,8 @@ interface PlayerState {
   playNext: (items: PlayItem[]) => void
   /** به صفِ فعلی اضافه می‌کند بدون قطعِ پخش — برای پرشدنِ تدریجیِ پلی‌لیستِ چت‌بات وایب */
   enqueue: (items: PlayItem[]) => void
+  /** صف را عوض می‌کند و اگر ترک جاری در آن باشد، پخش همان ترک را ادامه می‌دهد. */
+  replaceQueue: (items: PlayItem[], startIndex?: number) => void
   toggle: () => void
   pause: () => void
   next: () => void
@@ -171,6 +174,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
   // کلیدهای (عنوان، هنرمند) که این جلسه‌ی رادیو قبلاً پیشنهاد داده — جلوی
   // تکرار زودهنگام همان چند ترک محبوب هنرمند را می‌گیرد.
   let radioSeen = new Set<string>()
+  const queuePrefetcher = new QueuePrefetcher(async (track, quality) => {
+    const ready = await api.prefetchStream?.(track, quality)
+    if (ready === false) throw new Error('stream prefetch failed')
+  })
 
   // ایندکسی که کراس‌فید به آن خواهد رفت. موتور فقط آدرسِ بعدی را می‌داند؛
   // اینکه آن آدرس کدام ردیفِ صف بود را همین‌جا نگه می‌داریم، وگرنه بعد از
@@ -330,7 +337,9 @@ export const usePlayer = create<PlayerState>((set, get) => {
    * محوکردنش روی خودش فقط یک پژواکِ عجیب می‌سازد.
    */
   function scheduleNext() {
+    const state = get()
     if (get().sleepAt === 'track_end') {
+      queuePrefetcher.sync([], 0)
       pendingNext = null
       engine.setNext(null)
       return
@@ -342,10 +351,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
     const target = next === get().index ? null : next
     pendingNext = target
     const item = target === null ? undefined : get().queue[target]
+    queuePrefetcher.sync(
+      state.repeat === 'one' ? [] : state.queue,
+      state.index,
+      state.repeat === 'all',
+      state.shuffle,
+      target,
+    )
     engine.setNext(item?.streamUrl ?? null, item?.gainDb ?? 0)
-    if (item?.id.startsWith('stream:') && item?.track) {
-      void api.prefetchStream?.(item.track).catch(() => {})
-    }
   }
 
   /**
@@ -406,6 +419,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     // درحالی‌که فایل سر جایش است و فقط بک‌اند این فیلد را نفرستاده.
     if (!item.streamUrl) {
       set({ playing: false, failed: true })
+      scheduleNext()
       return
     }
 
@@ -641,6 +655,24 @@ export const usePlayer = create<PlayerState>((set, get) => {
       scheduleNext()
     },
 
+    replaceQueue: (items, startIndex = 0) => {
+      if (!items.length) return
+      const index = Math.max(0, Math.min(startIndex, items.length - 1))
+      const currentItem = current()
+      if (items[index]?.track.id !== currentItem?.track.id) {
+        get().play(items, index)
+        return
+      }
+      const nextItems = [...items]
+      if (currentItem) nextItems[index] = currentItem
+      historyStack = []
+      radioToken++
+      radioSeen = new Set(nextItems.map((item) => radioKey(item.track)))
+      set({ queue: nextItems, index, radioLoading: false })
+      scheduleNext()
+      save(true)
+    },
+
     toggle: () => {
       const item = current()
       if (!item) return
@@ -834,6 +866,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     },
 
     close: () => {
+      queuePrefetcher.sync([], 0)
       engine.stop()
       if (isNativeApp()) void nativeStop()
       stopPlaybackNotification()

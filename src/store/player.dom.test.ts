@@ -92,6 +92,23 @@ describe('playNext', () => {
   })
 })
 
+describe('replaceQueue', () => {
+  it('replaces the queue while keeping the currently playing item active', () => {
+    const current = makePlayItem('current')
+    const stale = makePlayItem('stale')
+    const replacementCurrent = { ...makePlayItem('current'), streamUrl: '/replacement/current' }
+    const next = makePlayItem('next')
+    usePlayer.setState({ queue: [current, stale], index: 0, playing: true })
+
+    usePlayer.getState().replaceQueue([replacementCurrent, next], 0)
+
+    expect(usePlayer.getState().queue.map((item) => item.id)).toEqual(['current', 'next'])
+    expect(usePlayer.getState().queue[0]).toBe(current)
+    expect(usePlayer.getState().index).toBe(0)
+    expect(usePlayer.getState().playing).toBe(true)
+  })
+})
+
 describe('shuffle and history navigation in usePlayer', () => {
   it('setShuffle controls shuffle mode directly', () => {
     usePlayer.setState({ shuffle: false })

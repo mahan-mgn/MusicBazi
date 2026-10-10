@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
 import time
@@ -61,7 +62,11 @@ from .config import (
     PROXY,
 )
 from .downloader import safe_name
+from .stream.feature_flags import is_stream_v2_enabled
+from .stream.playback import get_live_playback
 from .jobs import TERMINAL, manager
+
+log = logging.getLogger(__name__)
 from .models import (
     AlbumDetail,
     ArtistDetail,
@@ -1047,7 +1052,7 @@ async def stream_audio(
     """
     valid_source = (
         source
-        if source in ("apple", "deezer", "soundcloud", "spotify", "youtube")
+        if source in ("apple", "deezer", "soundcloud", "spotify", "youtube", "youtube_music")
         else "spotify"
     )
     track = Track(
@@ -1061,6 +1066,26 @@ async def stream_audio(
     )
     try:
         range_header = request.headers.get("range") if request is not None else None
+        # مسیر Stream Architecture جدید (فاز ۱۱) — فقط وقتی MUSICBAZI_STREAM_V2=ON.
+        # فایل‌های آماده کتابخانه/کش دیسک همچنان اولویت دارند (رفتار cache حفظ می‌شود)؛
+        # فقط وقتی هیچ فایلی نیست و ترک یوتیوبِ مستقیم است، resolve+پروکسی live اجرا می‌شود.
+        if is_stream_v2_enabled():
+            ready_file = await stream_cache.find_ready_file(track, quality)
+            if ready_file is None:
+                try:
+                    live = await get_live_playback().stream_response(
+                        track, range_header=range_header, quality=quality
+                    )
+                    if live is not None:
+                        return live
+                except Exception as exc:
+                    # Isolation: شکست مسیر جدید هرگز playback را خراب نمی‌کند؛
+                    # به مسیر legacy برمی‌گردیم. پیام استثنا log نمی‌شود (امنیت URL).
+                    log.warning(
+                        "v2 live playback failed for track %s (%s) — falling back to legacy path",
+                        track_id,
+                        exc.__class__.__name__,
+                    )
         return await stream_cache.get_stream_response(
             track, range_header=range_header, quality=quality
         )
@@ -1070,6 +1095,28 @@ async def stream_audio(
                 503, "اینترنت بین‌الملل در دسترس نیست و این ترک در کش ذخیره نشده است"
             ) from exc
         raise HTTPException(502, f"خطا در استریم صوت: {exc}") from exc
+
+
+@app.get("/api/stream/hls/{session_id}/manifest")
+async def hls_manifest(session_id: str):
+    """
+    manifest بازنویسی‌شده HLS برای session موجود (فاز ۱۴).
+    Signed upstream URLs فقط server-side می‌مانند؛ client فقط مسیرهای داخلی می‌بیند.
+    """
+    response = await get_live_playback().hls.serve_manifest(session_id)
+    if response is None:
+        raise HTTPException(404, "نشست HLS در دسترس نیست")
+    return response
+
+
+@app.get("/api/stream/hls/{session_id}/segment/{index}")
+async def hls_segment(session_id: str, index: int, request: Request = None):  # type: ignore[assignment]
+    """relay بایت segment/variant HLS با پشتیبانی Range (فاز ۱۴)."""
+    range_header = request.headers.get("range") if request is not None else None
+    response = await get_live_playback().hls.serve_segment(session_id, index, range_header)
+    if response is None:
+        raise HTTPException(404, "segment در دسترس نیست")
+    return response
 
 
 @app.get("/api/stream/lyrics")
@@ -1098,9 +1145,9 @@ async def stream_lyrics(
 
 @app.post("/api/stream/prefetch")
 async def stream_prefetch(req: TrackRef) -> dict:
-    """پری‌فچ ترک بعدی در پس‌زمینه برای حذف تأخیر در تعویض آهنگ."""
+    """فایل کامل ترک را در کش آماده می‌کند تا پخش هنگام نوبتش منتظر دانلود نماند."""
     if not (req.title and req.artist):
-        return {"ok": False}
+        raise HTTPException(400, "عنوان و نام هنرمند برای آماده‌سازی استریم لازم است")
 
     valid_source = (
         req.source
@@ -1116,7 +1163,15 @@ async def stream_prefetch(req: TrackRef) -> dict:
         source=valid_source,  # type: ignore[arg-type]
         sourceUrl=req.sourceUrl or f"https://musicbazi.local/track/{req.trackId}",
     )
-    asyncio.create_task(stream_cache.get_or_fetch(track, quality=req.quality))
+    try:
+        await stream_cache.get_or_fetch(track, quality=req.quality)
+    except Exception as exc:
+        log.warning(
+            "stream prefetch failed for track %s (%s)",
+            req.trackId,
+            exc.__class__.__name__,
+        )
+        raise HTTPException(502, "آماده‌سازی این ترک برای استریم ناموفق بود") from exc
     return {"ok": True}
 
 

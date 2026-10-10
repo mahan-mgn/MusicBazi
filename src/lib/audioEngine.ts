@@ -21,6 +21,8 @@
 
 export type EqPreset = 'off' | 'bass' | 'vocal' | 'treble' | 'loud'
 
+import { detachHls, maybeHlsFallback } from './hlsPlayback'
+
 /** فرکانس مرکزیِ باندها — پنج‌تایی استانداردِ اکولایزرهای مصرفی */
 export const EQ_BANDS = [60, 230, 910, 3600, 14000]
 
@@ -258,7 +260,9 @@ function attach(deck: Deck): void {
     if (el === active()?.el) {
       const err = el.error
       console.warn(`[audioEngine] playback error (code: ${err?.code}, msg: ${err?.message}) for src: ${el.src}`)
-      handlers?.onError()
+      // فاز ۱۵: اگر منبع HLS باشد (native پخش نمی‌کند)، یک‌بار fallback به hls.js
+      // امتحان می‌شود؛ ناموفق بودن آن خطای عادی playback را به بالا می‌دهد
+      void maybeHlsFallback(el, () => handlers?.onError())
     }
   })
 }
@@ -350,6 +354,7 @@ function maybeCrossfade(): void {
   const outgoing = current
   const pendingGainDb = nextSource.gainDb
   cancelPendingSeek(incoming)
+  detachHls(incoming.el)
   incoming.el.src = nextSource.src
   applyNormalize(incoming, pendingGainDb)
   if (incoming.fade) incoming.fade.gain.value = 0
@@ -377,6 +382,7 @@ function maybeCrossfade(): void {
 
       window.setTimeout(() => {
         outgoing.el.pause()
+        detachHls(outgoing.el)
         outgoing.el.removeAttribute('src')
         if (outgoing.fade) outgoing.fade.gain.value = 1
         fading = false
@@ -387,6 +393,7 @@ function maybeCrossfade(): void {
     })
     .catch(() => {
       incoming.el.pause()
+      detachHls(incoming.el)
       incoming.el.removeAttribute('src')
       if (incoming.fade) incoming.fade.gain.value = 1
       fading = false
@@ -435,6 +442,7 @@ export const engine = {
     activeGainDb = gainDb
     applyNormalize(deck, gainDb)
     cancelPendingSeek(deck)
+    detachHls(deck.el) // منبع تازه native-first شروع می‌شود (فاز ۱۵)
     deck.el.src = src
     if (at > 0) {
       // قبل از رسیدن متادیتا، currentTime بی‌اثر است
@@ -552,6 +560,7 @@ export const engine = {
     decks?.forEach((deck) => {
       cancelPendingSeek(deck)
       deck.el.pause()
+      detachHls(deck.el)
       deck.el.removeAttribute('src')
       if (deck.fade) deck.fade.gain.value = 1
     })

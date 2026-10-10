@@ -481,16 +481,18 @@ export const httpApi: MusicApi = {
     if (!res.ok) throw new Error(await errorText(res))
   },
 
-  async prefetchStream(track: Track, quality?: Quality | null) {
+  async prefetchStream(track: Track, quality?: Quality | null): Promise<boolean> {
     try {
       const q = quality ?? useSettings.getState().quality
-      await fetch(`${base()}/stream/prefetch`, {
+      const res = await fetch(`${base()}/stream/prefetch`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...trackRef(track), quality: q }),
       })
+      return res.ok
     } catch {
       // پری‌فچ بهترین تلاش است و خطایش نباید رابط کاربری را تحت تاثیر بگذارد
+      return false
     }
   },
 }
