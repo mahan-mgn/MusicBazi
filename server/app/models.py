@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-Source = Literal["apple", "deezer", "soundcloud", "spotify", "youtube"]
+Source = Literal["apple", "deezer", "soundcloud", "spotify", "youtube", "youtube_music"]
 
 # سه تا بیت‌ریت mp3، سه کدک مشخص، و «اورجینال» یعنی دست‌نخورده.
 # کدک‌های بی‌اتلاف روی منبع باکیفیتِ لاسی فقط حجم اضافه می‌کنند — ولی انتخابش با کاربر است.
@@ -53,6 +53,7 @@ class Track(BaseModel):
     # حس‌وحال‌های ناهمخوان از این دو استفاده می‌کند.
     valence: float | None = None
     energy: float | None = None
+    views: str | None = None
 
 
 class Artist(BaseModel):
@@ -70,6 +71,13 @@ class Artist(BaseModel):
     # فقط وقتی پلتفرم صریح می‌گوید حساب تأیید شده است. ساندکلاد `verified`
     # می‌دهد؛ بقیه در API فعلی ندارند و False می‌مانند — فرانت بج جعلی نمی‌سازد.
     verified: bool = False
+    description: str | None = None
+    handle: str | None = None
+    bannerUrl: str | None = None
+    subscriberCount: str | None = None
+    videoCount: int | None = None
+    viewCount: str | None = None
+    monthlyListeners: str | None = None
 
 
 class Album(BaseModel):
@@ -162,6 +170,10 @@ class ArtistDetail(Artist):
 
     topTracks: list[Track] = Field(default_factory=list)
     albums: list[Album] = Field(default_factory=list)
+    # تفکیک تک‌آهنگ‌ها/EPها برای کاتالوگ دقیق (یوتیوب موزیک و ساندکلاد)
+    singles: list[Album] = Field(default_factory=list)
+    # ویدیوهای رسمی هنرمند (یوتیوب موزیک و کانال یوتیوب)
+    videos: list[Track] = Field(default_factory=list)
     # فقط دیزر دارد (/artist/{id}/related,radio,playlists). بقیه‌ی پلتفرم‌ها
     # این سه فهرست را خالی می‌گذارند.
     related: list[Artist] = Field(default_factory=list)

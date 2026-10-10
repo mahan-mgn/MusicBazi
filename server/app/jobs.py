@@ -150,7 +150,7 @@ def _substitution(track: Track, used: resolver.Candidate | None) -> str | None:
     برای ترک‌های اپل/دیزر/اسپاتیفای بی‌معنی است: آن‌ها اصلاً فایل صوتی ندارند
     و `sourceUrl` شان صفحه‌ی کاتالوگ است، پس هر دانلودی «جایگزین» است.
     """
-    if used is None or track.source not in ("youtube", "soundcloud"):
+    if used is None or track.source not in ("youtube", "youtube_music", "soundcloud"):
         return None
     if not track.sourceUrl or used.url == track.sourceUrl:
         return None

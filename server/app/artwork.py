@@ -84,6 +84,10 @@ def resized(url: str | None, size: int = DISPLAY) -> str | None:
         return _SOUNDCLOUD.sub(f"-{tail}.\\1", url)
 
     if _GOOGLE.search(url):
+        # اگر نسبت عرض به ارتفاع متفاوت باشد (مانند بنر عریض)، ابعاد دست‌نخورده می‌ماند
+        if m_dim := re.search(r"=w(\d+)-h(\d+)", url):
+            if int(m_dim.group(1)) != int(m_dim.group(2)):
+                return url
         # `-l90-rj` یعنی کیفیت ۹۰ و خروجی jpeg — نگهش می‌داریم
         return _GOOGLE.sub(lambda m: f"=w{size}-h{size}{m.group(1) or ''}", url)
 

@@ -35,9 +35,12 @@ import type {
   ArtistDetail,
   Playlist,
   SearchResults as Results,
+  Source,
   Track,
+  ArtistDiscographyContext,
 } from './lib/types'
 import { findBestJob, toPlayItem } from './lib/stream'
+import { tracksFromSelectedDiscography } from './lib/artistDiscography'
 import { isDone, useDownloads } from './store/downloads'
 import { usePlayer } from './store/player'
 import { usePreview } from './lib/usePreview'
@@ -68,7 +71,7 @@ const StatsView = lazy(() => import('./components/StatsView'))
 type View =
   | { kind: 'home' }
   | { kind: 'results'; query: string }
-  | { kind: 'album'; ref: string; from?: string }
+  | { kind: 'album'; ref: string; from?: string; artistDiscography?: ArtistDiscographyContext }
   | { kind: 'artist'; ref: string; from?: string }
   | { kind: 'library'; tab?: 'playlists' | 'liked' }
   | { kind: 'stats' }
@@ -83,7 +86,26 @@ function viewFromLocation(): View {
   const artist = p.get('artist')
   if (artist) return { kind: 'artist', ref: artist, from: p.get('q') ?? undefined }
   const url = p.get('url')
-  if (url) return { kind: 'album', ref: url, from: p.get('q') ?? undefined }
+  if (url) {
+    const artistRef = p.get('discArtist')
+    const releasesParam = p.get('discReleases')
+    const discSource = p.get('discSource')
+    let artistDiscography: ArtistDiscographyContext | undefined
+    if (artistRef && releasesParam) {
+      try {
+        const releases = JSON.parse(releasesParam) as ArtistDiscographyContext['releases']
+        const source = ['apple', 'deezer', 'soundcloud', 'spotify', 'youtube', 'youtube_music'].includes(discSource ?? '')
+          ? (discSource as Source)
+          : undefined
+        if (Array.isArray(releases) && releases.every((r) => r && typeof r.id === 'string' && typeof r.title === 'string')) {
+          artistDiscography = { artistRef, source, releases }
+        }
+      } catch {
+        // Ignore malformed optional navigation context and keep standard album playback.
+      }
+    }
+    return { kind: 'album', ref: url, from: p.get('q') ?? undefined, artistDiscography }
+  }
   const q = p.get('q')
   if (q) return { kind: 'results', query: q }
   return { kind: 'home' }
@@ -97,11 +119,121 @@ function pushView(view: View, replace = false) {
   if (view.kind === 'album' || view.kind === 'artist') {
     p.set(view.kind === 'album' ? 'url' : 'artist', view.ref)
     if (view.from) p.set('q', view.from)
+    if (view.kind === 'album' && view.artistDiscography) {
+      p.set('discArtist', view.artistDiscography.artistRef)
+      if (view.artistDiscography.source) p.set('discSource', view.artistDiscography.source)
+      p.set('discReleases', JSON.stringify(view.artistDiscography.releases))
+    }
   }
   const qs = p.toString()
   const url = qs ? `/?${qs}` : '/'
   if (replace) history.replaceState(null, '', url)
   else history.pushState(null, '', url)
+}
+
+const artistDiscographyRequests = new Map<string, Promise<Track[]>>()
+const completeArtistDiscographies = new Map<string, Promise<Track[]>>()
+
+function discographyContextKey(context: ArtistDiscographyContext): string {
+  return `${context.source ?? ''}:${context.artistRef}:${context.releases.map((release) => release.id).join(',')}`
+}
+
+function fetchArtistDiscography(context: ArtistDiscographyContext): Promise<Track[]> {
+  const key = discographyContextKey(context)
+  const cached = artistDiscographyRequests.get(key)
+  if (cached) return cached
+  const request = api.getArtistDiscography(context.artistRef).catch((error) => {
+    artistDiscographyRequests.delete(key)
+    throw error
+  })
+  artistDiscographyRequests.set(key, request)
+  return request
+}
+
+async function fetchDiscographyReleaseTracks(
+  context: ArtistDiscographyContext,
+  selectedTrackId: string,
+): Promise<Track[]> {
+  const tracks = await fetchCompleteArtistDiscography(context)
+  return tracksFromSelectedDiscography(tracks, context.releases, selectedTrackId, context.source)
+}
+
+function fetchCompleteArtistDiscography(context: ArtistDiscographyContext): Promise<Track[]> {
+  const key = discographyContextKey(context)
+  const cached = completeArtistDiscographies.get(key)
+  if (cached) return cached
+
+  const request = (async () => {
+    let tracks: Track[] = []
+    try {
+      tracks = await fetchArtistDiscography(context)
+    } catch {
+      // Fill missing releases individually below.
+    }
+
+    const releaseIds = new Set(context.releases.map((release) => release.id))
+    const releaseNames = new Map(
+      context.releases.map((release) => [release.title.trim().toLocaleLowerCase(), release.id]),
+    )
+    const releaseIdForTrack = (track: Track) => {
+      if (context.source && track.source !== context.source) return undefined
+      return (
+        (track.source === 'soundcloud' && releaseIds.has(track.id) ? track.id : undefined) ??
+        (track.albumId && releaseIds.has(track.albumId) ? track.albumId : undefined) ??
+        (track.album ? releaseNames.get(track.album.trim().toLocaleLowerCase()) : undefined)
+      )
+    }
+    if (context.source) tracks = tracks.filter((track) => track.source === context.source)
+    const releaseTrackIds = new Map<string, Set<string>>()
+    for (const track of tracks) {
+      const releaseId = releaseIdForTrack(track)
+      if (releaseId) {
+        const ids = releaseTrackIds.get(releaseId) ?? new Set<string>()
+        ids.add(track.id)
+        releaseTrackIds.set(releaseId, ids)
+      }
+    }
+
+    const required = context.releases.filter(
+      (release) => (releaseTrackIds.get(release.id)?.size ?? 0) < Math.max(1, release.trackCount ?? 0),
+    )
+    if (required.length) {
+      const requiredIds = new Set(required.map((release) => release.id))
+      const details: Array<Track[]> = new Array(required.length)
+      let nextIndex = 0
+      const worker = async () => {
+        while (nextIndex < required.length) {
+          const index = nextIndex++
+          try {
+            const detail = await api.getAlbum(required[index].id)
+            details[index] = context.source && detail.source !== context.source
+              ? []
+              : detail.tracks.filter((track) => !context.source || track.source === context.source)
+          } catch {
+            details[index] = []
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(4, required.length) }, worker))
+      tracks = tracks.filter((track) => !requiredIds.has(releaseIdForTrack(track) ?? ''))
+      const seen = new Set(tracks.map((track) => track.id))
+      for (const releaseTracks of details) {
+        for (const track of releaseTracks) {
+          if (track.id && !seen.has(track.id)) {
+            seen.add(track.id)
+            tracks.push(track)
+          }
+        }
+      }
+    }
+
+    return tracks
+  })().catch((error) => {
+    completeArtistDiscographies.delete(key)
+    throw error
+  })
+  completeArtistDiscographies.set(key, request)
+  return request
 }
 
 /**
@@ -207,21 +339,40 @@ export default function App() {
   const playingTrackId = isPlaying ? currentTrackId ?? null : null
 
   const handlePlayTrack = useCallback(
-    (track: Track, contextTracks?: Track[]) => {
+    (track: Track, contextTracks?: Track[], artistDiscography?: ArtistDiscographyContext) => {
       preview.stop()
-      if (currentTrackId === track.id) {
-        usePlayer.getState().toggle()
-        return
-      }
       const tracks = contextTracks && contextTracks.length > 0 ? contextTracks : [track]
       const startIndex = Math.max(0, tracks.findIndex((t) => t.id === track.id))
-      const quality = useSettings.getState().quality
-      const readyJobs = useDownloads.getState().jobs.filter((j) => isDone(j.status))
-      const items = tracks.map((t) => {
-        const job = findBestJob(readyJobs, t.id, quality)
-        return toPlayItem(t, job, quality)
-      })
-      usePlayer.getState().play(items, startIndex)
+      const player = usePlayer.getState()
+      if (artistDiscography) player.setShuffle(false)
+      if (currentTrackId === track.id) {
+        player.toggle()
+      } else {
+        const quality = useSettings.getState().quality
+        const readyJobs = useDownloads.getState().jobs.filter((j) => isDone(j.status))
+        const items = tracks.map((t) => {
+          const job = findBestJob(readyJobs, t.id, quality)
+          return toPlayItem(t, job, quality)
+        })
+        player.play(items, startIndex)
+      }
+
+      if (artistDiscography) {
+        void fetchDiscographyReleaseTracks(artistDiscography, track.id).then((remainingTracks) => {
+          if (!remainingTracks.length) return
+          const activeTrackId = usePlayer.getState().queue[usePlayer.getState().index]?.track.id
+          const activeIndex = remainingTracks.findIndex((item) => item.id === activeTrackId)
+          if (activeIndex < 0) return
+
+          const quality = useSettings.getState().quality
+          const readyJobs = useDownloads.getState().jobs.filter((job) => isDone(job.status))
+          const items = remainingTracks.slice(activeIndex).map((item) => {
+            const job = findBestJob(readyJobs, item.id, quality)
+            return toPlayItem(item, job, quality)
+          })
+          usePlayer.getState().replaceQueue(items, 0)
+        }).catch(() => {})
+      }
     },
     [currentTrackId, preview],
   )
@@ -483,8 +634,10 @@ export default function App() {
   const searchOrigin = () =>
     view.kind === 'results' ? view.query : 'from' in view ? view.from : undefined
 
-  const openAlbum = (a: Album) =>
-    navigate({ kind: 'album', ref: a.sourceUrl || a.id, from: searchOrigin() })
+  const openAlbum = (a: Album, artistDiscography?: ArtistDiscographyContext) => {
+    if (artistDiscography) void fetchCompleteArtistDiscography(artistDiscography).catch(() => {})
+    navigate({ kind: 'album', ref: a.sourceUrl || a.id, from: searchOrigin(), artistDiscography })
+  }
 
   // پلی‌لیست هم همان قالبِ AlbumDetail را از بک‌اند می‌گیرد (resolve_ref آن را
   // می‌شناسد)، پس همان ویوی «album» را باز می‌کند — بدون این، کلیک روی پلی‌لیست
@@ -757,7 +910,7 @@ export default function App() {
                 <AlbumView
                   album={enrichedAlbum}
                   playingId={playingTrackId}
-                  onTogglePlay={(t) => handlePlayTrack(t, enrichedAlbum.tracks)}
+                  onTogglePlay={(t) => handlePlayTrack(t, enrichedAlbum.tracks, view.artistDiscography)}
                   onOpenAlbum={openAlbum}
                   onOpenArtist={openArtistRef}
                   onBack={back}

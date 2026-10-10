@@ -11,8 +11,8 @@ from typing import Any
 from yt_dlp import YoutubeDL
 
 from .. import ydl
-from ..config import PROXY
-from ..models import AlbumDetail, ArtistDetail, Playlist, Source, Track
+from ..config import PROXY, YOUTUBE_ENABLED
+from ..models import Album, AlbumDetail, Artist, ArtistDetail, Playlist, SearchResults, Source, Track
 from . import soundcloud
 
 YOUTUBE_URL = re.compile(r"(youtube\.com|youtu\.be)", re.I)
@@ -41,6 +41,8 @@ def _flat_opts() -> dict:
 def _source_of(url: str) -> Source:
     if SOUNDCLOUD_URL.search(url):
         return "soundcloud"
+    if "music.youtube.com" in url.lower():
+        return "youtube_music"
     return "youtube"
 
 
@@ -96,10 +98,16 @@ def _entry_to_track(entry: dict[str, Any], source: Source, album: str | None) ->
 
     vid = entry.get("id") or ""
     source_url = entry.get("webpage_url") or entry.get("url") or ""
+    if source == "youtube" and vid and not source_url.startswith("http"):
+        source_url = f"https://www.youtube.com/watch?v={vid}"
+    elif source == "youtube_music" and vid and not source_url.startswith("http"):
+        source_url = f"https://music.youtube.com/watch?v={vid}"
 
     uploader_id = entry.get("uploader_id") or entry.get("user_id")
     if source == "soundcloud" and uploader_id:
         artist_id = f"sc:artist:{uploader_id}"
+    elif source == "youtube_music" and entry.get("channel_id"):
+        artist_id = f"ytm:artist:{entry.get('channel_id')}"
     elif source == "youtube" and entry.get("channel_id"):
         artist_id = f"yt:artist:{entry.get('channel_id')}"
     else:
@@ -107,9 +115,13 @@ def _entry_to_track(entry: dict[str, Any], source: Source, album: str | None) ->
 
     set_id = entry.get("set_id")
     album_id = f"sc:playlist:{set_id}" if (source == "soundcloud" and set_id) else None
+    id_prefix = "sc" if source == "soundcloud" else "ytm" if source == "youtube_music" else "yt"
+
+    views_num = entry.get("view_count")
+    views_str = f"{views_num:,} بازدید" if views_num else None
 
     return Track(
-        id=f"{'sc' if source == 'soundcloud' else 'yt'}:track:{vid}",
+        id=f"{id_prefix}:track:{vid}",
         title=title or raw or _title_from_url(source_url),
         artist=soundcloud.clean_artist(artist or uploader or "ناشناس"),
         album=album or entry.get("album"),
@@ -122,6 +134,7 @@ def _entry_to_track(entry: dict[str, Any], source: Source, album: str | None) ->
         year=_track_year(entry),
         artistId=artist_id,
         trackNumber=track_num or entry.get("track_number"),
+        views=views_str,
     )
 
 
@@ -132,6 +145,116 @@ def soundcloud_search(query: str) -> list[Track]:
     «هنرمند - عنوان» را جدا می‌کند. عنوان ساندکلاد تقریباً همیشه همین شکل است.
     """
     return [_entry_to_track(e, "soundcloud", None) for e in soundcloud.search_tracks(query)]
+
+
+def youtube_enabled() -> bool:
+    """آیا کاتالوگ یوتیوب در جستجو فعال است؟"""
+    return YOUTUBE_ENABLED
+
+
+def _is_channel_artist_match(cname: str, track_artist: str, query: str, is_verified: bool = False) -> bool:
+    """
+    بررسی تطابق نام کانال با هنرمند یا کوئری کاربر.
+    کانال‌های متفرقه، گردآورنده، رقص یا متن آهنگ (مثل 7clouds یا yazou2011) نباید به عنوان هنرمند ثبت شوند.
+    """
+    if not cname:
+        return False
+    cn = re.sub(r"(\s*-\s*Topic|\s*VEVO)$", "", cname, flags=re.IGNORECASE).strip().lower()
+    art = track_artist.strip().lower()
+    q = query.strip().lower()
+
+    c_clean = re.sub(r"[\s_.-]+", "", cn)
+    art_clean = re.sub(r"[\s_.-]+", "", art)
+    q_clean = re.sub(r"[\s_.-]+", "", q)
+
+    is_official_channel = is_verified or cname.endswith(("- Topic", "VEVO"))
+
+    # ۱. آیا نام کانال با عبارت جستجو هم‌پوشانی دارد؟
+    if c_clean and q_clean and (c_clean == q_clean or c_clean in q_clean or q_clean in c_clean):
+        return True
+
+    # ۲. آیا کانال رسمی/تأییدشده است و نامش با هنرمند اثر تطابق دارد؟
+    if is_official_channel and c_clean and art_clean and (c_clean == art_clean or c_clean in art_clean or art_clean in c_clean):
+        return True
+
+    return False
+
+
+def youtube_search(query: str, limit: int = 15) -> SearchResults:
+    """
+    جستجوی یوتیوب با yt-dlp.
+    هر ورودی به Track با منبع 'youtube' نگاشت می‌شود و کانال‌های رسمی و منطبق
+    نیز به‌عنوان Artist استخراج می‌شوند (تفکیک کانال ناشر از هنرمند).
+    """
+    q = query.strip()
+    if not q:
+        return SearchResults(query=query)
+
+    opts = ydl.opts(
+        skip_download=True,
+        extract_flat="in_playlist",
+        ignoreerrors=True,
+        socket_timeout=10,
+    )
+    with YoutubeDL(opts) as y:
+        info = y.extract_info(f"ytsearch{limit}:{q}", download=False)
+
+    entries = (info or {}).get("entries") or []
+    tracks: list[Track] = []
+    artists: list[Artist] = []
+    seen_channels: set[str] = set()
+
+    for e in entries:
+        if not e:
+            continue
+
+        is_tab = e.get("ie_key") == "YoutubeTab"
+        if is_tab:
+            cid = e.get("id") or e.get("channel_id")
+            cname = e.get("title") or e.get("channel") or e.get("uploader")
+            avatar = _best_thumb(e)
+            if cid and cname and cid not in seen_channels:
+                seen_channels.add(cid)
+                artists.append(
+                    Artist(
+                        id=f"yt:artist:{cid}",
+                        name=cname,
+                        artworkUrl=avatar,
+                        source="youtube",
+                        sourceUrl=e.get("url") or f"https://www.youtube.com/channel/{cid}",
+                        subtitle="یوتیوب",
+                        kind="artist",
+                        verified=bool(e.get("channel_is_verified")),
+                    )
+                )
+            continue
+
+        try:
+            track = _entry_to_track(e, "youtube", None)
+            tracks.append(track)
+        except Exception:
+            continue
+
+        cid = e.get("channel_id")
+        cname = e.get("channel") or e.get("uploader")
+        is_verified = bool(e.get("channel_is_verified"))
+        if cid and cname and cid not in seen_channels:
+            if _is_channel_artist_match(cname, track.artist, q, is_verified):
+                seen_channels.add(cid)
+                artists.append(
+                    Artist(
+                        id=f"yt:artist:{cid}",
+                        name=cname,
+                        artworkUrl=_best_thumb(e),
+                        source="youtube",
+                        sourceUrl=e.get("channel_url") or f"https://www.youtube.com/channel/{cid}",
+                        subtitle="یوتیوب",
+                        kind="artist",
+                        verified=is_verified,
+                    )
+                )
+
+    return SearchResults(query=query, tracks=tracks, artists=artists)
 
 
 def soundcloud_artist(user_id: str) -> ArtistDetail | None:
@@ -208,10 +331,10 @@ def soundcloud_user(url: str) -> ArtistDetail | None:
     return soundcloud_artist(user_id) if user_id else None
 
 
-# صفحه‌ی کانال: چند ویدیوی تازه، و همه‌ی پلی‌لیست‌ها. ویدیوها سقف دارند چون
-# کانالِ بزرگ چند هزارتا دارد و استخراجِ تختِ همه‌شان دقیقه‌ها طول می‌کشد.
-CHANNEL_TRACKS = 30
-CHANNEL_PLAYLISTS = 60
+# صفحه‌ی کانال: چند ویدیوی تازه، انتشارهای رسمی، و همه‌ی پلی‌لیست‌ها.
+CHANNEL_TRACKS = 50
+CHANNEL_RELEASES = 60
+CHANNEL_PLAYLISTS = 40
 
 
 def _channel_tab(url: str, limit: int) -> dict[str, Any] | None:
@@ -253,6 +376,18 @@ def _channel_avatar(info: dict[str, Any]) -> str | None:
     return max(square, key=lambda t: t["width"])["url"] if square else None
 
 
+def _channel_banner(info: dict[str, Any]) -> str | None:
+    """بنر عریض و پانورامای بالای کانال یوتیوب."""
+    thumbs = [t for t in (info.get("thumbnails") or []) if t.get("url")]
+    banner = next((t for t in thumbs if "banner" in str(t.get("id") or "").lower()), None)
+    if banner:
+        return banner["url"]
+    wide = [t for t in thumbs if t.get("width") and t.get("height") and t["width"] >= t["height"] * 1.8]
+    if wide:
+        return max(wide, key=lambda t: t["width"])["url"]
+    return None
+
+
 def _channel_playlist(entry: dict[str, Any], owner: str) -> Playlist | None:
     if not entry.get("id"):
         return None
@@ -270,44 +405,112 @@ def _channel_playlist(entry: dict[str, Any], owner: str) -> Playlist | None:
 
 def youtube_channel(url: str) -> ArtistDetail | None:
     """
-    صفحه‌ی یک کانال: ویدیوهای تازه‌اش به‌علاوه‌ی پلی‌لیست‌های عمومی‌اش.
-
-    یوتیوب هم مثل ساندکلاد بین «هنرمند» و «کاربر» فرقی نمی‌گذارد؛ کانالی که
-    هیچ ویدیویی ندارد و فقط پلی‌لیست جمع کرده، صفحه‌اش صفحه‌ی کاربر است.
-
-    بدون این، لینکِ کانال به `extract` می‌رفت و همه‌ی ویدیوهایش به شکل یک
-    «آلبوم» برمی‌گشت — و پلی‌لیست‌هایش، که تمامِ محتوای چنین کانالی‌اند، اصلاً
-    دیده نمی‌شدند.
+    صفحه‌ی یک کانال: ویدیوهای تازه، آلبوم‌ها/انتشارهای رسمی (تب Releases)، و پلی‌لیست‌ها.
     """
     if not (m := CHANNEL_URL.search(url)):
         return None
     root = f"https://www.{m.group(0)}"
 
     videos = _channel_tab(f"{root}/videos", CHANNEL_TRACKS)
+    releases = _channel_tab(f"{root}/releases", CHANNEL_RELEASES)
     lists = _channel_tab(f"{root}/playlists", CHANNEL_PLAYLISTS)
-    head = videos or lists
+    head = videos or releases or lists
     if not head:
         return None
 
     name = head.get("channel") or head.get("uploader") or _title_from_url(root)
+    channel_id = head.get("channel_id") or ""
     tracks = [
         _entry_to_track(e, "youtube", None) for e in (videos or {}).get("entries") or [] if e
     ]
     playlists = [
         p for e in (lists or {}).get("entries") or [] if e and (p := _channel_playlist(e, name))
     ]
+    albums = [
+        Album(
+            id=f"yt:playlist:{e['id']}",
+            title=e.get("title") or "بدون عنوان",
+            artist=name,
+            year=0,
+            trackCount=int(e.get("playlist_count") or 0),
+            artworkUrl=_best_thumb(e),
+            source="youtube",
+            sourceUrl=e.get("url") or f"https://www.youtube.com/playlist?list={e['id']}",
+            artistId=f"yt:artist:{channel_id}" if channel_id else None,
+            releaseType="album",
+        )
+        for e in (releases or {}).get("entries") or []
+        if e and e.get("id")
+    ]
 
     followers = int(head.get("channel_follower_count") or 0)
+    avatar = _channel_avatar(head)
+    banner = _channel_banner(head)
+
+    # استخراج هندل
+    handle: str | None = None
+    if m_handle := re.search(r"(@[\w.\-]+)", url):
+        handle = m_handle.group(1)
+    elif uploader_id := head.get("uploader_id"):
+        handle = f"@{uploader_id.lstrip('@')}"
+
+    # تکمیل آرت‌ورک و متادیتای آلبوم‌های یوتیوب از روی کاتالوگ متناظر YouTube Music
+    singles: list[Album] = []
+    if channel_id and albums:
+        try:
+            from . import youtube_music
+            ytm_art = youtube_music.get_artist(channel_id)
+            if ytm_art and ytm_art.albums:
+                art_map = {a.title.strip().lower(): a for a in ytm_art.albums}
+                for a in albums:
+                    match = art_map.get(a.title.strip().lower())
+                    if match and match.artworkUrl:
+                        a.artworkUrl = match.artworkUrl
+                        if match.year:
+                            a.year = match.year
+                        if match.releaseType:
+                            a.releaseType = match.releaseType
+                        if match.trackCount and match.trackCount > a.trackCount:
+                            a.trackCount = match.trackCount
+                singles = [a for a in albums if a.releaseType == "single"]
+        except Exception:
+            pass
+
+        track_art_map = {t.title.strip().lower(): t.artworkUrl for t in tracks if t.artworkUrl}
+        for a in albums:
+            if not a.artworkUrl:
+                a_clean = a.title.strip().lower()
+                for t_title, art_url in track_art_map.items():
+                    if a_clean in t_title or t_title in a_clean:
+                        a.artworkUrl = art_url
+                        break
+            if not a.artworkUrl and avatar:
+                a.artworkUrl = avatar
+
+    if not singles:
+        singles = [a for a in albums if a.trackCount == 1 or a.releaseType == "single"]
+
+    subs_text = f"{followers:,} دنبال‌کننده" if followers else None
+    is_artist = bool(tracks or albums or "topic" in name.lower())
+
     return ArtistDetail(
-        id=f"yt:{'artist' if tracks else 'user'}:{head.get('channel_id') or ''}",
+        id=f"yt:{'artist' if is_artist else 'user'}:{channel_id}",
         name=name,
-        artworkUrl=_channel_avatar(head),
+        artworkUrl=avatar,
         source="youtube",
         sourceUrl=head.get("channel_url") or root,
-        subtitle=f"{followers:,} دنبال‌کننده" if followers else "یوتیوب",
-        kind="artist" if tracks else "user",
+        subtitle=subs_text or "یوتیوب",
+        kind="artist" if is_artist else "user",
         topTracks=tracks,
+        videos=tracks,
+        albums=albums,
+        singles=singles,
         playlists=playlists,
+        description=head.get("description"),
+        handle=handle,
+        bannerUrl=banner,
+        subscriberCount=subs_text,
+        videoCount=len(tracks),
     )
 
 
@@ -396,8 +599,19 @@ def extract(url: str) -> AlbumDetail | None:
     else:
         release_type = "single"
 
+    id_prefix = "sc" if source == "soundcloud" else "ytm" if source == "youtube_music" else "yt"
+    artist_id = (
+        f"ytm:artist:{channel_id}"
+        if source == "youtube_music" and channel_id
+        else f"yt:artist:{channel_id}"
+        if source == "youtube" and channel_id
+        else f"sc:artist:{channel_id}"
+        if source == "soundcloud" and channel_id
+        else None
+    )
+
     return AlbumDetail(
-        id=f"{'sc' if source == 'soundcloud' else 'yt'}:{kind}:{info.get('id') or ''}",
+        id=f"{id_prefix}:{kind}:{info.get('id') or ''}",
         title=title,
         artist=soundcloud.clean_artist(info.get("uploader") or info.get("channel") or (tracks[0].artist if tracks else "")),
         year=_year(info.get("release_year") or info.get("upload_date")),
@@ -405,13 +619,7 @@ def extract(url: str) -> AlbumDetail | None:
         trackCount=len(tracks),
         source=source,
         sourceUrl=info.get("webpage_url") or url,
-        artistId=(
-            f"yt:artist:{channel_id}"
-            if source == "youtube" and channel_id
-            else f"sc:artist:{channel_id}"
-            if source == "soundcloud" and channel_id
-            else None
-        ),
+        artistId=artist_id,
         artistArtworkUrl=avatar,
         durationMs=sum(t.durationMs for t in tracks),
         tracks=tracks,

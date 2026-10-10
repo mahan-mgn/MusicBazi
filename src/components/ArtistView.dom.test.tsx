@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
+import { useI18n } from '../lib/i18n'
 import type { AlbumDetail, ArtistDetail, Track } from '../lib/types'
 import { useDownloads } from '../store/downloads'
 import { usePlayer } from '../store/player'
@@ -88,6 +89,7 @@ describe('ArtistView', () => {
     useDownloads.setState({
       jobs: [],
     })
+    useI18n.getState().setLang('fa')
   })
 
   afterEach(() => {
@@ -96,6 +98,7 @@ describe('ArtistView', () => {
     useDownloads.setState({
       jobs: [],
     })
+    useI18n.getState().setLang('fa')
     vi.restoreAllMocks()
   })
 
@@ -1373,5 +1376,359 @@ describe('ArtistView', () => {
     expect(useDownloads.getState().jobs.some((j) => j.track.title === 'Track D3')).toBe(true)
 
     discoSpy.mockRestore()
+  })
+
+  describe('English localization (zero Persian text)', () => {
+    beforeEach(() => {
+      act(() => {
+        useI18n.getState().setLang('en')
+      })
+    })
+
+    it('renders Spotify/Apple artist view with zero Persian text in English mode', () => {
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={{
+              ...mockArtist,
+              subtitle: '13 آلبوم',
+            }}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      expect(container.textContent).toContain('13 albums')
+      expect(container.textContent).toContain('Discography')
+      expect(container.textContent).toContain('Popular Songs')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('shows English empty state messages when discography filter has no releases', () => {
+      const singlesOnlyArtist: ArtistDetail = {
+        ...mockArtist,
+        albums: [
+          {
+            id: 'sp:album:s1',
+            title: 'Only Single',
+            artist: 'Artist',
+            year: 2024,
+            trackCount: 1,
+            artworkUrl: null,
+            source: 'spotify',
+            sourceUrl: 'https://open.spotify.com/album/s1',
+            releaseType: 'single',
+          },
+        ],
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={singlesOnlyArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      const albumsChip = Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'Albums',
+      )
+      act(() => {
+        albumsChip?.click()
+      })
+
+      expect(container.textContent).toContain('No albums available for this artist.')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+
+      // Test singles empty state
+      const albumsOnlyArtist: ArtistDetail = {
+        ...mockArtist,
+        albums: [
+          {
+            id: 'sp:album:a1',
+            title: 'Full Album',
+            artist: 'Artist',
+            year: 2024,
+            trackCount: 10,
+            artworkUrl: null,
+            source: 'spotify',
+            sourceUrl: 'https://open.spotify.com/album/a1',
+            releaseType: 'album',
+          },
+        ],
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={albumsOnlyArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      const singlesChip = Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'Singles & EPs',
+      )
+      act(() => {
+        singlesChip?.click()
+      })
+
+      expect(container.textContent).toContain('No singles or EPs available for this artist.')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('renders YouTube channel without Persian text across tabs and views', () => {
+      const ytArtist: ArtistDetail = {
+        ...mockArtist,
+        source: 'youtube',
+        handle: '@shervin',
+        subscriberCount: '1,200 دنبال‌کننده',
+        videoCount: 42,
+        subtitle: 'یوتیوب',
+        description: 'Official music channel',
+        videos: [
+          {
+            ...createTrack('v-1', 'Baraye Official Video'),
+            views: '1,500,000 بازدید',
+          },
+        ],
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={ytArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      // Home tab with video
+      expect(container.textContent).toContain('1,500,000 views')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+
+      // About tab
+      const aboutTabBtn = Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'About',
+      )
+      act(() => {
+        aboutTabBtn?.click()
+      })
+
+      expect(container.textContent).toContain('Handle')
+      expect(container.textContent).toContain('Subscribers')
+      expect(container.textContent).toContain('Videos')
+      expect(container.textContent).toContain('1,200 subscribers')
+      expect(container.textContent).toContain('42 videos')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('renders YouTube Music categories and views with zero Persian text', () => {
+      const ytmArtist: ArtistDetail = {
+        ...mockArtist,
+        source: 'youtube_music',
+        subtitle: 'YouTube Music',
+        videos: [
+          {
+            ...createTrack('ytm-v-1', 'Music Video'),
+            views: '250,000 بازدید',
+          },
+        ],
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={ytmArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      expect(container.textContent).toContain('All')
+      expect(container.textContent).toContain('Songs')
+      expect(container.textContent).toContain('Albums')
+      expect(container.textContent).toContain('Singles & EPs')
+      expect(container.textContent).toContain('Music Videos')
+      expect(container.textContent).toContain('250,000 views')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('renders SoundCloud artist with reposts, likes, and translated subtitle with zero Persian text', () => {
+      const scArtist: ArtistDetail = {
+        ...mockArtist,
+        source: 'soundcloud',
+        subtitle: '2,100 دنبال‌کننده',
+        likedTracks: [createTrack('sc-l-1', 'Liked Song')],
+        repostedTracks: [createTrack('sc-r-1', 'Reposted Song')],
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={scArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      expect(container.textContent).toContain('2,100 followers')
+      expect(container.textContent).toContain('Top Tracks')
+      expect(container.textContent).toContain('Liked')
+      expect(container.textContent).toContain('Reposted')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('renders Deezer artist with radio and related artists without Persian text', () => {
+      const deezerArtist: ArtistDetail = {
+        ...mockArtist,
+        source: 'deezer',
+        subtitle: '89,400 دنبال‌کننده',
+        radio: [createTrack('dz-rad-1', 'Radio Song')],
+        related: [
+          {
+            id: 'dz:art:2',
+            name: 'Related Artist',
+            source: 'deezer',
+            sourceUrl: 'https://deezer.com/artist/2',
+            subtitle: '5 آلبوم',
+            kind: 'artist',
+          },
+        ],
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={deezerArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      expect(container.textContent).toContain('89,400 followers')
+      expect(container.textContent).toContain('Radio')
+      expect(container.textContent).toContain('Related Artists')
+      expect(container.textContent).toContain('5 albums')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('renders About Artist modal with zero Persian text in English mode', () => {
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={{
+              ...mockArtist,
+              subtitle: '13 آلبوم',
+            }}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      const aboutBtn = container.querySelector('button[aria-label="About Artist"]') as HTMLButtonElement
+      expect(aboutBtn).not.toBeNull()
+      act(() => {
+        aboutBtn.click()
+      })
+
+      const dialog = container.querySelector('div[role="dialog"]')
+      expect(dialog).not.toBeNull()
+      expect(aboutBtn.getAttribute('aria-label')).toBe('About Artist')
+      expect(dialog?.textContent).toContain('13 albums')
+      expect(dialog?.textContent).toContain('Albums')
+      expect(dialog?.textContent).toContain('Popular Songs')
+      expect(dialog?.textContent).toContain('In Your Library')
+      expect(dialog?.textContent).toContain('Quality')
+      expect(dialog?.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('omits circular avatar when artist has bannerUrl and artworkUrl is identical to bannerUrl', () => {
+      const bannerArtist: ArtistDetail = {
+        ...mockArtist,
+        source: 'youtube_music',
+        bannerUrl: 'https://lh3.googleusercontent.com/banner=w1440-h600',
+        artworkUrl: 'https://lh3.googleusercontent.com/banner=w544-h544',
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={bannerArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      // The circular avatar wrapper has class 'group/avatar'
+      expect(container.querySelector('.group\\/avatar')).toBeNull()
+      // Banner is rendered
+      const bannerImg = container.querySelector('img[src="https://lh3.googleusercontent.com/banner=w1440-h600"]')
+      expect(bannerImg).not.toBeNull()
+    })
+
+    it('renders circular avatar when artist has distinct square avatar and bannerUrl', () => {
+      const distinctArtist: ArtistDetail = {
+        ...mockArtist,
+        source: 'youtube_music',
+        bannerUrl: 'https://lh3.googleusercontent.com/banner=w1440-h600',
+        artworkUrl: 'https://yt3.googleusercontent.com/avatar=s544-c',
+      }
+
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={distinctArtist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      expect(container.querySelector('.group\\/avatar')).not.toBeNull()
+      const avatarImg = container.querySelector('img[src="https://yt3.googleusercontent.com/avatar=s544-c"]')
+      expect(avatarImg).not.toBeNull()
+    })
   })
 })

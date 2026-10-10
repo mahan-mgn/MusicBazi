@@ -570,7 +570,7 @@ export default function AlbumView({
       </div>
 
       {/* یک لینکِ یوتیوب که فقط «یک ترک» است اگر چپتر داشته باشد، تکه‌اش می‌کند */}
-      {album.tracks.length === 1 && album.source === 'youtube' && album.sourceUrl && (
+      {album.tracks.length === 1 && (album.source === 'youtube' || album.source === 'youtube_music') && album.sourceUrl && (
         <div className="mb-4 border-b border-line-soft py-3">
           <SplitPanel url={album.sourceUrl} />
         </div>

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import re
 import time
 from html import unescape
@@ -28,6 +29,8 @@ from ..config import (
     SPOTIFY_TOKEN_URL,
 )
 from ..models import Album, AlbumDetail, Artist, ArtistDetail, Playlist, SearchResults, Track
+
+log = logging.getLogger(__name__)
 
 URL = re.compile(r"open\.spotify\.com/(?:intl-[a-z]{2}/)?(album|playlist|track|artist)/([A-Za-z0-9]+)", re.I)
 
@@ -505,7 +508,18 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         # سرِ صفحه بدون ترک و آلبوم هم به کار می‌آید؛ عکسِ خودِ هنرمند فقط همان‌جاست
         return_exceptions=True,
     )
-    if not isinstance(head, dict) or not head.get("id"):
+    if isinstance(head, BaseException):
+        # فقط ۴۰۴ یعنی «واقعاً وجود ندارد». بقیه — ۴۲۹ِ سهمیه، توکن، قطعیِ
+        # شبکه — نباید به دروغِ «پیدا نشد» تبدیل شوند؛ اگر قورتشان بدهیم
+        # صداکننده نمی‌فهمد سهمیه سوخته و کشِ قطعی هم فعال نمی‌شود.
+        if isinstance(head, httpx.HTTPStatusError) and head.response.status_code == 404:
+            return None
+        raise head
+    if not isinstance(top, dict):
+        log.warning("spotify artist %s: top-tracks failed: %r", artist_id, top)
+    if not isinstance(albums, list):
+        log.warning("spotify artist %s: albums failed: %r", artist_id, albums)
+    if not head.get("id"):
         return None
 
     tracks = (

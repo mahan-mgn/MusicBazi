@@ -262,7 +262,7 @@ export default function SearchResults({
     for (const ar of results.artists) present.add(ar.source)
     for (const al of results.albums) present.add(al.source)
     for (const pl of results.playlists) present.add(pl.source)
-    return (['spotify', 'soundcloud', 'apple', 'deezer', 'youtube'] as const).filter((s) =>
+    return (['spotify', 'soundcloud', 'apple', 'deezer', 'youtube', 'youtube_music'] as const).filter((s) =>
       present.has(s),
     )
   }, [results])

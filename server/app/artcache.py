@@ -155,11 +155,14 @@ def original(url: str | None) -> str | None:
 
 
 def _rewrite(value: Any, mapping: dict[str, str]) -> None:
-    """`artworkUrl`/`artworkUrls` را در جا عوض می‌کند."""
+    """`artworkUrl`/`bannerUrl`/`artworkUrls` را در جا عوض می‌کند."""
     if isinstance(value, BaseModel):
         current = getattr(value, "artworkUrl", None)
         if isinstance(current, str) and current in mapping:
             value.artworkUrl = mapping[current]
+        banner = getattr(value, "bannerUrl", None)
+        if isinstance(banner, str) and banner in mapping:
+            value.bannerUrl = mapping[banner]
         urls = getattr(value, "artworkUrls", None)
         if isinstance(urls, list):
             value.artworkUrls = [mapping.get(u, u) for u in urls]
@@ -175,6 +178,9 @@ def _collect(value: Any, out: list[str]) -> None:
         current = getattr(value, "artworkUrl", None)
         if isinstance(current, str):
             out.append(current)
+        banner = getattr(value, "bannerUrl", None)
+        if isinstance(banner, str):
+            out.append(banner)
         urls = getattr(value, "artworkUrls", None)
         if isinstance(urls, list):
             out.extend(u for u in urls if isinstance(u, str))

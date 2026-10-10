@@ -69,7 +69,6 @@ export function PlaylistPicker({ jobIds, onDone }: { jobIds: string[]; onDone: (
       {lists.map((playlist) => (
         <button
           key={playlist.id}
-          role="menuitem"
           onClick={() => void add(playlist)}
           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-start text-xs text-muted transition hover:bg-panel-2 hover:text-fg"
         >
@@ -101,7 +100,6 @@ export function PlaylistPicker({ jobIds, onDone }: { jobIds: string[]; onDone: (
         </div>
       ) : (
         <button
-          role="menuitem"
           onClick={() => setCreating(true)}
           className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-start text-xs text-accent transition hover:bg-panel-2"
         >
@@ -128,7 +126,6 @@ export default function AddToPlaylist({
     <div ref={box} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t.playlistAdd}
         title={t.playlistAdd}
@@ -139,7 +136,6 @@ export default function AddToPlaylist({
 
       {open && (
         <div
-          role="menu"
           className="absolute end-0 z-40 mt-1 w-52 rounded-xl border border-line bg-panel p-1.5 shadow-xl"
         >
           <PlaylistPicker jobIds={jobIds} onDone={() => setOpen(false)} />

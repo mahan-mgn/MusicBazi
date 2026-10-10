@@ -9,7 +9,7 @@ import pytest
 from app import catalog
 from app.catalog import ID, _dedupe_artists, _dedupe_tracks, interleave
 from app.models import Album, AlbumDetail, Artist, ArtistDetail, SearchResults, Track
-from app.providers import deezer, itunes, soundcloud, spotify, ytdlp
+from app.providers import deezer, itunes, soundcloud, spotify, youtube_music, ytdlp
 
 
 def _track(title: str, artist: str, source: str = "apple") -> Track:
@@ -73,7 +73,15 @@ class TestUrlParsing:
 class TestInternalIds:
     @pytest.mark.parametrize(
         "ident",
-        ["itunes:album:1", "deezer:playlist:2", "sp:track:abc", "yt:track:dQw4", "sc:track:x"],
+        [
+            "itunes:album:1",
+            "deezer:playlist:2",
+            "sp:track:abc",
+            "yt:track:dQw4",
+            "ytm:track:dQw4",
+            "ytm:artist:UC123",
+            "sc:track:x",
+        ],
     )
     def test_accepted(self, ident):
         assert ID.match(ident)
@@ -81,6 +89,12 @@ class TestInternalIds:
     @pytest.mark.parametrize("ident", ["spotify:album:1", "itunes:banana:1", "just-a-string"])
     def test_rejected(self, ident):
         assert ID.match(ident) is None
+
+    def test_canonical_ref(self):
+        assert catalog._canonical_ref("youtube_music:track:123") == "ytm:track:123"
+        assert catalog._canonical_ref("youtube:track:123") == "yt:track:123"
+        assert catalog._canonical_ref("spotify:track:123") == "sp:track:123"
+        assert catalog._canonical_ref("apple:album:123") == "itunes:album:123"
 
 
 class TestArtwork:
@@ -95,17 +109,19 @@ class TestArtwork:
 class TestDedupe:
     def test_the_same_track_survives_on_every_platform(self):
         """
-        هم‌نام بودن با اپل نباید نسخه‌ی بقیه را حذف کند. وقتی می‌کرد، از ساندکلاد
-        فقط ریمیکس‌ها می‌ماندند و خودِ ترکِ اصلی — که با اپل هم‌نام است — می‌افتاد.
+        هم‌نام بودن با اپل نباید نسخه‌ی بقیه را حذف کند. هر شش پلتفرم
+        باید هویت مستقل خود را حفظ کنند.
         """
         rows = [
-            _track("EDGEBAR", "Dorcci"),
+            _track("EDGEBAR", "Dorcci", "apple"),
             _track("edgebar", "DORCCI", "deezer"),
             _track("EDGEBAR", "Dorcci", "spotify"),
             _track("EDGEBAR", "Dorcci", "soundcloud"),
+            _track("EDGEBAR", "Dorcci", "youtube"),
+            _track("EDGEBAR", "Dorcci", "youtube_music"),
         ]
         assert [t.source for t in _dedupe_tracks(rows)] == [
-            "apple", "deezer", "spotify", "soundcloud",
+            "apple", "deezer", "spotify", "soundcloud", "youtube", "youtube_music",
         ]
 
     def test_duplicates_inside_one_source_still_collapse(self):
@@ -113,21 +129,33 @@ class TestDedupe:
         rows = [_track("Barf", "Farhad"), _track("barf", "FARHAD")]
         assert len(_dedupe_tracks(rows)) == 1
 
+        yt_rows = [
+            _track("Time", "Pink Floyd", "youtube"),
+            _track("time", "PINK FLOYD", "youtube"),
+        ]
+        assert len(_dedupe_tracks(yt_rows)) == 1
+
+        ytm_rows = [
+            _track("Time", "Pink Floyd", "youtube_music"),
+            _track("time", "PINK FLOYD", "youtube_music"),
+        ]
+        assert len(_dedupe_tracks(ytm_rows)) == 1
+
     def test_the_same_artist_survives_on_every_platform(self):
         """
-        قبلاً نسخه‌ی عکس‌دار برنده می‌شد و از چهار پلتفرم یک کارت می‌ماند —
-        جستجوی «Dorcci» فقط دیزر را می‌آورد و صفحه‌ی سه پلتفرم دیگرِ همان هنرمند
-        هیچ راهی نداشت.
+        کارت‌های هنرمند هر شش پلتفرم باید باقی بمانند.
         """
         rows = [
             _artist("Dorcci", "apple"),
             _artist("dorcci", "deezer", artwork="http://img"),
             _artist("DORCCI", "spotify"),
             _artist("Dorcci", "soundcloud"),
+            _artist("Dorcci", "youtube"),
+            _artist("Dorcci", "youtube_music"),
         ]
 
         assert [a.source for a in _dedupe_artists(rows)] == [
-            "apple", "deezer", "spotify", "soundcloud",
+            "apple", "deezer", "spotify", "soundcloud", "youtube", "youtube_music",
         ]
 
     def test_duplicates_inside_one_source_prefer_the_one_with_a_photo(self):
@@ -792,6 +820,8 @@ class TestSearchFanout:
         monkeypatch.setattr(soundcloud, "search_users", sc_users)
         # پیش‌فرضِ آزمون: هر دوی اختیاری‌ها روشن
         monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: False)
+        monkeypatch.setattr(youtube_music, "enabled", lambda: False)
         monkeypatch.setattr(catalog, "AUDIO_SOURCES", ("youtube", "soundcloud"))
         return called
 
@@ -1223,3 +1253,901 @@ class TestReleaseType:
         assert soundcloud._user(row).verified is True
         row["verified"] = False
         assert soundcloud._user(row).verified is False
+
+
+class TestYouTubeSearch:
+    def test_empty_query_returns_empty(self):
+        res = ytdlp.youtube_search("   ")
+        assert res.tracks == []
+        assert res.artists == []
+
+    def test_extract_and_normalize_track(self, monkeypatch):
+        mock_info = {
+            "entries": [
+                {
+                    "id": "vid123",
+                    "title": "Pink Floyd - Time (Audio)",
+                    "uploader": "Pink Floyd",
+                    "channel": "Pink Floyd",
+                    "channel_id": "UC_channel_1",
+                    "channel_url": "https://www.youtube.com/channel/UC_channel_1",
+                    "duration": 415,
+                    "thumbnails": [{"url": "http://img/thumb.jpg", "width": 640}],
+                    "channel_is_verified": True,
+                }
+            ]
+        }
+
+        class MockYDL:
+            def __init__(self, opts=None):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def extract_info(self, url, download=False):
+                return mock_info
+
+        monkeypatch.setattr(ytdlp, "YoutubeDL", MockYDL)
+
+        results = ytdlp.youtube_search("Pink Floyd Time")
+        assert len(results.tracks) == 1
+        t = results.tracks[0]
+        assert t.id == "yt:track:vid123"
+        assert t.source == "youtube"
+        assert t.sourceUrl == "https://www.youtube.com/watch?v=vid123"
+        assert t.durationMs == 415000
+        assert t.artworkUrl == "http://img/thumb.jpg"
+        assert t.artistId == "yt:artist:UC_channel_1"
+        assert "Time" in t.title
+
+        assert len(results.artists) == 1
+        a = results.artists[0]
+        assert a.id == "yt:artist:UC_channel_1"
+        assert a.name == "Pink Floyd"
+        assert a.source == "youtube"
+        assert a.verified is True
+
+    def test_missing_fields_gracefully_handled(self, monkeypatch):
+        mock_info = {
+            "entries": [
+                {
+                    "id": "v_sparse",
+                    "title": "Unknown Song",
+                }
+            ]
+        }
+
+        class MockYDL:
+            def __init__(self, opts=None):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def extract_info(self, url, download=False):
+                return mock_info
+
+        monkeypatch.setattr(ytdlp, "YoutubeDL", MockYDL)
+
+        results = ytdlp.youtube_search("sparse")
+        assert len(results.tracks) == 1
+        t = results.tracks[0]
+        assert t.id == "yt:track:v_sparse"
+        assert t.durationMs == 0
+        assert t.artworkUrl is None
+
+    def test_search_filters_out_unrelated_uploaders(self, monkeypatch):
+        """کانال‌های بازنشر، لیریک یا متفرقه نباید به‌عنوان هنرمند به نتایج اضافه شوند."""
+        mock_info = {
+            "entries": [
+                {
+                    "id": "v1",
+                    "title": "The Weeknd - Blinding Lights (Lyrics)",
+                    "channel": "7clouds",
+                    "channel_id": "UC_7clouds",
+                },
+                {
+                    "id": "v2",
+                    "title": "The Weeknd - Blinding Lights (Dance)",
+                    "channel": "yazou2011",
+                    "channel_id": "UC_yazou",
+                },
+                {
+                    "id": "v3",
+                    "title": "The Weeknd - Blinding Lights (Official)",
+                    "channel": "The Weeknd",
+                    "channel_id": "UC_theweeknd",
+                    "channel_is_verified": True,
+                },
+            ]
+        }
+
+        class MockYDL:
+            def __init__(self, opts=None):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def extract_info(self, url, download=False):
+                return mock_info
+
+        monkeypatch.setattr(ytdlp, "YoutubeDL", MockYDL)
+
+        results = ytdlp.youtube_search("The Weeknd Blinding Lights")
+        assert len(results.tracks) == 3
+        # فقط کانال واقعی The Weeknd اضافه می‌شود، نه 7clouds یا yazou2011
+        assert len(results.artists) == 1
+        assert results.artists[0].id == "yt:artist:UC_theweeknd"
+        assert results.artists[0].name == "The Weeknd"
+
+    def test_youtube_channel_extracts_releases_and_videos(self, monkeypatch):
+        """صفحه کانال یوتیوب باید انتشارهای تب Releases را هم به‌عنوان Album بیاورد."""
+        def fake_tab(url, limit):
+            if url.endswith("/releases"):
+                return {
+                    "entries": [
+                        {
+                            "id": "OLAK5uy_alb1",
+                            "title": "Hurry Up Tomorrow",
+                            "playlist_count": 14,
+                        }
+                    ]
+                }
+            if url.endswith("/videos"):
+                return {
+                    "channel": "The Weeknd",
+                    "channel_id": "UC_weeknd",
+                    "description": "Official YouTube channel of The Weeknd",
+                    "channel_follower_count": 40000000,
+                    "entries": [
+                        {
+                            "id": "vid_w1",
+                            "title": "Dancing In The Flames",
+                            "channel": "The Weeknd",
+                            "duration": 210,
+                        }
+                    ],
+                }
+            return {"entries": []}
+
+        monkeypatch.setattr(ytdlp, "_channel_tab", fake_tab)
+
+        channel_detail = ytdlp.youtube_channel("https://www.youtube.com/@TheWeeknd")
+        assert channel_detail is not None
+        assert channel_detail.id == "yt:artist:UC_weeknd"
+        assert channel_detail.name == "The Weeknd"
+        assert channel_detail.description == "Official YouTube channel of The Weeknd"
+        assert len(channel_detail.topTracks) == 1
+        assert len(channel_detail.albums) == 1
+        assert channel_detail.albums[0].id == "yt:playlist:OLAK5uy_alb1"
+        assert channel_detail.albums[0].title == "Hurry Up Tomorrow"
+        assert channel_detail.albums[0].releaseType == "album"
+
+
+class TestYouTubeMusicSearch:
+    def test_empty_query_returns_empty(self):
+        res = youtube_music.search("   ")
+        assert res.tracks == []
+        assert res.artists == []
+
+    def test_extract_and_normalize_track(self, monkeypatch):
+        mock_songs = [
+            {
+                "videoId": "ytm_vid_99",
+                "title": "Comfortably Numb",
+                "artists": [{"name": "Pink Floyd", "id": "UC_artist_pf"}],
+                "album": {"name": "The Wall", "id": "MPRE_album_1"},
+                "duration_seconds": 382,
+                "isExplicit": False,
+                "thumbnails": [
+                    {"url": "http://img/thumb_small.jpg", "width": 60},
+                    {"url": "http://img/thumb_large.jpg", "width": 544},
+                ],
+            }
+        ]
+
+        class MockYTMusic:
+            def search(self, query, filter=None, limit=20):
+                return mock_songs
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+
+        results = youtube_music.search("Pink Floyd Comfortably Numb")
+        assert len(results.tracks) == 1
+        t = results.tracks[0]
+        assert t.id == "ytm:track:ytm_vid_99"
+        assert t.source == "youtube_music"
+        assert t.sourceUrl == "https://music.youtube.com/watch?v=ytm_vid_99"
+        assert t.title == "Comfortably Numb"
+        assert t.artist == "Pink Floyd"
+        assert t.album == "The Wall"
+        assert t.albumId == "ytm:album:MPRE_album_1"
+        assert t.durationMs == 382000
+        assert t.artworkUrl == "http://img/thumb_large.jpg"
+        assert t.artistId == "ytm:artist:UC_artist_pf"
+        assert t.explicit is False
+
+        assert len(results.artists) == 1
+        a = results.artists[0]
+        assert a.id == "ytm:artist:UC_artist_pf"
+        assert a.name == "Pink Floyd"
+        assert a.source == "youtube_music"
+
+    def test_duration_string_parsing(self, monkeypatch):
+        mock_songs = [
+            {
+                "videoId": "vid_dur",
+                "title": "Song",
+                "artists": [{"name": "Artist"}],
+                "duration": "4:20",
+                "duration_seconds": None,
+            }
+        ]
+
+        class MockYTMusic:
+            def search(self, query, filter=None, limit=20):
+                return mock_songs
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+        res = youtube_music.search("test")
+        assert len(res.tracks) == 1
+        assert res.tracks[0].durationMs == 260000
+
+    def test_network_error_handled_gracefully(self, monkeypatch):
+        class BrokenYTMusic:
+            def search(self, query, filter=None, limit=20):
+                raise RuntimeError("Network Timeout")
+            def get_album(self, browse_id):
+                raise RuntimeError("Network Timeout")
+            def get_artist(self, channel_id):
+                raise RuntimeError("Network Timeout")
+            def get_search_suggestions(self, query):
+                raise RuntimeError("Network Timeout")
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: BrokenYTMusic())
+
+        results = youtube_music.search("query")
+        assert results.tracks == []
+        assert results.artists == []
+        assert youtube_music.get_album("alb1") is None
+        assert youtube_music.get_artist("art1") is None
+        assert youtube_music.get_suggestions("q") == []
+
+    def test_get_album_mapping(self, monkeypatch):
+        mock_alb = {
+            "title": "The Dark Side of the Moon",
+            "type": "Album",
+            "year": "1973",
+            "artists": [{"name": "Pink Floyd"}],
+            "thumbnails": [{"url": "http://img/alb.jpg", "width": 544}],
+            "tracks": [
+                {
+                    "videoId": "FEacDWPWfJU",
+                    "title": "Speak to Me",
+                    "artists": [{"name": "Pink Floyd"}],
+                    "duration_seconds": 66,
+                    "trackNumber": 1,
+                    "isExplicit": False,
+                }
+            ],
+        }
+
+        class MockYTMusic:
+            def get_album(self, browse_id):
+                return mock_alb
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+        detail = youtube_music.get_album("MPRE_123")
+        assert detail is not None
+        assert detail.id == "ytm:album:MPRE_123"
+        assert detail.title == "The Dark Side of the Moon"
+        assert detail.year == 1973
+        assert len(detail.tracks) == 1
+        assert detail.tracks[0].id == "ytm:track:FEacDWPWfJU"
+        assert detail.tracks[0].durationMs == 66000
+
+    def test_get_artist_mapping(self, monkeypatch):
+        mock_art = {
+            "name": "Pink Floyd",
+            "subscribers": "3.5M",
+            "description": "Legendary progressive rock band",
+            "thumbnails": [{"url": "http://img/art.jpg", "width": 300}],
+            "songs": {
+                "results": [
+                    {
+                        "videoId": "vid_song_1",
+                        "title": "Time",
+                        "artists": [{"name": "Pink Floyd"}],
+                        "album": {"name": "DSOTM", "id": "alb_dsotm"},
+                        "duration_seconds": 414,
+                    }
+                ]
+            },
+            "albums": {
+                "results": [
+                    {
+                        "browseId": "alb_dsotm",
+                        "title": "DSOTM",
+                        "year": "1973",
+                    }
+                ]
+            },
+        }
+
+        class MockYTMusic:
+            def get_artist(self, channel_id):
+                return mock_art
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+        art_detail = youtube_music.get_artist("UC_pf")
+        assert art_detail is not None
+        assert art_detail.id == "ytm:artist:UC_pf"
+        assert art_detail.name == "Pink Floyd"
+        assert art_detail.description == "Legendary progressive rock band"
+        assert len(art_detail.topTracks) == 1
+        assert art_detail.topTracks[0].id == "ytm:track:vid_song_1"
+        assert len(art_detail.albums) == 1
+        assert art_detail.albums[0].id == "ytm:album:alb_dsotm"
+
+    def test_get_artist_full_catalog_with_pagination_and_shelves(self, monkeypatch):
+        """تکمیل کاتالوگ با پلی‌لیست ترک‌ها، مرور کامل آلبوم‌ها و تک‌آهنگ‌ها، ویدیوها و هنرمندان مرتبط."""
+        mock_art = {
+            "name": "The Weeknd",
+            "subscribers": "40M",
+            "description": "Abel Tesfaye",
+            "thumbnails": [{"url": "http://img/weeknd.jpg", "width": 544}],
+            "songs": {
+                "browseId": "VL_songs_playlist",
+                "results": [{"videoId": "song_fallback", "title": "Fallback"}],
+            },
+            "albums": {
+                "browseId": "MPAD_albums",
+                "params": "params_albs",
+                "results": [{"browseId": "alb_old", "title": "Old"}],
+            },
+            "singles": {
+                "browseId": "MPAD_singles",
+                "params": "params_singles",
+                "results": [],
+            },
+            "videos": {
+                "browseId": "VL_videos_playlist",
+                "results": [{"videoId": "vid_mv_1", "title": "Blinding Lights MV"}],
+            },
+            "related": {
+                "results": [
+                    {
+                        "browseId": "UC_travis",
+                        "title": "Travis Scott",
+                        "subscribers": "18M",
+                        "thumbnails": [{"url": "http://img/travis.jpg", "width": 100}],
+                    }
+                ]
+            },
+        }
+
+        mock_playlist_songs = {
+            "tracks": [
+                {
+                    "videoId": "pl_song_1",
+                    "title": "Save Your Tears",
+                    "artists": [{"name": "The Weeknd"}],
+                    "duration_seconds": 215,
+                },
+                {
+                    "videoId": "pl_song_2",
+                    "title": "Blinding Lights",
+                    "artists": [{"name": "The Weeknd"}],
+                    "duration_seconds": 200,
+                },
+            ]
+        }
+
+        mock_full_albums = [
+            {
+                "browseId": "alb_after_hours",
+                "title": "After Hours",
+                "type": "Album",
+                "year": "2020",
+                "thumbnails": [{"url": "http://img/ah.jpg", "width": 500}],
+            }
+        ]
+
+        mock_full_singles = [
+            {
+                "browseId": "single_open_hearts",
+                "title": "Open Hearts",
+                "type": "Single",
+                "year": "2025",
+                "thumbnails": [{"url": "http://img/oh.jpg", "width": 500}],
+            }
+        ]
+
+        class MockYTMusic:
+            def get_artist(self, channel_id):
+                return mock_art
+
+            def get_playlist(self, playlist_id, limit=150):
+                if playlist_id == "VL_songs_playlist":
+                    return mock_playlist_songs
+                return {"tracks": []}
+
+            def get_artist_albums(self, browse_id, params, limit=100):
+                if browse_id == "MPAD_albums":
+                    return mock_full_albums
+                if browse_id == "MPAD_singles":
+                    return mock_full_singles
+                return []
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+
+        art_detail = youtube_music.get_artist("ytm:artist:UClYV6hHlupm_S_ObS1W-DYw")
+        assert art_detail is not None
+        assert art_detail.id == "ytm:artist:UClYV6hHlupm_S_ObS1W-DYw"
+        assert art_detail.name == "The Weeknd"
+        assert art_detail.description == "Abel Tesfaye"
+        # ۱. آهنگ‌ها از پلی‌لیست کامل خوانده شده‌اند
+        assert len(art_detail.topTracks) == 2
+        assert [t.id for t in art_detail.topTracks] == ["ytm:track:pl_song_1", "ytm:track:pl_song_2"]
+        # ۲. دیسکوگرافی شامل آلبوم‌ها و تک‌آهنگ‌هاست
+        assert len(art_detail.albums) == 2
+        albs = [a for a in art_detail.albums if a.releaseType == "album"]
+        singles = [a for a in art_detail.albums if a.releaseType == "single"]
+        assert len(albs) == 1 and albs[0].title == "After Hours"
+        assert len(singles) == 1 and singles[0].title == "Open Hearts"
+        # ۳. ویدیوها به عنوان پلی‌لیست ثبت شده‌اند
+        assert len(art_detail.playlists) == 1
+        assert art_detail.playlists[0].id == "ytm:playlist:VL_videos_playlist"
+        # ۴. هنرمندان مرتبط ثبت شده‌اند
+        assert len(art_detail.related) == 1
+        assert art_detail.related[0].id == "ytm:artist:UC_travis"
+        assert art_detail.related[0].name == "Travis Scott"
+
+    def test_get_artist_distinguishes_wide_banner_from_avatar(self, monkeypatch):
+        """بنر عریض پانوراما نباید به عنوان آواتار مربع استفاده شود تا در قاب گرد زوم نشود."""
+        mock_art_wide_only = {
+            "name": "Tlkhoon",
+            "thumbnails": [
+                {"url": "https://lh3.googleusercontent.com/banner=w1440-h600", "width": 1440, "height": 600},
+            ],
+            "songs": {"results": []},
+            "albums": {"results": []},
+        }
+
+        class MockClient:
+            def get_artist(self, channel_id):
+                return mock_art_wide_only
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockClient())
+        monkeypatch.setattr(youtube_music, "_fetch_channel_avatar", lambda cid: None)
+
+        art_detail = youtube_music.get_artist("UC_tlk")
+        assert art_detail is not None
+        assert art_detail.bannerUrl == "https://lh3.googleusercontent.com/banner=w1440-h600"
+        # وقتی فقط بنر عریض داریم و آواتار مربع نیست، artworkUrl نباید همان بنر باشد
+        assert art_detail.artworkUrl is None
+
+    def test_get_artist_extracts_distinct_square_avatar_alongside_banner(self, monkeypatch):
+        """اگر هم بنر عریض و هم آواتار مربع موجود باشد، هرکدام در جای درست خود می‌نشینند."""
+        mock_art = {
+            "name": "Tlkhoon",
+            "thumbnails": [
+                {"url": "https://lh3.googleusercontent.com/banner=w1440-h600", "width": 1440, "height": 600},
+                {"url": "https://yt3.googleusercontent.com/avatar=s544-c", "width": 544, "height": 544},
+            ],
+            "songs": {"results": []},
+            "albums": {"results": []},
+        }
+
+        class MockClient:
+            def get_artist(self, channel_id):
+                return mock_art
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockClient())
+
+        art_detail = youtube_music.get_artist("UC_tlk")
+        assert art_detail is not None
+        assert art_detail.bannerUrl == "https://lh3.googleusercontent.com/banner=w1440-h600"
+        assert art_detail.artworkUrl == "https://yt3.googleusercontent.com/avatar=s544-c"
+
+    def test_get_album_resolves_music_video_to_clean_studio_track(self, monkeypatch):
+        """اگر ترکی در آلبوم به موزیک ویدیو (OMV) اشاره کند، شناسه به نسخه تمیز استودیویی (creditsBrowseId) تبدیل می‌شود."""
+        mock_alb = {
+            "title": "WIND",
+            "type": "Single",
+            "year": "2024",
+            "artists": [{"name": "Dorcci"}],
+            "thumbnails": [{"url": "http://img/wind.jpg", "width": 500}],
+            "tracks": [
+                {
+                    "videoId": "V23oTNG2Jao",  # Music Video with SFX
+                    "title": "WIND",
+                    "artists": [{"name": "Dorcci"}],
+                    "duration_seconds": 168,
+                    "videoType": "MUSIC_VIDEO_TYPE_OMV",
+                    "creditsBrowseId": "MPTCZAXcwy2rijY",  # Clean Studio Track
+                }
+            ],
+        }
+
+        class MockYTMusic:
+            def get_album(self, clean_id):
+                return mock_alb
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+
+        alb = youtube_music.get_album("MPREb_cU39bayTaCy")
+        assert alb is not None
+        assert len(alb.tracks) == 1
+        assert alb.tracks[0].id == "ytm:track:ZAXcwy2rijY"
+        assert alb.tracks[0].sourceUrl == "https://music.youtube.com/watch?v=ZAXcwy2rijY"
+
+    def test_search_extracts_dedicated_artists_and_albums(self, monkeypatch):
+        """جستجوی اختصاصی هنرمندان و آلبوم‌ها در کاتالوگ یوتیوب موزیک."""
+        mock_songs = [
+            {
+                "videoId": "v_s1",
+                "title": "Song One",
+                "artists": [{"name": "Artist X", "id": "UC_X"}],
+                "duration_seconds": 180,
+            }
+        ]
+        mock_artists = [
+            {
+                "browseId": "UC_X",
+                "artist": "Artist X",
+                "thumbnails": [{"url": "http://img/artx.jpg", "width": 120}],
+            }
+        ]
+        mock_albums = [
+            {
+                "browseId": "MPRE_alb1",
+                "title": "Album One",
+                "type": "Album",
+                "year": "2024",
+                "artists": [{"name": "Artist X"}],
+                "thumbnails": [{"url": "http://img/albx.jpg", "width": 120}],
+            }
+        ]
+
+        class MockYTMusic:
+            def search(self, query, filter=None, limit=20):
+                if filter == "songs":
+                    return mock_songs
+                if filter == "artists":
+                    return mock_artists
+                if filter == "albums":
+                    return mock_albums
+                return []
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+
+        res = youtube_music.search("Artist X")
+        assert len(res.tracks) == 1
+        assert len(res.artists) == 1
+        assert res.artists[0].id == "ytm:artist:UC_X"
+        assert res.artists[0].name == "Artist X"
+        assert res.artists[0].artworkUrl == "http://img/artx.jpg"
+        assert res.artists[0].verified is True
+        assert len(res.albums) == 1
+        assert res.albums[0].id == "ytm:album:MPRE_alb1"
+        assert res.albums[0].title == "Album One"
+
+    def test_get_suggestions_mapping(self, monkeypatch):
+        class MockYTMusic:
+            def get_search_suggestions(self, query):
+                return ["pink floyd", "pink floyd time"]
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockYTMusic())
+        assert youtube_music.get_suggestions("pink") == ["pink floyd", "pink floyd time"]
+        assert youtube_music.get_suggestions("   ") == []
+
+
+class TestSearchAggregation:
+    def test_all_six_providers_aggregate_in_search(self, monkeypatch):
+        async def mock_apple(client, q):
+            return SearchResults(query=q, tracks=[_track("T_apple", "A1", "apple")])
+
+        async def mock_deezer(client, q):
+            return SearchResults(query=q, tracks=[_track("T_deezer", "A2", "deezer")])
+
+        async def mock_spotify(client, q):
+            return SearchResults(query=q, tracks=[_track("T_spotify", "A3", "spotify")])
+
+        async def mock_spotify_playlists(client, q):
+            return []
+
+        async def mock_soundcloud(q):
+            return SearchResults(query=q, tracks=[_track("T_sc", "A4", "soundcloud")])
+
+        def mock_yt(q):
+            return SearchResults(query=q, tracks=[_track("T_yt", "A5", "youtube")])
+
+        def mock_ytm(q):
+            return SearchResults(query=q, tracks=[_track("T_ytm", "A6", "youtube_music")])
+
+        monkeypatch.setattr(itunes, "search", mock_apple)
+        monkeypatch.setattr(deezer, "search", mock_deezer)
+        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "search", mock_spotify)
+        monkeypatch.setattr(spotify, "search_playlists", mock_spotify_playlists)
+        monkeypatch.setattr(catalog, "_soundcloud_search", mock_soundcloud)
+        monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: True)
+        monkeypatch.setattr(ytdlp, "youtube_search", mock_yt)
+        monkeypatch.setattr(youtube_music, "enabled", lambda: True)
+        monkeypatch.setattr(youtube_music, "search", mock_ytm)
+
+        res = asyncio.run(catalog.search(None, "test"))
+
+        sources = {t.source for t in res.tracks}
+        assert sources == {"apple", "deezer", "spotify", "soundcloud", "youtube", "youtube_music"}
+        assert len(res.tracks) == 6
+
+    def test_single_provider_failure_does_not_break_others(self, monkeypatch):
+        async def mock_apple(client, q):
+            return SearchResults(query=q, tracks=[_track("T_apple", "A1", "apple")])
+
+        async def mock_deezer(client, q):
+            return SearchResults(query=q, tracks=[_track("T_deezer", "A2", "deezer")])
+
+        def broken_yt(q):
+            raise RuntimeError("YouTube Blocked")
+
+        def broken_ytm(q):
+            raise TimeoutError("YouTube Music Timeout")
+
+        monkeypatch.setattr(itunes, "search", mock_apple)
+        monkeypatch.setattr(deezer, "search", mock_deezer)
+        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(soundcloud, "enabled", lambda: False)
+        monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: True)
+        monkeypatch.setattr(ytdlp, "youtube_search", broken_yt)
+        monkeypatch.setattr(youtube_music, "enabled", lambda: True)
+        monkeypatch.setattr(youtube_music, "search", broken_ytm)
+
+        res = asyncio.run(catalog.search(None, "test"))
+        # Apple & Deezer still returned!
+        assert len(res.tracks) == 2
+        assert {t.source for t in res.tracks} == {"apple", "deezer"}
+
+    def test_all_providers_failed_raises_exception(self, monkeypatch):
+        async def fail_apple(client, q):
+            raise RuntimeError("Apple down")
+
+        async def fail_deezer(client, q):
+            raise RuntimeError("Deezer down")
+
+        def fail_yt(q):
+            raise RuntimeError("YT down")
+
+        def fail_ytm(q):
+            raise RuntimeError("YTM down")
+
+        monkeypatch.setattr(itunes, "search", fail_apple)
+        monkeypatch.setattr(deezer, "search", fail_deezer)
+        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(soundcloud, "enabled", lambda: False)
+        monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: True)
+        monkeypatch.setattr(ytdlp, "youtube_search", fail_yt)
+        monkeypatch.setattr(youtube_music, "enabled", lambda: True)
+        monkeypatch.setattr(youtube_music, "search", fail_ytm)
+
+        with pytest.raises(Exception):
+            asyncio.run(catalog.search(None, "test"))
+
+    def test_providers_disabled_by_config(self, monkeypatch):
+        async def mock_apple(client, q):
+            return SearchResults(query=q, tracks=[_track("T_apple", "A1", "apple")])
+
+        async def mock_deezer(client, q):
+            return SearchResults(query=q, tracks=[_track("T_deezer", "A2", "deezer")])
+
+        yt_called = []
+        ytm_called = []
+
+        def tracked_yt(q):
+            yt_called.append(q)
+            return SearchResults(query=q)
+
+        def tracked_ytm(q):
+            ytm_called.append(q)
+            return SearchResults(query=q)
+
+        monkeypatch.setattr(itunes, "search", mock_apple)
+        monkeypatch.setattr(deezer, "search", mock_deezer)
+        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(soundcloud, "enabled", lambda: False)
+        monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: False)
+        monkeypatch.setattr(ytdlp, "youtube_search", tracked_yt)
+        monkeypatch.setattr(youtube_music, "enabled", lambda: False)
+        monkeypatch.setattr(youtube_music, "search", tracked_ytm)
+
+        res = asyncio.run(catalog.search(None, "test"))
+        assert len(res.tracks) == 2
+        assert yt_called == []
+        assert ytm_called == []
+
+
+class TestPlaybackAndResolverCompatibility:
+    def test_resolver_direct_candidate_for_youtube_and_youtube_music(self):
+        from app import resolver
+
+        t_yt = Track(
+            id="yt:track:abc",
+            title="T",
+            artist="A",
+            durationMs=1000,
+            source="youtube",
+            sourceUrl="https://www.youtube.com/watch?v=abc",
+        )
+        cands_yt = resolver.resolve(t_yt)
+        assert len(cands_yt) == 1
+        assert cands_yt[0].url == "https://www.youtube.com/watch?v=abc"
+        assert cands_yt[0].score == 100.0
+
+        t_ytm = Track(
+            id="ytm:track:xyz",
+            title="T",
+            artist="A",
+            durationMs=2000,
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/watch?v=xyz",
+        )
+        cands_ytm = resolver.resolve(t_ytm)
+        assert len(cands_ytm) == 1
+        assert cands_ytm[0].url == "https://music.youtube.com/watch?v=xyz"
+        assert cands_ytm[0].score == 100.0
+
+    def test_extract_youtube_video_id(self):
+        from app.stream.playback import extract_youtube_video_id
+
+        t_yt = Track(
+            id="yt:track:abc12345678",
+            title="T",
+            artist="A",
+            durationMs=1000,
+            source="youtube",
+            sourceUrl="https://www.youtube.com/watch?v=abc12345678",
+        )
+        assert extract_youtube_video_id(t_yt) == "abc12345678"
+
+        t_ytm = Track(
+            id="ytm:track:xyz12345678",
+            title="T",
+            artist="A",
+            durationMs=1000,
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/watch?v=xyz12345678",
+        )
+        assert extract_youtube_video_id(t_ytm) == "xyz12345678"
+
+    def test_catalog_resolve_ref_for_ytm(self, monkeypatch):
+        calls = []
+
+        def mock_extract(url):
+            calls.append(url)
+            return AlbumDetail(
+                id="yt:track:xyz",
+                title="Song",
+                artist="Artist",
+                year=2025,
+                trackCount=1,
+                source="youtube",
+                sourceUrl=url,
+                durationMs=1000,
+                tracks=[],
+            )
+
+        monkeypatch.setattr(ytdlp, "extract", mock_extract)
+
+        res = asyncio.run(catalog.resolve_ref(None, "ytm:track:xyz123"))
+        assert res is not None
+        assert "xyz123" in calls[0]
+
+    def test_artist_source_from_ref_recognizes_ytm(self):
+        assert catalog._artist_source_from_ref("ytm:artist:UC123") == "youtube_music"
+        assert catalog._artist_source_from_ref("yt:artist:UC123") == "youtube"
+        assert catalog._artist_source_from_ref("https://music.youtube.com/channel/UC123") == "youtube_music"
+
+    def test_channel_url_helper(self):
+        assert catalog._channel_url("@TheWeeknd") == "https://www.youtube.com/@TheWeeknd"
+        assert catalog._channel_url("UC12345") == "https://www.youtube.com/channel/UC12345"
+
+    def test_resolve_artist_discography_for_ytm(self, monkeypatch):
+        mock_detail = ArtistDetail(
+            id="ytm:artist:UC_weeknd",
+            name="The Weeknd",
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/channel/UC_weeknd",
+            subtitle="YouTube Music",
+            topTracks=[_track("T1", "The Weeknd", "youtube_music")],
+            albums=[
+                Album(
+                    id="ytm:album:alb1",
+                    title="After Hours",
+                    artist="The Weeknd",
+                    year=2020,
+                    trackCount=1,
+                    source="youtube_music",
+                    sourceUrl="https://music.youtube.com/browse/alb1",
+                )
+            ],
+        )
+
+        async def fake_artist(client, ref):
+            return mock_detail
+
+        async def fake_release(client, ref):
+            t = _track("Album Track", "The Weeknd", "youtube_music")
+            return AlbumDetail(
+                id="ytm:album:alb1",
+                title="After Hours",
+                artist="The Weeknd",
+                year=2020,
+                trackCount=1,
+                source="youtube_music",
+                sourceUrl=ref,
+                durationMs=1000,
+                tracks=[t],
+            )
+
+        monkeypatch.setattr(catalog, "resolve_artist", fake_artist)
+        monkeypatch.setattr(catalog, "resolve_ref", fake_release)
+
+        tracks = asyncio.run(catalog.resolve_artist_discography(None, "ytm:artist:UC_weeknd"))
+        assert len(tracks) == 2
+        assert [t.title for t in tracks] == ["T1", "Album Track"]
+
+    def test_resolve_ref_music_youtube_browse_url(self, monkeypatch):
+        mock_alb = AlbumDetail(
+            id="ytm:album:MPREb_123",
+            title="Havasam",
+            artist="Tlkhoon",
+            year=2025,
+            trackCount=1,
+            artworkUrl="http://img/havasam.jpg",
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/browse/MPREb_123",
+            durationMs=200000,
+            tracks=[],
+        )
+        monkeypatch.setattr(youtube_music, "get_album", lambda bid: mock_alb)
+
+        res = asyncio.run(catalog.resolve_ref(None, "https://music.youtube.com/browse/MPREb_123"))
+        assert res is not None
+        assert res.source == "youtube_music"
+        assert res.title == "Havasam"
+        assert res.artworkUrl == "http://img/havasam.jpg"
+
+    def test_resolve_ref_olak_release_playlist(self, monkeypatch):
+        mock_alb = AlbumDetail(
+            id="ytm:album:MPREb_dose",
+            title="DO SE SALE",
+            artist="Matin Fattahi",
+            year=2026,
+            trackCount=1,
+            artworkUrl="http://img/dose.jpg",
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/browse/MPREb_dose",
+            durationMs=180000,
+            tracks=[_track("DO SE SALE", "Matin Fattahi", "youtube_music")],
+        )
+        monkeypatch.setattr(youtube_music, "get_album", lambda bid: mock_alb)
+
+        class MockClient:
+            def get_album_browse_id(self, pid):
+                return "MPREb_dose"
+
+        monkeypatch.setattr(youtube_music, "_get_client", lambda: MockClient())
+
+        # When requested as a standard YouTube release URL
+        res = asyncio.run(catalog.resolve_ref(None, "https://www.youtube.com/playlist?list=OLAK5uy_test"))
+        assert res is not None
+        assert res.source == "youtube"
+        assert res.title == "DO SE SALE"
+        assert res.artworkUrl == "http://img/dose.jpg"
+        assert res.tracks[0].source == "youtube"
+
+

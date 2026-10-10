@@ -1,4 +1,15 @@
 const FA_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹']
+const FA_TO_EN: Record<string, string> = {
+  '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+  '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+}
+
+/** تبدیل ارقام فارسی و عربی به لاتین */
+export function latinDigits(input: string | number): string {
+  return String(input).replace(/[۰-۹٠-٩]/g, (d) => FA_TO_EN[d] ?? d)
+}
 
 /** تبدیل ارقام لاتین به فارسی */
 export function fa(input: string | number): string {
@@ -7,7 +18,7 @@ export function fa(input: string | number): string {
 
 /** ارقام را فقط وقتی فارسی کن که زبان فارسی باشد */
 export function digits(input: string | number, lang: string): string {
-  return lang === 'fa' ? fa(input) : String(input)
+  return lang === 'fa' ? fa(input) : latinDigits(input)
 }
 
 /** ۳:۴۵ — و برای چیزی که از یک ساعت رد می‌شود، ۱:۱۲:۳۰ */
@@ -145,5 +156,52 @@ export function cleanArtist(artist: string | undefined | null): string {
     .replace(/\s*([,،])\s*/g, '$1 ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/** زیرنویسِ هنرمند: در زبان انگلیسی عبارات فارسی کش یا سرور را به انگلیسی تبدیل می‌کند */
+export function formatArtistSubtitle(subtitle: string | undefined | null, lang = 'fa'): string {
+  if (!subtitle) return ''
+  const trimmed = subtitle.trim()
+  if (!trimmed) return ''
+
+  if (lang === 'fa') {
+    return digits(trimmed, 'fa')
+  }
+
+  // ponytail: تبدیل الگوهای ثابت کاتالوگ و ارقام فارسی به معادل انگلیسی
+  let result = latinDigits(trimmed)
+    .replace(/،\s*/g, ', ')
+    .replace(/٬/g, ',')
+
+  if (result === 'هنرمند') return 'Artist'
+  if (result === 'کاربر') return 'User'
+  if (result === 'ساندکلاد') return 'SoundCloud'
+  if (result === 'یوتیوب') return 'YouTube'
+
+  result = result.replace(/(\d[\d,.]*)\s*آلبوم/g, (_, n) => `${n} ${n === '1' ? 'album' : 'albums'}`)
+  result = result.replace(/(\d[\d,.]*)\s*دنبال‌کننده/g, (_, n) => `${n} ${n === '1' ? 'follower' : 'followers'}`)
+  result = result.replace(/(\d[\d,.]*)\s*آهنگ/g, (_, n) => `${n} ${n === '1' ? 'track' : 'tracks'}`)
+  result = result.replace(/(\d[\d,.]*)\s*پلی‌لیست/g, (_, n) => `${n} ${n === '1' ? 'playlist' : 'playlists'}`)
+
+  return result
+}
+
+/** نمایش تعداد بازدید به زبان انتخاب‌شده بدون نشت متن فارسی در حالت انگلیسی */
+export function formatViews(views: string | undefined | null, lang = 'fa'): string {
+  if (!views) return ''
+  const trimmed = views.trim()
+  if (!trimmed) return ''
+
+  if (lang === 'fa') {
+    if (trimmed.includes('بازدید')) return digits(trimmed, 'fa')
+    return `${digits(trimmed, 'fa')} بازدید`
+  }
+
+  const clean = latinDigits(trimmed)
+    .replace(/٬/g, ',')
+    .replace(/\s*بازدید\s*/g, '')
+    .trim()
+  if (/views?/i.test(clean)) return clean
+  return `${clean} views`
 }
 

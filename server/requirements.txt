@@ -26,6 +26,9 @@ yt-dlp-ejs>=0.8
 # پلاگین PO Token. سرورش جدا با `bash setup_potoken.sh` بیلد می‌شود.
 bgutil-ytdlp-pot-provider==1.3.1
 
+# استخراج متادیتا و جستجو در یوتیوب موزیک
+ytmusicapi==1.12.3
+
 # بات تلگرام — اختیاری، فقط با MUSICBAZI_TELEGRAM_BOT_TOKEN فعال می‌شود.
 # نسخه‌ی ۲۱+ خودش روی httpx است، بدون تداخل با نسخه‌ی بالا.
 python-telegram-bot>=21,<22

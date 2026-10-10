@@ -1,10 +1,10 @@
-import { digits } from '../lib/format'
+import { digits, formatArtistSubtitle } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { SOURCE_LABEL, type Album, type Artist, type Playlist } from '../lib/types'
 import Artwork, { ArtBackdrop } from './Artwork'
 import SendToTelegram from './SendToTelegram'
 import SourceBadge from './SourceBadge'
-import { PlayIcon } from './icons'
+import { PauseIcon, PlayIcon, Spinner } from './icons'
 import SourceLogo, { SOURCE_COLOR } from './logos'
 
 /**
@@ -49,14 +49,27 @@ export function ArtistCard({ artist, onOpen }: { artist: Artist; onOpen: () => v
         {/* زیرنویسِ سرور («76 آلبوم»، «11,365 دنبال‌کننده») ارقامِ لاتین دارد —
             در حالتِ فارسی باید فارسی شوند؛ کشِ کاتالوگ هم قدیمی را نگه می‌دارد
             پس تبدیل همین‌جا انجام می‌شود نه سمت سرور */}
-        <p className="truncate text-[10px] text-muted-2">{digits(artist.subtitle, lang)}</p>
+        <p className="truncate text-[10px] text-muted-2">{formatArtistSubtitle(artist.subtitle, lang)}</p>
       </div>
     </button>
   )
 }
 
-export function AlbumCard({ album, onOpen }: { album: Album; onOpen: () => void }) {
-  const { lang } = useI18n()
+export function AlbumCard({
+  album,
+  onOpen,
+  onPlay,
+  isPlaying = false,
+  isLoading = false,
+}: {
+  album: Album
+  onOpen: () => void
+  onPlay?: () => void
+  isPlaying?: boolean
+  isLoading?: boolean
+}) {
+  const { lang, t } = useI18n()
+  const playLabel = isPlaying ? t.pause : album.trackCount === 1 ? t.playTrack(album.title) : t.playAll
   return (
     // دکمه‌ی تلگرام بیرونِ دکمه‌ی کارت می‌نشیند نه تویش: دکمه در دکمه HTML
     // نامعتبر است و کلیکش هم به کارت نشت می‌کرد (یعنی آلبوم باز می‌شد)
@@ -68,38 +81,64 @@ export function AlbumCard({ album, onOpen }: { album: Album; onOpen: () => void 
         // خاکستریِ پیش‌فرضِ خودِ دکمه هم‌وزنِ این کلاس است و ترتیبشان تضمینی نیست
         className="absolute start-3.5 top-3.5 z-10 bg-black/55 text-white! backdrop-blur-sm hover:bg-black/75"
       />
-      <button
-        onClick={onOpen}
-        className="relative block w-full overflow-hidden rounded-xl p-2 text-start transition hover:bg-panel-2"
-      >
+      <div className="relative">
         <ArtBackdrop src={album.artworkUrl} seed={album.id} />
-        <div className="relative w-full">
-          <span
-            aria-hidden
-            className="src-glow pointer-events-none absolute -inset-2 -z-10 rounded-xl blur-xl"
-            style={{ '--src': SOURCE_COLOR[album.source] } as React.CSSProperties}
-          />
-          <Artwork
-            src={album.artworkUrl}
-            alt={album.title}
-            seed={album.id}
-            className="aspect-square w-full shadow-lg shadow-black/25"
-          />
-          <span className="absolute inset-0 grid place-items-center rounded-lg bg-black/45 opacity-0 transition group-hover:opacity-100">
-            <span className="grid size-9 place-items-center rounded-full bg-accent text-accent-fg">
-              <PlayIcon className="size-4" />
+        <div className="relative p-2">
+          <button
+            onClick={onOpen}
+            aria-label={album.title}
+            className="group/art relative block w-full overflow-hidden rounded-lg"
+          >
+            <span
+              aria-hidden
+              className="src-glow pointer-events-none absolute -inset-2 -z-10 rounded-xl blur-xl"
+              style={{ '--src': SOURCE_COLOR[album.source] } as React.CSSProperties}
+            />
+            <Artwork
+              src={album.artworkUrl}
+              alt={album.title}
+              seed={album.id}
+              className="aspect-square w-full shadow-lg shadow-black/25"
+            />
+            <span className="pointer-events-none absolute inset-0 grid place-items-center rounded-lg bg-black/45 opacity-0 transition group-hover/art:opacity-100">
+              {!onPlay && (
+                <span className="grid size-9 place-items-center rounded-full bg-accent text-accent-fg">
+                  <PlayIcon className="size-4" />
+                </span>
+              )}
             </span>
-          </span>
-          <span className="hover-reveal absolute end-1.5 top-1.5 opacity-0 transition group-hover:opacity-100">
-            <SourceBadge source={album.source} />
-          </span>
+            <span className="pointer-events-none absolute end-1.5 top-1.5 opacity-0 transition group-hover/art:opacity-100">
+              <SourceBadge source={album.source} />
+            </span>
+          </button>
+          {onPlay && (
+            <button
+              onClick={onPlay}
+              disabled={isLoading}
+              aria-label={playLabel}
+              title={playLabel}
+              className={`absolute start-1/2 top-1/2 z-10 grid size-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-accent text-accent-fg shadow-lg transition enabled:hover:scale-110 disabled:cursor-wait ${
+                isPlaying || isLoading ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+              }`}
+            >
+              {isLoading ? (
+                <Spinner className="size-4" />
+              ) : isPlaying ? (
+                <PauseIcon className="size-4" />
+              ) : (
+                <PlayIcon className="size-4 ms-0.5" />
+              )}
+            </button>
+          )}
         </div>
-        <p className="bidi mt-2 truncate text-xs">{album.title}</p>
-        <p className="truncate text-[10px] text-muted-2">
-          <bdi>{album.artist}</bdi>
-          {album.year ? ` · ${digits(album.year, lang)}` : ''}
-        </p>
-      </button>
+        <button onClick={onOpen} className="block w-full px-2 pb-2 text-start">
+          <p className="bidi mt-0 truncate text-xs">{album.title}</p>
+          <p className="truncate text-[10px] text-muted-2">
+            <bdi>{album.artist}</bdi>
+            {album.year ? ` · ${digits(album.year, lang)}` : ''}
+          </p>
+        </button>
+      </div>
     </div>
   )
 }

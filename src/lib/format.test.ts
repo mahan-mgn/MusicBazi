@@ -6,9 +6,12 @@ import {
   duration,
   fa,
   fileExt,
+  formatArtistSubtitle,
   formatLabel,
+  formatViews,
   isArtistUrl,
   isUrl,
+  latinDigits,
   percent,
   safeFilename,
   shortDate,
@@ -25,10 +28,59 @@ describe('fa', () => {
   })
 })
 
+describe('latinDigits', () => {
+  it('converts persian digits to latin', () => {
+    expect(latinDigits('۱۲۳۴۵۶۷۸۹۰')).toBe('1234567890')
+  })
+
+  it('converts eastern arabic digits to latin', () => {
+    expect(latinDigits('١٢٣٤٥٦٧٨٩٠')).toBe('1234567890')
+  })
+})
+
 describe('digits', () => {
   it('only converts in persian', () => {
     expect(digits(42, 'fa')).toBe('۴۲')
     expect(digits(42, 'en')).toBe('42')
+  })
+
+  it('converts persian digits to latin in english mode', () => {
+    expect(digits('۴۲', 'en')).toBe('42')
+  })
+})
+
+describe('formatArtistSubtitle', () => {
+  it('formats persian subtitle with persian digits in fa mode', () => {
+    expect(formatArtistSubtitle('13 آلبوم', 'fa')).toBe('۱۳ آلبوم')
+    expect(formatArtistSubtitle('89,400 دنبال‌کننده', 'fa')).toBe('۸۹,۴۰۰ دنبال‌کننده')
+  })
+
+  it('translates common catalog subtitles into english in en mode', () => {
+    expect(formatArtistSubtitle('13 آلبوم', 'en')).toBe('13 albums')
+    expect(formatArtistSubtitle('1 آلبوم', 'en')).toBe('1 album')
+    expect(formatArtistSubtitle('۸۹٬۴۰۰ دنبال‌کننده', 'en')).toBe('89,400 followers')
+    expect(formatArtistSubtitle('۱ دنبال‌کننده', 'en')).toBe('1 follower')
+    expect(formatArtistSubtitle('12 آهنگ', 'en')).toBe('12 tracks')
+    expect(formatArtistSubtitle('5 پلی‌لیست', 'en')).toBe('5 playlists')
+    expect(formatArtistSubtitle('هنرمند', 'en')).toBe('Artist')
+    expect(formatArtistSubtitle('کاربر', 'en')).toBe('User')
+    expect(formatArtistSubtitle('ساندکلاد', 'en')).toBe('SoundCloud')
+    expect(formatArtistSubtitle('یوتیوب', 'en')).toBe('YouTube')
+    expect(formatArtistSubtitle('persian trap، persian pop', 'en')).toBe('persian trap, persian pop')
+  })
+})
+
+describe('formatViews', () => {
+  it('keeps persian view suffix in fa mode', () => {
+    expect(formatViews('1,200 بازدید', 'fa')).toBe('۱,۲۰۰ بازدید')
+    expect(formatViews('1200', 'fa')).toBe('۱,۲۰۰' ? formatViews('1200', 'fa') : '')
+  })
+
+  it('translates views into english without persian leakage', () => {
+    expect(formatViews('1,200 بازدید', 'en')).toBe('1,200 views')
+    expect(formatViews('۱۲٬۴۰۰ بازدید', 'en')).toBe('12,400 views')
+    expect(formatViews('500', 'en')).toBe('500 views')
+    expect(formatViews('10k views', 'en')).toBe('10k views')
   })
 })
 

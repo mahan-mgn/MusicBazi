@@ -1070,7 +1070,7 @@ export default function LibraryView({ initialTab }: { initialTab?: 'playlists' |
               </button>
             )}
 
-            {(['spotify', 'youtube', 'soundcloud', 'deezer', 'apple'] as const).map((source) => (
+            {(['spotify', 'youtube', 'youtube_music', 'soundcloud', 'deezer', 'apple'] as const).map((source) => (
               <button
                 key={source}
                 type="button"

@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { dominantColor } from '../lib/artColor'
-import { digits, safeFilename } from '../lib/format'
+import { digits, formatArtistSubtitle, formatViews, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { trackDedupeKey } from '../lib/radio'
+import { tracksForRelease, tracksFromSelectedDiscography } from '../lib/artistDiscography'
 import { findBestJob, toPlayItem } from '../lib/stream'
 import { downloadFile } from '../lib/native'
 import {
   SOURCE_LABEL,
   type Album,
   type Artist,
+  type ArtistDiscographyContext,
   type ArtistDetail,
   type Playlist,
   type Track,
@@ -25,6 +27,7 @@ import EmptyState from './EmptyState'
 import FollowButton from './FollowButton'
 import SourceLogo from './logos'
 import { Shelf } from './Shelf'
+import VideoCard from './VideoCard'
 import { AlbumCard, ArtistCard, PlaylistRow } from './cards'
 import {
   AlbumIcon,
@@ -38,9 +41,11 @@ import {
   InfoIcon,
   LinkIcon,
   ListIcon,
+  OfficialArtistBadgeIcon,
   OfflineIcon,
   PauseIcon,
   PlayIcon,
+  RadioIcon,
   SearchIcon,
   ShuffleIcon,
   SparkleIcon,
@@ -53,7 +58,7 @@ interface Props {
   artist: ArtistDetail
   playingId: string | null
   onTogglePlay: (track: Track) => void
-  onOpenAlbum: (album: Album) => void
+  onOpenAlbum: (album: Album, discography?: ArtistDiscographyContext) => void
   onOpenPlaylist: (playlist: Playlist) => void
   onOpenArtist?: (artist: Artist) => void
   onBack: () => void
@@ -77,10 +82,10 @@ function albumKind(album: Album): 'album' | 'single' | 'ep' | 'compilation' {
 
 function releaseLabel(
   album: Album,
-  t: { typeAlbum: string; typeSong: string },
+  t: { typeAlbum: string; typeSong: string; typeSingle?: string },
 ): string {
   const kind = albumKind(album)
-  if (kind === 'single') return t.typeSong
+  if (kind === 'single') return t.typeSingle ?? t.typeSong
   if (kind === 'ep') return 'EP'
   return t.typeAlbum
 }
@@ -92,10 +97,27 @@ function titlesMatch(a: string, b: string): boolean {
   return left === right || left.includes(right) || right.includes(left)
 }
 
+function isSameImage(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false
+  if (a === b) return true
+  return a.split('=')[0].trim() === b.split('=')[0].trim()
+}
+
+function normalizeReleaseTitle(value: string): string {
+  return value.trim().toLowerCase().replace(/[‌\s]+/g, ' ')
+}
+
 function trackInAlbum(track: Track, album: Album): boolean {
-  if (track.albumId && track.albumId === album.id) return true
-  if (track.album && titlesMatch(track.album, album.title)) return true
-  return titlesMatch(track.title, album.title)
+  const trackAlbumId = track.albumId?.trim()
+  const albumId = album.id.trim()
+  if (trackAlbumId && albumId) return trackAlbumId === albumId
+
+  const albumTitle = normalizeReleaseTitle(album.title)
+  const trackAlbumTitle = normalizeReleaseTitle(track.album ?? '')
+  if (trackAlbumTitle) return trackAlbumTitle === albumTitle
+
+  // Some older/single-track records have neither an album id nor album name.
+  return !trackAlbumId && normalizeReleaseTitle(track.title) === albumTitle
 }
 
 /**
@@ -212,6 +234,7 @@ export default function ArtistView({
   const [allTracks, setAllTracks] = useState<Track[] | null>(null)
   const [loadingAll, setLoadingAll] = useState(false)
   const [loadingPlayAll, setLoadingPlayAll] = useState(false)
+  const [loadingReleaseId, setLoadingReleaseId] = useState<string | null>(null)
   const [zipping, setZipping] = useState(false)
   const [tint, setTint] = useState<[number, number, number] | null>(null)
   const [isScrolledPast, setIsScrolledPast] = useState(false)
@@ -221,9 +244,13 @@ export default function ArtistView({
   const [discographyView, setDiscographyView] = useState<'grid' | 'list'>('grid')
   const [discographySort, setDiscographySort] = useState<'newest' | 'oldest'>('newest')
   const [showAboutModal, setShowAboutModal] = useState(false)
+  const [ytmCategory, setYtmCategory] = useState<'all' | 'songs' | 'albums' | 'singles' | 'videos'>('all')
+  const [ytTab, setYtTab] = useState<'home' | 'videos' | 'releases' | 'playlists' | 'about'>('home')
+  const [ytVideoSort, setYtVideoSort] = useState<'latest' | 'popular' | 'oldest'>('latest')
 
   const heroRef = useRef<HTMLDivElement>(null)
   const loadingPromiseRef = useRef<Promise<Track[]> | null>(null)
+  const playReleaseRequestRef = useRef(0)
   const isMountedRef = useRef(true)
   const artistIdRef = useRef(artist.id)
   artistIdRef.current = artist.id
@@ -241,11 +268,15 @@ export default function ArtistView({
     setAllTracks(null)
     setLoadingAll(false)
     setLoadingPlayAll(false)
+    setLoadingReleaseId(null)
     setSearchQuery('')
     setShowAllTopTracks(false)
     setDiscographyFilter('all')
     setDiscographyView('grid')
     setDiscographySort('newest')
+    setYtmCategory('all')
+    setYtTab('home')
+    setYtVideoSort('latest')
     setShowAboutModal(false)
     setTint(null)
     loadingPromiseRef.current = null
@@ -273,13 +304,13 @@ export default function ArtistView({
   // استخراج رنگ غالب عکس هنرمند برای گرادیان هیرو
   useEffect(() => {
     let cancelled = false
-    void dominantColor(artist.artworkUrl).then((c) => {
+    void dominantColor(artist.artworkUrl || artist.bannerUrl).then((c) => {
       if (!cancelled) setTint(c)
     })
     return () => {
       cancelled = true
     }
-  }, [artist.artworkUrl])
+  }, [artist.artworkUrl, artist.bannerUrl])
 
   const anyTint = tint ? tint.join(',') : '107,107,107'
 
@@ -342,6 +373,10 @@ export default function ArtistView({
   const isThisArtistPlaying = isArtistTrackPlaying && isPlaying
   const isThisArtistCollectionPlaying = isThisArtistPlaying && isThisArtistInQueue
 
+  const hasDistinctAvatar = Boolean(
+    artist.artworkUrl && (!artist.bannerUrl || !isSameImage(artist.artworkUrl, artist.bannerUrl)),
+  )
+
   const hasPlayable =
     (allTracks?.length ?? 0) > 0 ||
     artist.topTracks.length > 0 ||
@@ -387,6 +422,21 @@ export default function ArtistView({
 
   const handleTopTrackToggle = useCallback(
     (track: Track) => {
+      if (artist.source === 'youtube' || artist.source === 'youtube_music') {
+        const index = artist.topTracks.findIndex((item) => item.id === track.id)
+        if (index < 0) return
+        const items = topTrackItems.slice(index)
+        const player = usePlayer.getState()
+        player.setShuffle(false)
+        if (player.queue[player.index]?.track.id === track.id) {
+          player.replaceQueue(items, 0)
+          if (player.playing) player.pause()
+          else player.toggle()
+        } else {
+          player.play(items, 0)
+        }
+        return
+      }
       if (onTogglePlay) {
         onTogglePlay(track)
       } else if (currentTrackId === track.id) {
@@ -396,7 +446,7 @@ export default function ArtistView({
         play(topTrackItems, Math.max(0, idx))
       }
     },
-    [artist.topTracks, topTrackItems, currentTrackId, play, onTogglePlay],
+    [artist.source, artist.topTracks, topTrackItems, currentTrackId, play, onTogglePlay],
   )
 
   const loadDiscography = useCallback(async (): Promise<Track[]> => {
@@ -413,14 +463,10 @@ export default function ArtistView({
           const backendTracks = await api.getArtistDiscography(artist.sourceUrl || artist.id)
           if (backendTracks && backendTracks.length > 0) {
             const seenIds = new Set<string>()
-            const seenKeys = new Set<string>()
             const deduped: Track[] = []
             for (const t of backendTracks) {
               if (!t || !t.id || seenIds.has(t.id)) continue
-              const key = trackDedupeKey(t, artist.name)
-              if (seenKeys.has(key)) continue
               seenIds.add(t.id)
-              seenKeys.add(key)
               deduped.push(t)
             }
             if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
@@ -433,16 +479,12 @@ export default function ArtistView({
         }
 
         const seenIds = new Set<string>()
-        const seenKeys = new Set<string>()
         const deduped: Track[] = []
 
         function addTrack(track: Track) {
           if (!track || !track.id) return
           if (seenIds.has(track.id)) return
-          const key = trackDedupeKey(track, artist.name)
-          if (seenKeys.has(key)) return
           seenIds.add(track.id)
-          seenKeys.add(key)
           deduped.push(track)
         }
 
@@ -809,6 +851,243 @@ export default function ArtistView({
     return list
   }, [artist.albums, discographyFilter, discographySort])
 
+  const orderedReleases = useMemo(() => {
+    const list = [...artist.albums]
+    if (discographySort === 'oldest') {
+      const indexed = list.map((album, i) => ({ album, i }))
+      indexed.sort((a, b) => {
+        const yearA = a.album.year || 0
+        const yearB = b.album.year || 0
+        if (yearA !== yearB) return yearA - yearB
+        return b.i - a.i
+      })
+      return indexed.map(({ album }) => album)
+    }
+    return list
+  }, [artist.albums, discographySort])
+
+  const singlesOnly = useMemo(() => {
+    if (artist.singles && artist.singles.length > 0) return artist.singles
+    return artist.albums.filter((a) => albumKind(a) === 'single' || albumKind(a) === 'ep')
+  }, [artist.singles, artist.albums])
+
+  const albumsOnly = useMemo(() => {
+    return artist.albums.filter((a) => albumKind(a) === 'album' || albumKind(a) === 'compilation')
+  }, [artist.albums])
+
+  const allVideos = useMemo(() => {
+    if (artist.videos && artist.videos.length > 0) return artist.videos
+    if (artist.source === 'youtube') return artist.topTracks
+    return []
+  }, [artist.videos, artist.source, artist.topTracks])
+
+  const sortedVideos = useMemo(() => {
+    const list = [...allVideos]
+    if (ytVideoSort === 'oldest') {
+      return [...list].reverse()
+    }
+    if (ytVideoSort === 'popular') {
+      return [...list].sort((a, b) => {
+        const getViewsNum = (t: Track) => {
+          if (!t.views) return 0
+          const cleaned = t.views.replace(/[^0-9]/g, '')
+          return Number(cleaned) || 0
+        }
+        return getViewsNum(b) - getViewsNum(a)
+      })
+    }
+    return list
+  }, [allVideos, ytVideoSort])
+
+  const handleVideoToggle = useCallback(
+    (track: Track) => {
+      const idx = allVideos.findIndex((v) => v.id === track.id)
+      if (idx < 0) return
+      const allReadyJobs = jobs.filter((j) => isDone(j.status))
+      const items = allVideos.slice(idx).map((v) =>
+        toPlayItem(v, findBestJob(allReadyJobs, v.id, quality), quality),
+      )
+      const player = usePlayer.getState()
+      player.setShuffle(false)
+      if (player.queue[player.index]?.track?.id === track.id) {
+        player.replaceQueue(items, 0)
+        if (player.playing) player.pause()
+        else player.toggle()
+      } else {
+        player.play(items, 0)
+      }
+    },
+    [allVideos, jobs, quality],
+  )
+
+  const handleRadioPlay = useCallback(() => {
+    if (artist.radio && artist.radio.length > 0) {
+      const allReadyJobs = jobs.filter((j) => isDone(j.status))
+      const items = artist.radio.map((t) =>
+        toPlayItem(t, findBestJob(allReadyJobs, t.id, quality), quality),
+      )
+      play(items, 0)
+    } else {
+      void playArtistDiscography(false)
+    }
+  }, [artist.radio, jobs, play, playArtistDiscography, quality])
+
+  const artistDiscographyContext = useMemo<ArtistDiscographyContext>(
+    () => ({
+      artistRef: artist.sourceUrl || artist.id,
+      source: artist.source,
+      releases: orderedReleases.map(({ id, title, trackCount }) => ({ id, title, trackCount })),
+    }),
+    [artist.id, artist.sourceUrl, orderedReleases],
+  )
+
+  const openDiscographyRelease = useCallback(
+    (album: Album) => {
+      onOpenAlbum(album, artistDiscographyContext)
+    },
+    [artistDiscographyContext, onOpenAlbum],
+  )
+
+  const playDiscographyRelease = useCallback(
+    async (album: Album) => {
+      const currentReleaseTrack = currentTrack && trackInAlbum(currentTrack, album) ? currentTrack : null
+      const requestId = ++playReleaseRequestRef.current
+      const sessionArtistId = artist.id
+      setLoadingReleaseId(album.id)
+      try {
+        let detailError: unknown = null
+        let discographyError: unknown = null
+        const [detail, fullTracks] = await Promise.all([
+          api.getAlbum(album.sourceUrl || album.id).catch((error: unknown) => {
+            detailError = error
+            return null
+          }),
+          (allTracks ? Promise.resolve(allTracks) : loadDiscography()).catch((error: unknown) => {
+            discographyError = error
+            return []
+          }),
+        ])
+        if (
+          requestId !== playReleaseRequestRef.current ||
+          !isMountedRef.current ||
+          sessionArtistId !== artistIdRef.current
+        ) return
+
+        const validDetail = Boolean(
+          detail && detail.source === artist.source && detail.tracks.length > 0,
+        )
+        if (detail && !validDetail) {
+          detailError = {
+            reason: detail.source !== artist.source ? 'provider_mismatch' : 'empty_release',
+            expectedSource: artist.source,
+            actualSource: detail.source,
+            trackCount: detail.tracks.length,
+          }
+        }
+
+        const releaseTracks = validDetail
+          ? detail!.tracks.map((track) => {
+              const enriched: Track = {
+                ...track,
+                album: track.album || detail!.title,
+                albumId: track.albumId || detail!.id,
+                artworkUrl: track.artworkUrl || detail!.artworkUrl,
+                artistId: track.artistId || (track.artist === detail!.artist ? detail!.artistId : undefined),
+                artistArtworkUrl:
+                  track.artistArtworkUrl ||
+                  (track.artist === detail!.artist ? detail!.artistArtworkUrl : undefined),
+              }
+              return enriched
+            })
+          : []
+        const fallbackReleaseTracks = tracksForRelease(fullTracks, album, artist.source)
+        const detailStartTrack = currentReleaseTrack
+          ? releaseTracks.find((track) => track.id === currentReleaseTrack.id)
+          : releaseTracks[0]
+        const fallbackStartTrack = currentReleaseTrack
+          ? fallbackReleaseTracks.find((track) => track.id === currentReleaseTrack.id)
+          : fallbackReleaseTracks[0]
+        const startTrack = validDetail ? detailStartTrack ?? releaseTracks[0] : fallbackStartTrack
+        const queuedTracks = startTrack
+          ? tracksFromSelectedDiscography(
+              fullTracks,
+              artistDiscographyContext.releases,
+              startTrack.id,
+              artist.source,
+            )
+          : []
+        const fallbackTracks = queuedTracks.length ? queuedTracks : fallbackReleaseTracks
+        let tracksToPlay = fallbackTracks
+        if (validDetail) tracksToPlay = queuedTracks.length ? queuedTracks : releaseTracks
+        if (!validDetail) {
+          const diagnostic = {
+            artistId: artist.id,
+            artistRef: artist.sourceUrl || artist.id,
+            releaseId: album.id,
+            releaseRef: album.sourceUrl || album.id,
+            expectedSource: artist.source,
+            receivedSource: detail?.source ?? null,
+            detailTrackCount: detail?.tracks.length ?? 0,
+            detailError,
+            discographyError,
+            fallbackTrackCount: fallbackTracks.length,
+          }
+          if (fallbackTracks.length) {
+            console.warn('[ArtistView] Album detail unavailable; using artist discography fallback', diagnostic)
+          } else {
+            console.error('[ArtistView] Unable to load release or fallback tracks', diagnostic)
+          }
+        }
+        const allReadyJobs = jobs.filter((job) => isDone(job.status))
+        const items = tracksToPlay.map((track) =>
+          toPlayItem(track, findBestJob(allReadyJobs, track.id, quality), quality),
+        )
+        if (!items.length) {
+          pushToast(t.fetchError, 'error')
+          return
+        }
+        usePlayer.getState().setShuffle(false)
+        if (currentReleaseTrack) {
+          // صفِ ادامه‌دار را حتی وقتی همین انتشار در حال پخش است بازسازی کن؛
+          // replaceQueue ترک جاری را نگه می‌دارد و فقط دنباله را اصلاح می‌کند.
+          usePlayer.getState().replaceQueue(items, 0)
+          if (isPlaying) usePlayer.getState().pause()
+          else usePlayer.getState().toggle()
+        } else {
+          play(items, 0)
+        }
+      } catch (error) {
+        if (requestId === playReleaseRequestRef.current && sessionArtistId === artistIdRef.current) {
+          console.error('[ArtistView] Failed to play discography release', {
+            artistId: artist.id,
+            releaseId: album.id,
+            error,
+          })
+          pushToast(t.fetchError, 'error')
+        }
+      } finally {
+        if (requestId === playReleaseRequestRef.current && sessionArtistId === artistIdRef.current) {
+          setLoadingReleaseId(null)
+        }
+      }
+    },
+    [
+      allTracks,
+      artist.id,
+      artist.sourceUrl,
+      artist.source,
+      artistDiscographyContext.releases,
+      currentTrack,
+      isPlaying,
+      jobs,
+      loadDiscography,
+      play,
+      pushToast,
+      quality,
+      t,
+    ],
+  )
+
   // فیلتر جستجوی بلادرنگ در آثار با نرمال‌سازی نویسه‌های فارسی/عربی
   const cleanQ = searchQuery.trim().toLowerCase().replace(/[‌\s]+/g, ' ')
   const matchesSearch = useCallback(
@@ -911,32 +1190,47 @@ export default function ArtistView({
             WebkitMaskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)',
           }}
         >
-          <HeroBackdrop src={artist.artworkUrl} seed={artist.id} />
+          <HeroBackdrop src={artist.bannerUrl || artist.artworkUrl} seed={artist.id} />
         </div>
+
+        {/* بنر عریض بالای کانال یوتیوب */}
+        {artist.bannerUrl && (
+          <div className="relative mb-5 -mx-1 -mt-1 overflow-hidden rounded-2xl border border-white/10 shadow-lg aspect-[4/1] sm:aspect-[5/1] md:aspect-[6/1] sm:-mx-3 sm:-mt-3">
+            <Artwork
+              src={artist.bannerUrl}
+              alt={artist.name}
+              seed={`${artist.id}-banner`}
+              rounded="rounded-2xl"
+              className="size-full object-cover"
+            />
+          </div>
+        )}
 
         <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end sm:gap-8">
           {/* بخش آواتار دایره‌ای بزرگ با هاله‌ی نوری */}
-          <div className="group/avatar relative shrink-0 self-center sm:self-auto">
-            {/* هاله‌ی درخشان رنگ کاور */}
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-0 rounded-full opacity-60 blur-2xl transition-opacity duration-500 group-hover/avatar:opacity-85"
-              style={{ background: `rgb(${anyTint} / 0.75)` }}
-            />
-
-            {/* تصویر گرد هنرمند با حاشیه‌ی شیشه‌ای */}
-            <div className="relative z-10 overflow-hidden rounded-full border-2 border-white/20 bg-panel shadow-2xl shadow-black/80 transition-transform duration-300 group-hover/avatar:scale-[1.03]">
-              <Artwork
-                src={artist.artworkUrl}
-                alt={artist.name}
-                seed={artist.id}
-                rounded="rounded-full"
-                className="size-32 object-cover sm:size-44 md:size-52"
+          {hasDistinctAvatar && (
+            <div className="group/avatar relative shrink-0 self-center sm:self-auto">
+              {/* هاله‌ی درخشان رنگ کاور */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 rounded-full opacity-60 blur-2xl transition-opacity duration-500 group-hover/avatar:opacity-85"
+                style={{ background: `rgb(${anyTint} / 0.75)` }}
               />
-              {/* برق شیشه‌ای */}
-              <div className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-tr from-white/15 via-transparent to-white/5 opacity-70" />
+
+              {/* تصویر گرد هنرمند با حاشیه‌ی شیشه‌ای */}
+              <div className="relative z-10 overflow-hidden rounded-full border-2 border-white/20 bg-panel shadow-2xl shadow-black/80 transition-transform duration-300 group-hover/avatar:scale-[1.03]">
+                <Artwork
+                  src={artist.artworkUrl}
+                  alt={artist.name}
+                  seed={artist.id}
+                  rounded="rounded-full"
+                  className="size-32 object-cover sm:size-44 md:size-52"
+                />
+                {/* برق شیشه‌ای */}
+                <div className="pointer-events-none absolute inset-0 rounded-full bg-gradient-to-tr from-white/15 via-transparent to-white/5 opacity-70" />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* متادیتای هنرمند */}
           <div className="min-w-0 flex-1 text-center sm:text-start">
@@ -950,6 +1244,11 @@ export default function ArtistView({
                 <span className="glass-chip inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1 text-[11px] font-bold text-white shadow-sm">
                   <VerifiedBadgeIcon className="size-3.5 text-accent" />
                   <span>{t.verifiedArtist}</span>
+                </span>
+              ) : artist.source === 'youtube' ? (
+                <span className="glass-chip inline-flex items-center gap-1.5 rounded-full border border-white/15 px-2.5 py-0.5 text-[10px] font-bold text-accent shadow-sm">
+                  <OfficialArtistBadgeIcon className="size-3.5 fill-current" />
+                  <span>{t.typeArtist}</span>
                 </span>
               ) : (
                 <span className="glass-chip inline-flex items-center gap-1.5 rounded-full border border-white/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
@@ -982,13 +1281,32 @@ export default function ArtistView({
               {artist.name}
             </h1>
 
+            {artist.handle && (
+              <p className="bidi relative z-10 mt-1 text-xs sm:text-sm font-semibold text-accent/90 text-center sm:text-start">
+                {artist.handle}
+              </p>
+            )}
+
             {/* خط جزئیات و آمار آثار */}
             <div className="relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:text-sm text-muted drop-shadow-[0_1px_6px_rgb(0_0_0/0.6)] sm:justify-start">
-              {artist.subtitle && <span>{digits(artist.subtitle, lang)}</span>}
+              {artist.monthlyListeners ? (
+                <span>{t.monthlyAudience(artist.monthlyListeners)}</span>
+              ) : artist.subscriberCount ? (
+                <span>{t.subscribersCount(artist.subscriberCount)}</span>
+              ) : artist.subtitle ? (
+                <span>{formatArtistSubtitle(artist.subtitle, lang)}</span>
+              ) : null}
 
-              {artist.topTracks.length > 0 && (
+              {artist.videoCount != null && (
                 <>
-                  {artist.subtitle && <span aria-hidden className="text-muted-2">·</span>}
+                  <span aria-hidden className="text-muted-2">·</span>
+                  <span>{t.videosCount(artist.videoCount)}</span>
+                </>
+              )}
+
+              {artist.topTracks.length > 0 && artist.videoCount == null && (
+                <>
+                  {(artist.subtitle || artist.subscriberCount) && <span aria-hidden className="text-muted-2">·</span>}
                   <span>
                     {t.trackCount(artist.topTracks.length)} {topTracksTitle}
                   </span>
@@ -1042,6 +1360,18 @@ export default function ArtistView({
                   className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-fg backdrop-blur-md transition hover:border-accent/40 hover:bg-white/10 hover:text-accent active:scale-95 sm:size-11"
                 >
                   <ShuffleIcon className="size-4.5 sm:size-5" />
+                </button>
+              )}
+
+              {/* دکمه رادیو برای یوتیوب موزیک */}
+              {(artist.source === 'youtube_music' || (artist.radio?.length ?? 0) > 0) && (
+                <button
+                  onClick={handleRadioPlay}
+                  title={t.artistRadio}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-fg backdrop-blur-md transition hover:border-white/30 hover:bg-white/10 sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm"
+                >
+                  <RadioIcon className="size-4 text-accent" />
+                  <span>{t.artistRadio}</span>
                 </button>
               )}
 
@@ -1132,7 +1462,7 @@ export default function ArtistView({
         <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-4 flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 shadow-lg sm:gap-3 sm:px-4 sm:py-2.5">
           <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
             <Artwork
-              src={artist.artworkUrl}
+              src={artist.artworkUrl || artist.bannerUrl}
               alt=""
               seed={artist.id}
               className="size-8 sm:size-9 shrink-0 shadow-sm"
@@ -1148,7 +1478,7 @@ export default function ArtistView({
                   ? t.albumCount(artist.albums.length)
                   : isUser && artist.playlists.length
                     ? t.playlistsCount(artist.playlists.length)
-                    : digits(artist.subtitle, lang)}
+                    : formatArtistSubtitle(artist.subtitle, lang)}
               </p>
             </div>
             {hasPlayable && (
@@ -1201,6 +1531,60 @@ export default function ArtistView({
           )}
         </div>
       </div>
+
+      {/* ─── نوار فیلترهای پلتفرم YouTube Music ─── */}
+      {!cleanQ && artist.source === 'youtube_music' && (
+        <div className="mb-6 flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar px-1 py-1">
+          {(['all', 'songs', 'albums', 'singles', 'videos'] as const).map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setYtmCategory(cat)}
+              className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition whitespace-nowrap ${
+                ytmCategory === cat
+                  ? 'bg-fg text-bg shadow-sm'
+                  : 'border border-line bg-panel/60 text-muted hover:text-fg hover:border-line-soft'
+              }`}
+            >
+              {cat === 'all'
+                ? t.all
+                : cat === 'songs'
+                  ? t.songs
+                  : cat === 'albums'
+                    ? t.albums
+                    : cat === 'singles'
+                      ? t.singlesAndEps
+                      : t.musicVideos}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ─── نوار تب‌های پلتفرم یوتیوب ─── */}
+      {!cleanQ && artist.source === 'youtube' && (
+        <div className="mb-6 flex items-center gap-2 border-b border-line-soft overflow-x-auto no-scrollbar px-1">
+          {(['home', 'videos', 'releases', 'playlists', 'about'] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setYtTab(tab)}
+              className={`pb-3 px-3 sm:px-4 text-xs sm:text-sm font-bold border-b-2 transition whitespace-nowrap ${
+                ytTab === tab
+                  ? 'border-fg text-fg'
+                  : 'border-transparent text-muted hover:text-fg'
+              }`}
+            >
+              {tab === 'home'
+                ? t.homeTab
+                : tab === 'videos'
+                  ? t.videosTab
+                  : tab === 'releases'
+                    ? t.releasesTab
+                    : tab === 'playlists'
+                      ? t.playlistsTab
+                      : t.aboutTab}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ─── محتوای صفحه ─── */}
       <div className="space-y-10">
@@ -1302,6 +1686,552 @@ export default function ArtistView({
           </section>
         )}
 
+        {/* ─── نمای اختصاصی YouTube Music ─── */}
+        {!cleanQ && artist.source === 'youtube_music' && (
+          <>
+            {ytmCategory === 'all' && (
+              <>
+                {/* ۱. آهنگ‌ها (Songs) */}
+                {filteredTopTracks.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-fg sm:text-lg">{t.songs}</h2>
+                        <span className="text-xs font-semibold text-muted-2">
+                          ({digits(filteredTopTracks.length, lang)})
+                        </span>
+                      </div>
+                      {filteredTopTracks.length > 5 && (
+                        <button
+                          onClick={() => setYtmCategory('songs')}
+                          className="text-xs font-bold text-accent hover:underline"
+                        >
+                          {t.seeAll}
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      {filteredTopTracks.slice(0, 5).map((track, idx) => (
+                        <ArtistTrackRow
+                          key={track.id}
+                          track={track}
+                          index={idx + 1}
+                          playingId={activePlayingId}
+                          onTogglePlay={handleTopTrackToggle}
+                          onOpenAlbum={onOpenAlbum}
+                          artistAlbums={artist.albums}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* ۲. آلبوم‌ها (Albums) */}
+                {albumsOnly.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-fg sm:text-lg">{t.albums}</h2>
+                        <span className="text-xs font-semibold text-muted-2">
+                          ({digits(albumsOnly.length, lang)})
+                        </span>
+                      </div>
+                      {albumsOnly.length > 5 && (
+                        <button
+                          onClick={() => setYtmCategory('albums')}
+                          className="text-xs font-bold text-accent hover:underline"
+                        >
+                          {t.seeAll}
+                        </button>
+                      )}
+                    </div>
+                    <Shelf>
+                      {albumsOnly.map((album) => (
+                        <div key={album.id} className="w-36 shrink-0 snap-start sm:w-44">
+                          <AlbumCard
+                            album={album}
+                            onOpen={() => openDiscographyRelease(album)}
+                            onPlay={() => void playDiscographyRelease(album)}
+                            isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                            isLoading={loadingReleaseId === album.id}
+                          />
+                        </div>
+                      ))}
+                    </Shelf>
+                  </section>
+                )}
+
+                {/* ۳. تک‌آهنگ‌ها و EPها (Singles & EPs) */}
+                {singlesOnly.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-fg sm:text-lg">{t.singlesAndEps}</h2>
+                        <span className="text-xs font-semibold text-muted-2">
+                          ({digits(singlesOnly.length, lang)})
+                        </span>
+                      </div>
+                      {singlesOnly.length > 5 && (
+                        <button
+                          onClick={() => setYtmCategory('singles')}
+                          className="text-xs font-bold text-accent hover:underline"
+                        >
+                          {t.seeAll}
+                        </button>
+                      )}
+                    </div>
+                    <Shelf>
+                      {singlesOnly.map((album) => (
+                        <div key={album.id} className="w-36 shrink-0 snap-start sm:w-44">
+                          <AlbumCard
+                            album={album}
+                            onOpen={() => openDiscographyRelease(album)}
+                            onPlay={() => void playDiscographyRelease(album)}
+                            isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                            isLoading={loadingReleaseId === album.id}
+                          />
+                        </div>
+                      ))}
+                    </Shelf>
+                  </section>
+                )}
+
+                {/* ۴. موزیک ویدیوها (Music Videos) */}
+                {allVideos.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-fg sm:text-lg">{t.musicVideos}</h2>
+                        <span className="text-xs font-semibold text-muted-2">
+                          ({digits(allVideos.length, lang)})
+                        </span>
+                      </div>
+                      {allVideos.length > 4 && (
+                        <button
+                          onClick={() => setYtmCategory('videos')}
+                          className="text-xs font-bold text-accent hover:underline"
+                        >
+                          {t.seeAll}
+                        </button>
+                      )}
+                    </div>
+                    <Shelf>
+                      {allVideos.map((video) => (
+                        <div key={video.id} className="w-56 shrink-0 snap-start sm:w-64">
+                          <VideoCard
+                            track={video}
+                            isPlaying={Boolean(isPlaying && currentTrackId === video.id)}
+                            onPlay={() => handleVideoToggle(video)}
+                          />
+                        </div>
+                      ))}
+                    </Shelf>
+                  </section>
+                )}
+
+                {/* ۵. پلی‌لیست‌ها */}
+                {artist.playlists.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-fg sm:text-lg">{t.playlists}</h2>
+                      <span className="text-xs font-semibold text-muted-2">
+                        ({digits(artist.playlists.length, lang)})
+                      </span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {artist.playlists.map((pl) => (
+                        <PlaylistRow key={pl.id} playlist={pl} onOpen={() => onOpenPlaylist(pl)} />
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {/* ۶. هنرمندان مرتبط */}
+                {relatedArtists.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-fg sm:text-lg">{t.relatedArtists}</h2>
+                      <span className="text-xs font-semibold text-muted-2">
+                        ({digits(relatedArtists.length, lang)})
+                      </span>
+                    </div>
+                    <Shelf>
+                      {relatedArtists.map((rel) => (
+                        <div key={rel.id} className="w-28 shrink-0 snap-start sm:w-32">
+                          <ArtistCard artist={rel} onOpen={() => onOpenArtist?.(rel)} />
+                        </div>
+                      ))}
+                    </Shelf>
+                  </section>
+                )}
+              </>
+            )}
+
+            {ytmCategory === 'songs' && (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-fg sm:text-lg">{t.songs}</h2>
+                  <span className="text-xs font-semibold text-muted-2">
+                    ({digits(filteredTopTracks.length, lang)})
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {filteredTopTracks.map((track, idx) => (
+                    <ArtistTrackRow
+                      key={track.id}
+                      track={track}
+                      index={idx + 1}
+                      playingId={activePlayingId}
+                      onTogglePlay={handleTopTrackToggle}
+                      onOpenAlbum={onOpenAlbum}
+                      artistAlbums={artist.albums}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ytmCategory === 'albums' && (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-fg sm:text-lg">{t.albums}</h2>
+                  <span className="text-xs font-semibold text-muted-2">
+                    ({digits(albumsOnly.length, lang)})
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                  {albumsOnly.map((album) => (
+                    <AlbumCard
+                      key={album.id}
+                      album={album}
+                      onOpen={() => openDiscographyRelease(album)}
+                      onPlay={() => void playDiscographyRelease(album)}
+                      isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                      isLoading={loadingReleaseId === album.id}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ytmCategory === 'singles' && (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-fg sm:text-lg">{t.singlesAndEps}</h2>
+                  <span className="text-xs font-semibold text-muted-2">
+                    ({digits(singlesOnly.length, lang)})
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                  {singlesOnly.map((album) => (
+                    <AlbumCard
+                      key={album.id}
+                      album={album}
+                      onOpen={() => openDiscographyRelease(album)}
+                      onPlay={() => void playDiscographyRelease(album)}
+                      isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                      isLoading={loadingReleaseId === album.id}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ytmCategory === 'videos' && (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-fg sm:text-lg">{t.musicVideos}</h2>
+                  <span className="text-xs font-semibold text-muted-2">
+                    ({digits(allVideos.length, lang)})
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                  {allVideos.map((video) => (
+                    <VideoCard
+                      key={video.id}
+                      track={video}
+                      isPlaying={Boolean(isPlaying && currentTrackId === video.id)}
+                      onPlay={() => handleVideoToggle(video)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {/* ─── نمای اختصاصی کانال YouTube ─── */}
+        {!cleanQ && artist.source === 'youtube' && (
+          <>
+            {ytTab === 'home' && (
+              <>
+                {allVideos.length > 0 && (
+                  <div className="rounded-2xl border border-line-soft bg-panel/50 p-3 sm:p-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-5">
+                      <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-black/40 shrink-0 sm:w-72">
+                        <Artwork
+                          src={allVideos[0].artworkUrl}
+                          alt={allVideos[0].title}
+                          seed={allVideos[0].id}
+                          className="size-full object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleVideoToggle(allVideos[0])}
+                          className="absolute inset-0 grid place-items-center bg-black/35 transition hover:bg-black/50"
+                          aria-label={t.playTrack(allVideos[0].title)}
+                        >
+                          <span className="grid size-12 place-items-center rounded-full bg-accent text-accent-fg shadow-xl">
+                            {isPlaying && currentTrackId === allVideos[0].id ? (
+                              <PauseIcon className="size-5" />
+                            ) : (
+                              <PlayIcon className="size-5 ms-0.5" />
+                            )}
+                          </span>
+                        </button>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-accent/15 px-2.5 py-0.5 text-[10px] font-bold text-accent">
+                          <SparkleIcon className="size-3" />
+                          <span>{t.latestRelease}</span>
+                        </span>
+                        <h3
+                          onClick={() => handleVideoToggle(allVideos[0])}
+                          className="bidi mt-2 cursor-pointer text-sm font-bold text-fg transition hover:text-accent sm:text-base"
+                        >
+                          {allVideos[0].title}
+                        </h3>
+                        <p className="mt-1 text-xs text-muted-2">
+                          <span>{allVideos[0].artist}</span>
+                          {allVideos[0].views && (
+                            <span> • {formatViews(allVideos[0].views, lang)}</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {allVideos.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-fg sm:text-lg">{t.videos}</h2>
+                        <span className="text-xs font-semibold text-muted-2">
+                          ({digits(allVideos.length, lang)})
+                        </span>
+                      </div>
+                      {allVideos.length > 4 && (
+                        <button onClick={() => setYtTab('videos')} className="text-xs font-bold text-accent hover:underline">
+                          {t.seeAll}
+                        </button>
+                      )}
+                    </div>
+                    <Shelf>
+                      {allVideos.slice(0, 10).map((video) => (
+                        <div key={video.id} className="w-56 shrink-0 snap-start sm:w-64">
+                          <VideoCard
+                            track={video}
+                            isPlaying={Boolean(isPlaying && currentTrackId === video.id)}
+                            onPlay={() => handleVideoToggle(video)}
+                          />
+                        </div>
+                      ))}
+                    </Shelf>
+                  </section>
+                )}
+
+                {artist.albums.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-fg sm:text-lg">{t.releasesTab}</h2>
+                        <span className="text-xs font-semibold text-muted-2">
+                          ({digits(artist.albums.length, lang)})
+                        </span>
+                      </div>
+                      {artist.albums.length > 5 && (
+                        <button onClick={() => setYtTab('releases')} className="text-xs font-bold text-accent hover:underline">
+                          {t.seeAll}
+                        </button>
+                      )}
+                    </div>
+                    <Shelf>
+                      {artist.albums.slice(0, 10).map((album) => (
+                        <div key={album.id} className="w-36 shrink-0 snap-start sm:w-44">
+                          <AlbumCard
+                            album={album}
+                            onOpen={() => openDiscographyRelease(album)}
+                            onPlay={() => void playDiscographyRelease(album)}
+                            isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                            isLoading={loadingReleaseId === album.id}
+                          />
+                        </div>
+                      ))}
+                    </Shelf>
+                  </section>
+                )}
+
+                {artist.playlists.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-fg sm:text-lg">{t.playlists}</h2>
+                      <span className="text-xs font-semibold text-muted-2">
+                        ({digits(artist.playlists.length, lang)})
+                      </span>
+                    </div>
+                    <div className="space-y-0.5">
+                      {artist.playlists.map((pl) => (
+                        <PlaylistRow key={pl.id} playlist={pl} onOpen={() => onOpenPlaylist(pl)} />
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
+
+            {ytTab === 'videos' && (
+              <section className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-fg sm:text-lg">{t.videos}</h2>
+                    <span className="text-xs font-semibold text-muted-2">
+                      ({digits(allVideos.length, lang)})
+                    </span>
+                  </div>
+                  <div className="flex items-center rounded-lg border border-line bg-panel/60 p-0.5 text-xs">
+                    {(['latest', 'popular', 'oldest'] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setYtVideoSort(s)}
+                        className={`rounded-md px-2.5 py-1 transition ${
+                          ytVideoSort === s ? 'bg-accent text-accent-fg font-bold' : 'text-muted hover:text-fg'
+                        }`}
+                      >
+                        {s === 'latest' ? t.sortLatest : s === 'popular' ? t.sortPopular : t.sortOldest}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+                  {sortedVideos.map((video) => (
+                    <VideoCard
+                      key={video.id}
+                      track={video}
+                      isPlaying={Boolean(isPlaying && currentTrackId === video.id)}
+                      onPlay={() => handleVideoToggle(video)}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ytTab === 'releases' && (
+              <section className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-fg sm:text-lg">{t.releasesTab}</h2>
+                    <span className="text-xs font-semibold text-muted-2">
+                      ({digits(filteredAlbums.length, lang)})
+                    </span>
+                  </div>
+                  <div className="flex items-center rounded-lg border border-line bg-panel/60 p-0.5 text-xs">
+                    <button
+                      onClick={() => setDiscographyFilter('all')}
+                      className={`rounded-md px-2.5 py-1 transition ${
+                        discographyFilter === 'all' ? 'bg-accent text-accent-fg font-bold' : 'text-muted hover:text-fg'
+                      }`}
+                    >
+                      {t.allReleases}
+                    </button>
+                    <button
+                      onClick={() => setDiscographyFilter('albums')}
+                      className={`rounded-md px-2.5 py-1 transition ${
+                        discographyFilter === 'albums' ? 'bg-accent text-accent-fg font-bold' : 'text-muted hover:text-fg'
+                      }`}
+                    >
+                      {t.albums}
+                    </button>
+                    <button
+                      onClick={() => setDiscographyFilter('singles')}
+                      className={`rounded-md px-2.5 py-1 transition ${
+                        discographyFilter === 'singles' ? 'bg-accent text-accent-fg font-bold' : 'text-muted hover:text-fg'
+                      }`}
+                    >
+                      {t.singlesAndEps}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                  {filteredAlbums.map((album) => (
+                    <AlbumCard
+                      key={album.id}
+                      album={album}
+                      onOpen={() => openDiscographyRelease(album)}
+                      onPlay={() => void playDiscographyRelease(album)}
+                      isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                      isLoading={loadingReleaseId === album.id}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ytTab === 'playlists' && (
+              <section className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-fg sm:text-lg">{t.playlists}</h2>
+                  <span className="text-xs font-semibold text-muted-2">
+                    ({digits(artist.playlists.length, lang)})
+                  </span>
+                </div>
+                <div className="space-y-0.5">
+                  {artist.playlists.map((pl) => (
+                    <PlaylistRow key={pl.id} playlist={pl} onOpen={() => onOpenPlaylist(pl)} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {ytTab === 'about' && (
+              <section className="space-y-4 rounded-2xl border border-line-soft bg-panel/50 p-4 sm:p-6">
+                <h2 className="text-base font-bold text-fg sm:text-lg">{t.aboutTab}</h2>
+                {artist.description && (
+                  <p className="whitespace-pre-line text-xs leading-relaxed text-muted sm:text-sm">
+                    {artist.description}
+                  </p>
+                )}
+                <div className="grid grid-cols-2 gap-3 border-t border-line-soft pt-3 text-xs sm:grid-cols-3">
+                  {artist.handle && (
+                    <div className="rounded-xl bg-panel-2 p-2.5">
+                      <span className="block text-[11px] text-muted">{t.handle}</span>
+                      <span className="mt-0.5 block font-bold text-fg">{artist.handle}</span>
+                    </div>
+                  )}
+                  {artist.subscriberCount && (
+                    <div className="rounded-xl bg-panel-2 p-2.5">
+                      <span className="block text-[11px] text-muted">{t.subscribers}</span>
+                      <span className="mt-0.5 block font-bold text-fg">{t.subscribersCount(artist.subscriberCount)}</span>
+                    </div>
+                  )}
+                  {artist.videoCount != null && (
+                    <div className="rounded-xl bg-panel-2 p-2.5">
+                      <span className="block text-[11px] text-muted">{t.videos}</span>
+                      <span className="mt-0.5 block font-bold text-fg">{t.videosCount(artist.videoCount)}</span>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {/* ─── نمای پیش‌فرض (Spotify, Apple, Deezer, SoundCloud) یا جستجو ─── */}
+        {(cleanQ || (artist.source !== 'youtube_music' && artist.source !== 'youtube')) && (
+          <>
         {/* ─── فاز ۳: کارت ویژه «جدیدترین انتشار» (Latest Release Spotlight) ─── */}
         {latestRelease && !cleanQ && (
           <div className="relative overflow-hidden rounded-2xl border border-line-soft bg-panel/40 p-3.5 transition hover:border-muted-2/60 sm:p-5">
@@ -1371,7 +2301,7 @@ export default function ArtistView({
                     <span className="text-[11px] text-muted">
                       {latestRelease.kind === 'album'
                         ? releaseLabel(latestRelease.album, t)
-                        : t.typeSong}
+                        : (t.typeSingle ?? t.typeSong)}
                     </span>
                     {(latestRelease.kind === 'album'
                       ? latestRelease.album.year
@@ -1418,7 +2348,7 @@ export default function ArtistView({
                   <span className="text-xs text-muted">
                     {latestRelease.kind === 'album'
                       ? releaseLabel(latestRelease.album, t)
-                      : t.typeSong}
+                      : (t.typeSingle ?? t.typeSong)}
                   </span>
                   {(latestRelease.kind === 'album'
                     ? latestRelease.album.year
@@ -1647,9 +2577,9 @@ export default function ArtistView({
               <div className="rounded-2xl border border-line-soft bg-panel/30 p-8 text-center text-xs text-muted">
                 <p>
                   {discographyFilter === 'albums'
-                    ? 'هیچ آلبومی برای این هنرمند در دسترس نیست.'
+                    ? t.noAlbumsAvailable
                     : discographyFilter === 'singles'
-                      ? 'هیچ تک‌آهنگ یا EP برای این هنرمند در دسترس نیست.'
+                      ? t.noSinglesAvailable
                       : t.noWorksFound(searchQuery)}
                 </p>
                 {discographyFilter !== 'all' && (
@@ -1667,7 +2597,10 @@ export default function ArtistView({
                   <AlbumCard
                     key={album.id}
                     album={album}
-                    onOpen={() => onOpenAlbum(album)}
+                    onOpen={() => openDiscographyRelease(album)}
+                    onPlay={() => void playDiscographyRelease(album)}
+                    isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                    isLoading={loadingReleaseId === album.id}
                   />
                 ))}
               </div>
@@ -1676,7 +2609,7 @@ export default function ArtistView({
                 {filteredAlbums.map((album) => (
                   <button
                     key={album.id}
-                    onClick={() => onOpenAlbum(album)}
+                    onClick={() => openDiscographyRelease(album)}
                     className="group flex w-full items-center gap-3 rounded-xl border border-transparent p-2 text-start transition hover:border-line hover:bg-panel-2"
                   >
                     <Artwork
@@ -1854,6 +2787,8 @@ export default function ArtistView({
             </Shelf>
           </section>
         )}
+          </>
+        )}
       </div>
 
       {/* ─── فاز ۷: مودال جامع «درباره هنرمند» (About the Artist Modal) ─── */}
@@ -1882,7 +2817,7 @@ export default function ArtistView({
             <div className="flex flex-col items-center text-center">
               <div className="relative size-28 overflow-hidden rounded-full border-2 border-white/20 shadow-xl">
                 <Artwork
-                  src={artist.artworkUrl}
+                  src={artist.artworkUrl || artist.bannerUrl}
                   alt={artist.name}
                   seed={artist.id}
                   rounded="rounded-full"
@@ -1899,7 +2834,13 @@ export default function ArtistView({
 
               {artist.subtitle && (
                 <p className="mt-1 text-xs text-muted">
-                  {digits(artist.subtitle, lang)}
+                  {formatArtistSubtitle(artist.subtitle, lang)}
+                </p>
+              )}
+
+              {artist.description && (
+                <p className="mt-3 max-h-32 overflow-y-auto px-1 text-start text-xs leading-relaxed text-muted scrollbar-thin">
+                  {artist.description}
                 </p>
               )}
             </div>

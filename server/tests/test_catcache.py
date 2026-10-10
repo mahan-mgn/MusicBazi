@@ -127,6 +127,42 @@ def test_results_are_interleaved_across_sources(cache):
     assert sources[0] != sources[1]
 
 
+def test_empty_results_do_not_overwrite_cache(cache):
+    results = SearchResults(query="q", tracks=[_track("yt:track:1", "song", "artist", "youtube")])
+    catcache.remember_search("q", results)
+
+    empty = SearchResults(query="q")
+    catcache.remember_search("q", empty)
+
+    again = catcache.search("q")
+    assert len(again.tracks) == 1
+    assert again.tracks[0].id == "yt:track:1"
+
+
+def test_degraded_partial_search_does_not_overwrite_rich_cache(cache):
+    rich = SearchResults(
+        query="rock",
+        tracks=[
+            _track(f"itunes:track:{i}", f"song{i}", "artist", "apple") for i in range(5)
+        ] + [
+            _track(f"ytm:track:{i}", f"song{i}", "artist", "youtube_music") for i in range(5)
+        ],
+    )
+    catcache.remember_search("rock", rich)
+
+    # شبیه‌سازی قطعی یک پرووایدر در جستجوی بعدی (مثلاً فقط ۲ ترک برگشته)
+    degraded = SearchResults(
+        query="rock",
+        tracks=[_track("itunes:track:0", "song0", "artist", "apple")],
+    )
+    catcache.remember_search("rock", degraded)
+
+    again = catcache.search("rock")
+    # کش غنی ۱۰ ترکه دست‌نخورده مانده است
+    assert len(again.tracks) == 10
+
+
+
 def test_a_downloaded_track_shows_up_even_if_it_was_never_searched(cache, track):
     """
     ترکی که از مسیرِ لینکِ مستقیم دانلود شده هیچ‌وقت در هیچ جستجویی نبوده.

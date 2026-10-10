@@ -63,16 +63,25 @@ NEGATIVE = (
     "type beat",
     "leak",
     "demo",
+    # موزیک ویدیوها معمولاً افکت صوتی، دیالوگ، شلیک یا صدای پس‌زمینه دارند
+    # و نباید جای نسخه‌ی استودیویی رسمی بنشینند
+    "music video",
+    "official video",
+    "official music video",
+    "official mv",
+    "موزیک ویدیو",
+    "ویدیو کلیپ",
     "اجرای زنده",
     "کاور",
     "ریمیکس",
     "بیکلام",
 )
-# نشانه‌های نسخه‌ی رسمی.
+# نشانه‌های نسخه‌ی رسمی استودیویی.
 #
 # «audio»ی تنها عمداً اینجا نیست: با «official audio» فرق دارد و در عمل بیشتر
 # به بازنشرهای «8D AUDIO» و «SLOWED AUDIO» جایزه می‌داد تا به نسخه‌ی رسمی.
-POSITIVE = ("official audio", "official music", "topic", "full album")
+# «official music» هم حذف شد چون با «official music video» تداخل داشت.
+POSITIVE = ("official audio", "topic", "provided to youtube", "full album")
 
 CANDIDATES = 6
 
@@ -381,7 +390,7 @@ def resolve(track: Track, use_cache: bool = False) -> list[Candidate]:
         except Exception:
             pass
 
-    if track.source in ("youtube", "soundcloud") and track.sourceUrl:
+    if track.source in ("youtube", "youtube_music", "soundcloud") and track.sourceUrl:
         return [
             Candidate(
                 url=track.sourceUrl,

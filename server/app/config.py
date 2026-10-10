@@ -153,6 +153,12 @@ AUDIO_SOURCES = tuple(
 SOUNDCLOUD_ENABLED = _flag("SOUNDCLOUD", True)
 SOUNDCLOUD_CLIENT_ID = _env("SOUNDCLOUD_CLIENT_ID") or None
 
+# کاتالوگ یوتیوب در جستجو — پیش‌فرض فعال
+YOUTUBE_ENABLED = _flag("YOUTUBE", True) and not _flag("UNSTREAM_YOUTUBE_DISABLED", False)
+
+# کاتالوگ یوتیوب موزیک در جستجو — پیش‌فرض فعال
+YOUTUBE_MUSIC_ENABLED = _flag("YOUTUBE_MUSIC", True)
+
 # متن آهنگ از LRCLIB — عمومی، بدون کلید. کنار فایل .lrc می‌سازد و در تگ هم می‌نشیند.
 LYRICS_ENABLED = _flag("LYRICS", True)
 LRCLIB_API = _env("LRCLIB_API", "https://lrclib.net")

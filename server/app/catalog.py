@@ -12,12 +12,12 @@ import httpx
 
 from .config import AUDIO_SOURCES
 from .models import Album, AlbumDetail, Artist, ArtistDetail, Playlist, SearchResults, Track
-from .providers import deezer, itunes, soundcloud, spotify, ytdlp
+from .providers import deezer, itunes, soundcloud, spotify, youtube_music, ytdlp
 
 log = logging.getLogger(__name__)
 
 # شناسه‌های داخلی: provider:kind:id
-ID = re.compile(r"^(itunes|deezer|sp|yt|sc):(track|album|playlist|artist|user):(.+)$")
+ID = re.compile(r"^(itunes|deezer|sp|yt|ytm|sc):(track|album|playlist|artist|user):(.+)$")
 
 
 def _canonical_ref(ref: str) -> str:
@@ -27,6 +27,8 @@ def _canonical_ref(ref: str) -> str:
         ("spotify:", "sp:"),
         ("soundcloud:", "sc:"),
         ("youtube:", "yt:"),
+        ("youtube_music:", "ytm:"),
+        ("ytm:", "ytm:"),
     ):
         if ref.startswith(prefix):
             return f"{canon}{ref[len(prefix):]}"
@@ -68,12 +70,16 @@ def _dedupe_tracks(tracks: list[Track]) -> list[Track]:
     برمی‌گرداند و آن یکی واقعاً تکراری است.
     """
     seen: set[tuple[str, str, str]] = set()
+    seen_ids: set[tuple[str, str]] = set()
     out: list[Track] = []
     for t in tracks:
         key = (t.source, t.title.strip().lower(), t.artist.strip().lower())
-        if key in seen:
+        id_key = (t.source, t.id.strip())
+        if key in seen or (t.id and id_key in seen_ids):
             continue
         seen.add(key)
+        if t.id:
+            seen_ids.add(id_key)
         out.append(t)
     return out
 
@@ -95,6 +101,8 @@ def _dedupe_artists(artists: list[Artist]) -> list[Artist]:
         key = (a.source, a.name.strip().lower())
         current = best.get(key)
         if current is None or (not current.artworkUrl and a.artworkUrl):
+            best[key] = a
+        elif current.artworkUrl and a.artworkUrl and "ggpht.com" in a.artworkUrl and "ggpht.com" not in current.artworkUrl:
             best[key] = a
     return list(best.values())
 
@@ -150,6 +158,8 @@ async def search(client: httpx.AsyncClient, query: str) -> SearchResults:
         # فقط بخشِ پلی‌لیست‌ها یک منبع کمتر می‌شود.
         "spotify_playlists": spotify.enabled(),
         "soundcloud": "soundcloud" in AUDIO_SOURCES and soundcloud.enabled(),
+        "youtube": ytdlp.youtube_enabled(),
+        "youtube_music": youtube_music.enabled(),
     }
     apple, deez, *rest = await asyncio.gather(
         itunes.search(client, query),
@@ -157,6 +167,8 @@ async def search(client: httpx.AsyncClient, query: str) -> SearchResults:
         *([spotify.search(client, query)] if optional["spotify"] else []),
         *([spotify.search_playlists(client, query)] if optional["spotify_playlists"] else []),
         *([_soundcloud_search(query)] if optional["soundcloud"] else []),
+        *([asyncio.to_thread(ytdlp.youtube_search, query)] if optional["youtube"] else []),
+        *([asyncio.to_thread(youtube_music.search, query)] if optional["youtube_music"] else []),
         return_exceptions=True,
     )
     # `strict=True` عمدی است: ترتیبِ این دو باید دقیقاً یکی بماند و تنها چیزی
@@ -190,6 +202,16 @@ async def search(client: httpx.AsyncClient, query: str) -> SearchResults:
         result.albums += cloud.albums
         result.playlists += cloud.playlists
         result.artists += cloud.artists
+    if isinstance(yt := extra.get("youtube"), SearchResults):
+        result.tracks += yt.tracks
+        result.albums += yt.albums
+        result.playlists += yt.playlists
+        result.artists += yt.artists
+    if isinstance(ytm := extra.get("youtube_music"), SearchResults):
+        result.tracks += ytm.tracks
+        result.albums += ytm.albums
+        result.playlists += ytm.playlists
+        result.artists += ytm.artists
 
     if not result.tracks and not result.albums and not result.playlists:
         # همه‌ی provider ها افتاده‌اند — این خطا باید به کاربر برسد، نه نتیجه‌ی خالی
@@ -274,12 +296,31 @@ async def resolve_ref(client: httpx.AsyncClient, ref: str) -> AlbumDetail | None
             if spotify.enabled():
                 return await _spotify_ref(client, kind, ident)
             return await _spotify_fallback(client, f"https://open.spotify.com/{kind}/{ident}")
-        if provider == "yt":
+        if provider == "ytm" and kind == "album":
+            alb = await asyncio.to_thread(youtube_music.get_album, ident)
+            if alb is not None:
+                return alb
+        if (provider in ("yt", "ytm") and kind == "playlist" and ident.startswith("OLAK")) or (
+            provider in ("yt", "ytm") and kind == "album" and ident.startswith("OLAK")
+        ):
+            try:
+                bid = await asyncio.to_thread(youtube_music._get_client().get_album_browse_id, ident)
+                if bid:
+                    alb = await asyncio.to_thread(youtube_music.get_album, bid)
+                    if alb:
+                        if provider == "yt":
+                            alb = alb.model_copy(update={"source": "youtube", "id": f"yt:playlist:{ident}"})
+                            alb.tracks = [t.model_copy(update={"source": "youtube"}) for t in alb.tracks]
+                        return alb
+            except Exception:
+                pass
+        if provider in ("yt", "ytm"):
             # پلی‌لیست شناسه‌ی list دارد نه v؛ ساختن watch?v= از آن، لینک مرده بود
+            domain = "music.youtube.com" if provider == "ytm" else "www.youtube.com"
             url = (
-                f"https://www.youtube.com/playlist?list={ident}"
+                f"https://{domain}/playlist?list={ident}"
                 if kind == "playlist"
-                else f"https://www.youtube.com/watch?v={ident}"
+                else f"https://{domain}/watch?v={ident}"
             )
             return await asyncio.to_thread(ytdlp.extract, url)
         if provider == "sc":
@@ -328,6 +369,28 @@ async def resolve_ref(client: httpx.AsyncClient, ref: str) -> AlbumDetail | None
             return await _spotify_ref(client, kind, ident)
         return await _spotify_fallback(client, ref)
 
+    # آلبوم‌های کاتالوگ رسمی YouTube Music (browse/MPRE...)
+    if "music.youtube.com" in ref.lower():
+        if m := re.search(r"music\.youtube\.com/browse/(MPRE[\w-]+)", ref, re.I):
+            alb = await asyncio.to_thread(youtube_music.get_album, m.group(1))
+            if alb is not None:
+                return alb
+
+    # پلی‌لیست‌های ریلیز رسمی (OLAK...) از یوتیوب یا یوتیوب موزیک
+    if m := re.search(r"[?&]list=(OLAK[\w-]+)", ref):
+        olak_id = m.group(1)
+        try:
+            bid = await asyncio.to_thread(youtube_music._get_client().get_album_browse_id, olak_id)
+            if bid:
+                alb = await asyncio.to_thread(youtube_music.get_album, bid)
+                if alb:
+                    if "music.youtube.com" not in ref.lower() and not ref.startswith("ytm:"):
+                        alb = alb.model_copy(update={"source": "youtube", "id": f"yt:playlist:{olak_id}"})
+                        alb.tracks = [t.model_copy(update={"source": "youtube"}) for t in alb.tracks]
+                    return alb
+        except Exception:
+            pass
+
     if (
         ytdlp.YOUTUBE_URL.search(ref)
         or ytdlp.SOUNDCLOUD_URL.search(ref)
@@ -362,9 +425,9 @@ async def _fill_tracks(client: httpx.AsyncClient, detail: ArtistDetail) -> Artis
     اینجاست نه در providerها چون `resolve_ref` از قبل هر چهار پلتفرم را می‌شناسد؛
     یک پیاده‌سازی برای همه.
     """
-    # ساندکلاد محبوب‌ها را از روی تعداد پخش می‌چیند؛ پر کردن از آلبوم آن ترتیب
-    # را خراب می‌کند و ترکِ آلبوم را جایِ محبوب می‌نشاند.
-    if detail.source == "soundcloud":
+    # ساندکلاد و یوتیوب محبوب‌ها را از روی تعداد پخش/بازدید می‌چینند؛ پر کردن از آلبوم
+    # آن ترتیب را خراب می‌کند و ترکِ آلبوم را جایِ محبوب می‌نشاند.
+    if detail.source in ("soundcloud", "youtube", "youtube_music"):
         return detail
 
     if len(detail.topTracks) >= MIN_TRACKS or not detail.albums:
@@ -410,37 +473,53 @@ async def resolve_artist(client: httpx.AsyncClient, ref: str) -> ArtistDetail | 
 
 async def resolve_artist_discography(client: httpx.AsyncClient, ref: str) -> list[Track]:
     """
-    تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها + تک‌آهنگ‌ها + برترین‌ها) برای دانلود/پخش کامل.
+    ترک‌های همان کاتالوگِ هنرمند، به‌ترتیب انتشارها و ترک‌های هر انتشار.
+
+    یوتیوب دیسکوگرافی آلبومی ندارد؛ ویدیوهای کانال، همان ترتیبی که صفحه‌ی
+    هنرمند نشان می‌دهد، فهرست پخش آن هستند. برای سایر منابع، جزئیات هر انتشار
+    جداگانه resolve می‌شود تا آلبوم و تک‌آهنگ با شناسه‌ی همان provider برگردد.
     """
+    expected_source = _artist_source_from_ref(ref)
     clean_ref = _canonical_ref(ref.strip())
-    ident = ""
-    is_spotify = False
+    match = ID.match(clean_ref)
+    ident = match.group(3) if match and match.group(1) == "sp" and match.group(2) == "artist" else ""
+    if not ident and (parsed := spotify.parse_url(clean_ref)) and parsed[0] == "artist":
+        ident = parsed[1]
 
-    if m := ID.match(clean_ref):
-        provider, kind, ident = m.groups()
-        if kind == "artist" and provider == "sp":
-            is_spotify = True
-    elif parsed := spotify.parse_url(clean_ref):
-        if parsed[0] == "artist":
-            is_spotify = True
-            ident = parsed[1]
-
-    if is_spotify and spotify.enabled() and ident:
+    if expected_source == "spotify" and spotify.enabled() and ident:
         tracks = await spotify.artist_discography(client, ident)
-        if tracks:
-            return tracks
+        matching_tracks = [track for track in tracks if track.source == "spotify"]
+        if matching_tracks:
+            return matching_tracks
 
     detail = await resolve_artist(client, ref)
-    if detail is None:
+    if detail is None or (expected_source and detail.source != expected_source):
         return []
 
     tracks: list[Track] = []
     seen: set[str] = set()
 
     def add(t: Track) -> None:
-        if t and t.id and t.id not in seen:
+        if t and t.id and t.source == detail.source and t.id not in seen:
             seen.add(t.id)
             tracks.append(t)
+
+    # کانال یوتیوب در این اپ، ویدیوهای تب Videos و در صورت وجود آلبوم‌های
+    # تب Releases را نمایش می‌دهد.
+    if detail.source == "youtube":
+        for track in detail.topTracks:
+            add(track)
+        releases = [album for album in detail.albums if album.source == detail.source]
+        if releases:
+            found = await asyncio.gather(
+                *(resolve_ref(client, album.sourceUrl or album.id) for album in releases),
+                return_exceptions=True,
+            )
+            for outcome in found:
+                if isinstance(outcome, AlbumDetail) and outcome.source == detail.source:
+                    for t in outcome.tracks:
+                        add(t)
+        return tracks
 
     for t in detail.topTracks:
         add(t)
@@ -451,17 +530,55 @@ async def resolve_artist_discography(client: httpx.AsyncClient, ref: str) -> lis
     for t in detail.radio or []:
         add(t)
 
-    if detail.albums:
+    releases = [album for album in detail.albums if album.source == detail.source]
+    if releases:
         found = await asyncio.gather(
-            *(resolve_ref(client, a.sourceUrl or a.id) for a in detail.albums),
+            *(resolve_ref(client, album.sourceUrl or album.id) for album in releases),
             return_exceptions=True,
         )
         for outcome in found:
-            if isinstance(outcome, AlbumDetail):
+            if isinstance(outcome, AlbumDetail) and outcome.source == detail.source:
                 for t in outcome.tracks:
                     add(t)
 
     return tracks
+
+
+def _artist_source_from_ref(ref: str) -> str | None:
+    """شناسه‌ی پلتفرم را از مرجع هنرمند درمی‌آورد تا فالبک بین providerها نشود."""
+    clean_ref = _canonical_ref(ref.strip())
+    if match := ID.match(clean_ref):
+        provider, kind, _ = match.groups()
+        if kind == "artist":
+            return {
+                "itunes": "apple",
+                "deezer": "deezer",
+                "sp": "spotify",
+                "sc": "soundcloud",
+                "yt": "youtube",
+                "ytm": "youtube_music",
+            }.get(provider)
+
+    if itunes.parse_url(clean_ref) and itunes.parse_url(clean_ref)[0] == "artist":
+        return "apple"
+    if deezer.parse_url(clean_ref) and deezer.parse_url(clean_ref)[0] == "artist":
+        return "deezer"
+    if spotify.parse_url(clean_ref) and spotify.parse_url(clean_ref)[0] == "artist":
+        return "spotify"
+    if "music.youtube.com" in clean_ref:
+        return "youtube_music"
+    if ytdlp.CHANNEL_URL.search(clean_ref):
+        return "youtube"
+    if ytdlp.SOUNDCLOUD_PROFILE_URL.match(
+        re.sub(
+            r"/(?:tracks|albums|sets|popular-tracks|reposts|likes)/?$",
+            "",
+            clean_ref,
+            flags=re.IGNORECASE,
+        )
+    ):
+        return "soundcloud"
+    return None
 
 
 async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | None:
@@ -481,6 +598,11 @@ async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | No
                 )
             if provider == "sc":
                 return await asyncio.to_thread(ytdlp.soundcloud_artist, ident)
+            if provider == "ytm":
+                art = await asyncio.to_thread(youtube_music.get_artist, ident)
+                if art is not None:
+                    return art
+                return await asyncio.to_thread(ytdlp.youtube_channel, _channel_url(ident))
             if provider == "yt":
                 return await asyncio.to_thread(ytdlp.youtube_channel, _channel_url(ident))
         if kind == "user":
@@ -507,8 +629,15 @@ async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | No
         # صفحه‌ی کاربر برخلاف بقیه‌ی اسپاتیفای کلید نمی‌خواهد
         if parsed[0] == "user":
             return await spotify.user(client, parsed[1])
+    if "music.youtube.com" in ref.lower():
+        if m := re.search(r"music\.youtube\.com/channel/([\w-]+)", ref, re.I):
+            return await asyncio.to_thread(youtube_music.get_artist, m.group(1))
+        if m := re.search(r"music\.youtube\.com/(@[\w.\-]+)", ref, re.I):
+            return await asyncio.to_thread(youtube_music.get_artist, m.group(1))
+        if m := re.search(r"music\.youtube\.com/browse/(UC[\w-]+)", ref, re.I):
+            return await asyncio.to_thread(youtube_music.get_artist, m.group(1))
     sc_clean = re.sub(
-        r"/(?:tracks|albums|sets|popular-tracks|reposts|likes)/?$", "", ref, flags=re.I
+        r"/(?:tracks|albums|sets|popular-tracks|reposts|likes)/?$", "", ref, flags=re.IGNORECASE
     )
     if ytdlp.SOUNDCLOUD_PROFILE_URL.match(sc_clean):
         return await asyncio.to_thread(ytdlp.soundcloud_user, sc_clean)
@@ -518,7 +647,10 @@ async def _artist_page(client: httpx.AsyncClient, ref: str) -> ArtistDetail | No
 
 
 def _channel_url(channel_id: str) -> str:
-    return f"https://www.youtube.com/channel/{channel_id}"
+    clean = channel_id.strip()
+    if clean.startswith("@"):
+        return f"https://www.youtube.com/{clean}"
+    return f"https://www.youtube.com/channel/{clean}"
 
 
 async def _user_page(client: httpx.AsyncClient, provider: str, ident: str) -> ArtistDetail | None:

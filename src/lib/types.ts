@@ -1,4 +1,4 @@
-export type Source = 'apple' | 'deezer' | 'soundcloud' | 'spotify' | 'youtube'
+export type Source = 'apple' | 'deezer' | 'soundcloud' | 'spotify' | 'youtube' | 'youtube_music'
 
 export const SOURCE_LABEL: Record<Source, string> = {
   apple: 'Apple',
@@ -6,6 +6,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
   soundcloud: 'SoundCloud',
   spotify: 'Spotify',
   youtube: 'YouTube',
+  youtube_music: 'YouTube Music',
 }
 
 /** کیفیت‌های قابل انتخاب در هدر */
@@ -76,6 +77,7 @@ export interface Track {
    */
   valence?: number
   energy?: number
+  views?: string | null
 }
 
 export interface Artist {
@@ -93,6 +95,13 @@ export interface Artist {
   kind?: 'artist' | 'user'
   /** فقط وقتی پلتفرم صریح گفته حساب تأیید شده است — وگرنه بج جعلی نشان نده */
   verified?: boolean
+  description?: string | null
+  handle?: string | null
+  bannerUrl?: string | null
+  subscriberCount?: string | null
+  videoCount?: number | null
+  viewCount?: string | null
+  monthlyListeners?: string | null
 }
 
 export interface Album {
@@ -130,10 +139,21 @@ export interface AlbumDetail extends Album {
   tracks: Track[]
 }
 
+/** Playback context carried when an album is opened from an artist's discography. */
+export interface ArtistDiscographyContext {
+  artistRef: string
+  source?: Source
+  releases: Array<{ id: string; title: string; trackCount?: number }>
+}
+
 /** صفحه‌ی هنرمند: چند ترک محبوب به‌علاوه‌ی دیسکوگرافی */
 export interface ArtistDetail extends Artist {
   topTracks: Track[]
   albums: Album[]
+  /** تفکیک تک‌آهنگ‌ها/EPها برای کاتالوگ دقیق (یوتیوب موزیک و ساندکلاد) */
+  singles?: Album[]
+  /** ویدیوهای رسمی هنرمند (یوتیوب موزیک و کانال یوتیوب) */
+  videos?: Track[]
   /**
    * پلی‌لیست‌های همین صفحه: برای کاربر تمامِ محتوایش، و برای هنرمند
    * پلی‌لیست‌هایی که پلتفرم دورش ساخته (دیزر) یا خودش منتشر کرده.
@@ -558,8 +578,8 @@ export interface MusicApi {
   followState(chatId: number, artistId: string, signal?: AbortSignal): Promise<FollowState>
   follow(chatId: number, req: FollowRequest): Promise<FollowState>
   unfollow(chatId: number, artistId: string): Promise<void>
-  /** پری‌فچ فایل استریم برای ترک بعدی صف در پس‌زمینه */
-  prefetchStream?(track: Track): Promise<void>
+  /** فایل استریم را در کش آماده می‌کند؛ وقتی آماده شد true و در خطا false برمی‌گرداند. */
+  prefetchStream?(track: Track, quality?: Quality | null): Promise<boolean>
 }
 
 /**

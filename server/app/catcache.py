@@ -91,8 +91,24 @@ def remember_search(query: str, results: SearchResults) -> None:
     key = _norm(query)
     if not key:
         return
+    # نتیجه کاملاً خالی کش نمی‌شود تا کش پرمحتوای قبلی خراب نشود
+    if not results.tracks and not results.albums and not results.artists and not results.playlists:
+        return
     now = time.time()
     try:
+        # اگر قبلاً نسخه‌ی غنی‌تری کش شده (مثلاً این‌بار یکی از پرووایدرها تایم‌اوت خورده)،
+        # نتیجه‌ی ناقص موقت جایگزین نتیجه‌ی کامل قبلی نمی‌شود.
+        existing = db.get_search(key)
+        if existing:
+            try:
+                old = SearchResults.model_validate_json(existing["payload"])
+                old_count = len(old.tracks) + len(old.albums) + len(old.artists)
+                new_count = len(results.tracks) + len(results.albums) + len(results.artists)
+                if new_count < old_count and new_count < int(old_count * 0.6):
+                    db.put_entities(_entities(results), now)
+                    return
+            except Exception:
+                pass
         db.put_search(key, results.model_dump_json(), now)
         db.put_entities(_entities(results), now)
     except Exception:

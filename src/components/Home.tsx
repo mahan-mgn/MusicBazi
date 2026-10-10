@@ -21,7 +21,7 @@ import {
 import SourceLogo from './logos'
 
 /** منبع‌هایی که سرچ‌بار می‌شناسد — همان‌ها که در هیرو نشان داده می‌شوند */
-const SOURCES: Source[] = ['spotify', 'deezer', 'apple', 'youtube', 'soundcloud']
+const SOURCES: Source[] = ['spotify', 'deezer', 'apple', 'youtube', 'youtube_music', 'soundcloud']
 
 /**
  * رنگ هر کاشی حس‌وحال.

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { readStored, writeStored } from './storage'
-import { fa } from './format'
+import { fa, latinDigits } from './format'
 
 export type Lang = 'fa' | 'en'
 
@@ -85,6 +85,7 @@ const DICT = {
     backToResults: 'برگشت به نتایج',
     typeAlbum: 'آلبوم',
     typeSong: 'آهنگ',
+    typeSingle: 'تک‌آهنگ',
     typeArtist: 'هنرمند',
     typePlaylist: 'پلی‌لیست',
     trackCount: (n: number) => `${fa(n)} آهنگ`,
@@ -393,6 +394,8 @@ const DICT = {
     playOffline: 'پخش آفلاین',
     searchArtistWorks: (name: string) => `جستجو در آثار ${name}…`,
     noWorksFound: (q: string) => `اثری مطابق «${q}» پیدا نشد`,
+    noAlbumsAvailable: 'هیچ آلبومی برای این هنرمند در دسترس نیست.',
+    noSinglesAvailable: 'هیچ تک‌آهنگ یا EP برای این هنرمند در دسترس نیست.',
     aboutArtist: 'درباره هنرمند',
     artistStats: 'اطلاعات و آمار',
     sortNewest: 'جدیدترین',
@@ -411,6 +414,27 @@ const DICT = {
     /** فهرستِ ترک‌ها کامل نشد؛ خالی بودنش یعنی خرابی، نه «این هنرمند چیزی ندارد» */
     artistLoadFailed: 'بارگذاری بخشی از این صفحه ناموفق بود',
     retryAll: 'تلاش دوباره',
+    musicVideos: 'موزیک ویدیوها',
+    videos: 'ویدیوها',
+    homeTab: 'صفحه اصلی',
+    videosTab: 'ویدیوها',
+    releasesTab: 'انتشارها',
+    playlistsTab: 'پلی‌لیست‌ها',
+    aboutTab: 'درباره',
+    sortLatest: 'جدیدترین',
+    sortPopular: 'محبوب‌ترین',
+    handle: 'هندل',
+    subscribers: 'دنبال‌کنندگان',
+    subscribersCount: (n: string | number) => {
+      const clean = String(n).replace(/\s*(?:دنبال‌کننده|subscribers?)\s*/gi, '').trim()
+      return `${typeof n === 'number' ? fa(n) : fa(clean)} دنبال‌کننده`
+    },
+    videosCount: (n: number) => `${fa(n)} ویدیو`,
+    monthlyAudience: (n: string | number) => {
+      const clean = String(n).replace(/\s*(?:شنونده(?:\s*ماهانه)?|monthly listeners?)\s*/gi, '').trim()
+      return `${typeof n === 'number' ? fa(n) : fa(clean)} شنونده ماهانه`
+    },
+    featuredOn: 'حضور در',
 
 
     // ---------- شناسایی صوتی ----------
@@ -745,6 +769,7 @@ const DICT = {
     backToResults: 'Back to results',
     typeAlbum: 'Album',
     typeSong: 'Song',
+    typeSingle: 'Single',
     typeArtist: 'Artist',
     typePlaylist: 'Playlist',
     trackCount: (n: number) => `${n} track${n === 1 ? '' : 's'}`,
@@ -1048,6 +1073,8 @@ const DICT = {
     playOffline: 'Play Offline',
     searchArtistWorks: (name: string) => `Search ${name}’s catalog…`,
     noWorksFound: (q: string) => `No releases found matching “${q}”`,
+    noAlbumsAvailable: 'No albums available for this artist.',
+    noSinglesAvailable: 'No singles or EPs available for this artist.',
     aboutArtist: 'About Artist',
     artistStats: 'Info & Stats',
     sortNewest: 'Newest',
@@ -1061,6 +1088,33 @@ const DICT = {
     uploadedTracks: 'Tracks',
     artistLoadFailed: 'Part of this page failed to load',
     retryAll: 'Try again',
+    musicVideos: 'Music Videos',
+    videos: 'Videos',
+    homeTab: 'Home',
+    videosTab: 'Videos',
+    releasesTab: 'Releases',
+    playlistsTab: 'Playlists',
+    aboutTab: 'About',
+    sortLatest: 'Latest',
+    sortPopular: 'Popular',
+    handle: 'Handle',
+    subscribers: 'Subscribers',
+    subscribersCount: (n: string | number) => {
+      const clean = latinDigits(String(n))
+        .replace(/٬/g, ',')
+        .replace(/\s*(?:دنبال‌کننده|subscribers?)\s*/gi, '')
+        .trim()
+      return `${clean} subscribers`
+    },
+    videosCount: (n: number) => `${n} videos`,
+    monthlyAudience: (n: string | number) => {
+      const clean = latinDigits(String(n))
+        .replace(/٬/g, ',')
+        .replace(/\s*(?:شنونده(?:\s*ماهانه)?|monthly listeners?)\s*/gi, '')
+        .trim()
+      return `${clean} monthly listeners`
+    },
+    featuredOn: 'Featured on',
 
 
     // ---------- audio identification ----------

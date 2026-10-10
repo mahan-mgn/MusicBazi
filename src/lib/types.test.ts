@@ -30,6 +30,7 @@ describe('source labels', () => {
       'soundcloud',
       'spotify',
       'youtube',
+      'youtube_music',
     ])
   })
 })

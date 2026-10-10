@@ -65,9 +65,9 @@ describe('Home Hero', () => {
   it('بخش هیرو و لوگوهای ثابت پلتفرم‌ها را رندر می‌کند', () => {
     renderHome()
 
-    // لوگوهای ۵ سرویس اصلی
+    // لوگوهای ۶ سرویس اصلی
     const sourceLogos = host.querySelectorAll('section ul li')
-    expect(sourceLogos.length).toBe(5)
+    expect(sourceLogos.length).toBe(6)
 
     // دکمه‌های حذف‌شده نباید در هیرو وجود داشته باشند
     const buttons = host.querySelectorAll('button')
