@@ -10,7 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 [![Capacitor](https://img.shields.io/badge/Capacitor-Android-119EFF?style=flat-square&logo=capacitor&logoColor=white)](https://capacitorjs.com)
-[![Tests](https://img.shields.io/badge/Tests-1238%20Passed-brightgreen?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/Tests-1800%2B%20Passed-brightgreen?style=flat-square)]()
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
 [Features](#key-features) • [Quick Start](#system-setup-desktop--server) • [Mobile Setup](#mobile-setup-android) • [Architecture](#architecture) • [API Reference](#api-reference) • [Releases](https://github.com/mahan-mgn/MusicBazi/releases)
@@ -21,11 +21,11 @@
 
 ## Overview
 
-**Music Bazi** bridges the gap between commercial streaming platforms and self-hosted personal music libraries. It queries public metadata catalogs (**Apple Music**, **Deezer**, and **Spotify**) to index tracks, albums, and playlists, then intelligently locates, extracts, and transcodes high-quality audio from open sources (**YouTube** and **SoundCloud** via `yt-dlp`).
+**Music Bazi** bridges the gap between commercial streaming platforms and self-hosted personal music libraries. It queries public metadata catalogs (**Apple Music**, **Deezer**, **Spotify**, and **YouTube Music**) to index tracks, albums, and playlists, then intelligently locates, extracts, and transcodes high-quality audio from open sources (**YouTube**, **YouTube Music**, and **SoundCloud** via `yt-dlp` and an isolated **InnerTubeX** Kotlin microservice bridge).
 
 Audio files are automatically transcoded to user-selected bitrates, injected with official cover artwork, tagged with normalized ID3 metadata, aligned with synchronized lyrics (`.lrc`), and normalized for loudness according to **EBU R128**.
 
-Whether deployed on a home server via Docker, run locally for development, accessed as a PWA, installed as a native Android APK, or executed fully standalone on an Android phone via Termux without any computer, Music Bazi provides a unified audiophile experience.
+Whether deployed on a home server via Docker, run locally for development, accessed as a PWA, installed as a native Android APK with the **BitChord v1.8 audiophile engine**, or executed fully standalone on an Android phone via Termux without any computer, Music Bazi provides a unified audiophile experience.
 
 ---
 
@@ -33,19 +33,33 @@ Whether deployed on a home server via Docker, run locally for development, acces
 
 ### 🎧 Catalog Aggregation & Metadata
 - **Keyless Public Catalogs:** Direct search and metadata indexing via Apple Music (iTunes Search API) and Deezer API with zero API keys required.
+- **YouTube Music & Channel Catalog:** Search and full artist catalog scraping (top songs, releases, albums, singles, official videos, subscriber counts, and channel panoramic banners) via `ytmusicapi` and enhanced `yt-dlp`.
 - **Spotify Integration:** Instant URL resolution via public oEmbed, with optional Spotify Web API credentials for exact playlist and album parsing.
-- **Rich Discography Views:** View full artist profiles, top tracks, albums, singles, and public user playlists.
+- **Rich Discography Views & Batch Playback:** View full artist profiles, top tracks, albums, singles, video tabs, and multi-release queue management.
+- **Official Artist Badges & Video Cards:** Visual distinction for verified channels (`OfficialArtistBadgeIcon`), interactive video cards, and formatted view counts.
 
 ### 🎯 Intelligent Audio Matcher
-- **Multi-Source Resolver:** Evaluates candidates across YouTube and SoundCloud concurrently.
-- **Smart Heuristics:** Matches track duration with steep penalties for deviations (>30s difference receives -35 penalty), penalizes unwanted noise tokens (`live`, `cover`, `remix`, `karaoke`), and normalizes localized text characters.
+- **Multi-Source Resolver:** Evaluates candidates across YouTube, YouTube Music, and SoundCloud concurrently.
+- **Smart Heuristics:** Matches track duration with steep penalties for deviations (>30s difference receives -35 penalty), penalizes unwanted noise tokens (`live`, `cover`, `remix`, `karaoke`, `music video`), and normalizes localized text characters.
 - **Manual Candidate Picker (`browse`):** Override matching decisions on any track to preview and select alternate audio streams directly.
 
-### 🎼 Audiophile Playback Engine
+### 🎼 Audiophile Playback Engine & BitChord v1.8 (Android Native)
+- **BitChord v1.8 Native Engine:** High-performance 32-bit floating-point audio graph with `PrecisionAudioSink`, bypassing standard Android audio resampler degradation.
+- **Hi-Res Audio & Direct USB DAC:** Direct hardware USB capability probing and bit-perfect DAC output up to 192 kHz / 24-bit via `UsbDirectManager` and `OutputNegotiator`.
+- **Bluetooth Audio Telemetry:** Real-time probing of Bluetooth codec (LDAC, aptX HD, AAC, SBC), MTU size, and transmission bitrate.
+- **Harmonic Automix Planner:** Real-time DJ transition planning with key signature compatibility, BPM phase matching, energy curves, and bi-quad transition filter sweeps.
+- **Golden Audio Test Suite:** Comprehensive validation of impulse responses, phase linearity, bypass bit-transparency, and EBU R128 loudness.
 - **Web Audio Dual-Deck Architecture:** Smooth 0–12 second crossfading between consecutive tracks.
 - **Loudness Normalization (EBU R128):** Measures integrated loudness (LUFS) and true peak on download without altering the underlying audio file. Real-time gain adjustment matches target loudness (-14 LUFS standard).
 - **Custom Parametric Equalizer:** 5-band graphic equalizer with genre presets and audio preamp gain (+0 to +12 dB).
 - **Synchronized Lyrics:** Automatic lookup via LRCLIB for synchronized time-coded lyrics (`.lrc`), with fallback to Genius.
+
+### 🚀 Live Streaming & InnerTubeX Architecture (Stream v2)
+- **Isolated JVM InnerTubeX Bridge:** Local Kotlin Multiplatform microservice (`server/bridge/`) running on `127.0.0.1:8765`, providing ultra-fast stream extraction without heavy yt-dlp process overhead.
+- **Dynamic HLS Proxy & Manifest Rewriting:** On-the-fly HLS manifest rewriting and segment relaying with HTTP Range request support (`/api/stream/hls/...`), shielding upstream signed URLs from clients.
+- **Client-Side HLS Fallback (`hls.js`):** Automatic fallback when native browser audio elements cannot decode raw adaptive streams.
+- **Circular Queue Lookahead Prefetching:** `QueuePrefetcher` preloads upcoming tracks in the background, eliminating track switching latency.
+- **Client Health & Circuit Breaker:** Proactive client health monitoring, client rotation, shadow resolution metrics, and unplayable stream caching.
 
 ### ✂️ Long Mix & DJ Set Splitting
 - **Chapter Extraction:** Detects embedded timestamps and track chapters on long sets (e.g. 1–2 hour DJ mixes or full album compilations).
@@ -82,8 +96,9 @@ Whether deployed on a home server via Docker, run locally for development, acces
 │                          Clients Layer                                 │
 │                                                                        │
 │   Web / PWA (React 19 + Vite)          Native Android App (Capacitor)   │
-│   ├── Liquid Glass Design System       ├── PlaybackForegroundService   │
-│   ├── Dual-Deck Web Audio Graph        ├── MediaNotification & Controls │
+│   ├── Liquid Glass Design System       ├── BitChord v1.8 Audio Engine  │
+│   ├── Dual-Deck Web Audio Graph        ├── PrecisionAudioSink (32-bit) │
+│   ├── hls.js Stream Fallback           ├── Direct USB DAC & Bluetooth   │
 │   └── Range-Aware Service Worker       └── MediaStore Direct Exporter   │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ HTTP / REST / SSE
@@ -91,18 +106,21 @@ Whether deployed on a home server via Docker, run locally for development, acces
 │                    MusicBazi Server (FastAPI)                          │
 │                                                                        │
 │  ┌──────────────────────┐  ┌─────────────────┐  ┌───────────────────┐  │
-│  │ Catalog Aggregator   │  │ Audio Resolver  │  │ Download Pipeline │  │
-│  │ ├── Apple Music      │  │ ├── YouTube     │  │ ├── yt-dlp Core   │  │
-│  │ ├── Deezer           │  │ ├── SoundCloud  │  │ ├── ffmpeg Trans  │  │
-│  │ └── Spotify (oEmbed) │  │ └── Scoring Alg │  │ └── Tag / Art / LRC│  │
-│  └──────────────────────┘  └─────────────────┘  └───────────────────┘  │
-│                                                                        │
-│  ┌──────────────────────┐  ┌─────────────────┐  ┌───────────────────┐  │
-│  │ Intranet Engine      │  │ Telegram Sync   │  │ Acoustic Analysis │  │
-│  │ ├── Local Art Mirror │  │ ├── Bot Poller  │  │ ├── EBU R128 Norm │  │
-│  │ ├── 3-Tier Cache     │  │ ├── Web Outbox  │  │ ├── Librosa Mood  │  │
-│  │ └── Reach Prober     │  │ └── Follow Feed │  │ └── AcoustID fp   │  │
-│  └──────────────────────┘  └─────────────────┘  └───────────────────┘  │
+│  │ Catalog Aggregator   │  │ Stream v2 Engine│  │ Download Pipeline │  │
+│  │ ├── Apple Music      │  │ ├── Live Play   │  │ ├── yt-dlp Core   │  │
+│  │ ├── Deezer           │  │ ├── HLS Proxy   │  │ ├── ffmpeg Trans  │  │
+│  │ ├── Spotify (oEmbed) │  │ ├── ClientHealth│  │ └── Tag / Art / LRC│  │
+│  │ └── YouTube Music    │  │ └── Shadow Res  │  │                   │  │
+│  └──────────────────────┘  └────────┬────────┘  └───────────────────┘  │
+│                                     │                                  │
+│  ┌──────────────────────┐           │           ┌───────────────────┐  │
+│  │ Intranet Engine      │           │ HTTP/JSON │ Acoustic Analysis │  │
+│  │ ├── Local Art Mirror │           │ (:8765)   │ ├── EBU R128 Norm │  │
+│  │ ├── 3-Tier Cache     │           ▼           │ ├── Librosa Mood  │  │
+│  │ └── Reach Prober     │  ┌─────────────────┐  │ └── AcoustID fp   │  │
+│  └──────────────────────┘  │ InnerTubeX JVM  │  └───────────────────┘  │
+│                            │ Microservice    │                         │
+│                            └─────────────────┘                         │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
 ┌───────────────────────────────────▼────────────────────────────────────┐
@@ -185,6 +203,17 @@ npm run dev
 Open `http://localhost:5174` in your browser.
 
 Verify backend health at `http://localhost:8000/api/health`.
+
+#### 3. InnerTubeX JVM Bridge (Optional for Stream Architecture v2)
+In a separate terminal window:
+```bash
+cd server/bridge
+./gradlew run
+```
+The bridge listens on `http://127.0.0.1:8765`. Enable live stream orchestration in `server/.env`:
+```ini
+MUSICBAZI_STREAM_V2=1
+```
 
 ---
 
@@ -347,6 +376,11 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 | `MUSICBAZI_ART_MIRROR` | `1` | Cache cover art on server disk for intranet offline mode. |
 | `MUSICBAZI_CATALOG_CACHE` | `1` | Cache metadata search and entities for offline browsing. |
 | `MUSICBAZI_DEFER_DOWNLOADS` | `1` | Defer failed downloads during outages and auto-resume. |
+| `MUSICBAZI_STREAM_V2` | `0` | Enable Stream Architecture v2 with live orchestration & HLS proxy (`1` = on, `0` = off). |
+| `MUSICBAZI_INNERTUBEX_HOST` | `127.0.0.1` | Host address of the InnerTubeX JVM bridge microservice. |
+| `MUSICBAZI_INNERTUBEX_PORT` | `8765` | Port number of the InnerTubeX JVM bridge microservice. |
+| `YOUTUBE_ENABLED` | `1` | Enable YouTube search and channel catalog aggregation (`1` = on, `0` = off). |
+| `YOUTUBE_MUSIC_ENABLED` | `1` | Enable YouTube Music (`ytmusicapi`) search and artist catalog (`1` = on, `0` = off). |
 
 ---
 
@@ -370,6 +404,11 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 | `GET` | `/api/downloads/{id}/file` | Download the finalized audio file with ID3 tags and artwork. |
 | `GET` | `/api/downloads/{id}/stream`| Stream the audio file with HTTP `206 Partial Content` support. |
 | `GET` | `/api/downloads/{id}/lyrics`| Fetch synchronized `.lrc` lyrics file. |
+| `GET` | `/api/stream/audio` | On-the-fly audio streaming with Range support and v2 live playback. |
+| `GET` | `/api/stream/hls/{session_id}/manifest` | Rewritten HLS session manifest with proxied segments. |
+| `GET` | `/api/stream/hls/{session_id}/segment/{index}` | Proxy and relay adaptive HLS audio segments with byte-range support. |
+| `POST` | `/api/stream/prefetch` | Pre-stage upcoming queue track in cache for zero-latency transition. |
+| `GET` | `/api/stream/lyrics` | Fetch synchronized lyrics for streaming tracks (`.lrc`). |
 | `POST` | `/api/downloads/zip` | Generate an organized ZIP archive of multiple tracks. |
 | `GET` | `/api/downloads/zip/{token}` | Download generated ZIP archive with M3U playlist. |
 | `POST` | `/api/identify` | Audio fingerprint identification from uploaded snippet or mic file. |
@@ -389,15 +428,23 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 
 ## Testing
 
-Music Bazi maintains strict test suites covering frontend logic, audio streaming, API contracts, resolver heuristics, and database integrity.
+Music Bazi maintains strict test suites covering frontend logic, audio streaming, API contracts, resolver heuristics, database integrity, native DSP audio algorithms, and bridge communication.
 
 ```bash
-# Run Frontend Unit & DOM Tests (Vitest)
+# 1. Run Frontend Unit & DOM Tests (Vitest — 450+ tests)
 npm test
 
-# Run Backend Server Tests (Pytest)
+# 2. Run Backend Server & Stream Engine Tests (Pytest — 1370+ tests)
 cd server
 pytest
+
+# 3. Run Android BitChord Golden Audio & DSP Tests (Gradle)
+cd android
+./gradlew test
+
+# 4. Run InnerTubeX JVM Bridge & Client Health Tests (Gradle)
+cd server/bridge
+./gradlew test
 ```
 
 ---
