@@ -8,6 +8,7 @@ import {
   isActive,
   isDone,
   isWaiting,
+  jobErrorText,
   useBatchViews,
   useDownloads,
   type BatchView,
@@ -48,7 +49,9 @@ const playQueue = (jobs: Job[]): PlayItem[] =>
 
 /** یک ترک داخل بچ */
 function TrackLine({ job, queue }: { job: Job; queue: PlayItem[] }) {
-  const { retry, cancel } = useDownloads()
+  // selector تکی، نه کل استور: هر تیکِ SSE نباید همه‌ی ردیف‌ها را رندر کند
+  const retry = useDownloads((s) => s.retry)
+  const cancel = useDownloads((s) => s.cancel)
   const { t, lang } = useI18n()
   const [picking, setPicking] = useState(false)
   const active = isActive(job.status)
@@ -73,7 +76,7 @@ function TrackLine({ job, queue }: { job: Job; queue: PlayItem[] }) {
       case 'deferred':
         return t.stDeferred
       case 'error':
-        return job.error ?? t.stError
+        return jobErrorText(job.error, t)
       default:
         return ''
     }
@@ -159,10 +162,10 @@ function TrackLine({ job, queue }: { job: Job; queue: PlayItem[] }) {
           <DownloadIcon className="size-3" />
           {formatLabel(job.format, lang)}
         </a>
-      ) : job.status === 'error' ? (
+      ) : job.status === 'error' || job.status === 'canceled' ? (
         <button
           onClick={() => retry(job.id)}
-          title={job.error}
+          title={job.status === 'error' ? jobErrorText(job.error, t) : t.stCanceled}
           className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[10px] text-danger transition hover:border-danger"
         >
           <RetryIcon className="size-3" />
@@ -188,7 +191,7 @@ function TrackLine({ job, queue }: { job: Job; queue: PlayItem[] }) {
 /** بچ = چیزی که کاربر ثبت کرده؛ ترک‌هایش زیرش می‌آیند */
 function BatchBlock({ view }: { view: BatchView }) {
   const { batch, jobs, done, total, percent, etaSeconds, finished } = view
-  const { dismissBatch } = useDownloads()
+  const dismissBatch = useDownloads((s) => s.dismissBatch)
   const { t } = useI18n()
   const pushToast = useToasts((s) => s.push)
   const [zipping, setZipping] = useState(false)
@@ -199,16 +202,18 @@ function BatchBlock({ view }: { view: BatchView }) {
   async function downloadZip() {
     setZipping(true)
     try {
+      const filename = `${safeFilename(batch.title)}.zip`
       const url = await api.zip(
-        readyJobs.map((j) => ({ trackId: j.track.id, quality: j.quality })),
+        // شناسه‌ی سروریِ جاب — بعد از رفرش هم روی Job مانده و ZIP را زنده نگه می‌دارد
+        readyJobs.map((j) => ({ trackId: j.track.id, quality: j.quality, jobId: j.jobId })),
         safeFilename(batch.title),
       )
       if (!url) {
-        pushToast(t.mockNoFile, 'info')
+        pushToast(t.zipUnavailable, 'info')
         return
       }
-      // در وب مستقیم، در اندروید با دانلود منیجر سیستم
-      await downloadFile(url)
+      // در وب با تگ دانلودی، در اندروید با دانلود منیجر سیستم
+      await downloadFile(url, filename)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {
@@ -279,7 +284,9 @@ function BatchBlock({ view }: { view: BatchView }) {
 
 export default function DownloadQueue() {
   const batches = useBatchViews()
-  const { collapsed, setCollapsed, clearFinished } = useDownloads()
+  const collapsed = useDownloads((s) => s.collapsed)
+  const setCollapsed = useDownloads((s) => s.setCollapsed)
+  const clearFinished = useDownloads((s) => s.clearFinished)
   const { t, lang } = useI18n()
   /*
    * پنلِ باز، یک لایه روی صفحه است؛ برگشت اول جمعش می‌کند.

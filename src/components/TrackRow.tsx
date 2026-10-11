@@ -10,7 +10,7 @@ import {
 } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import type { Track } from '../lib/types'
-import { isActive, useDownloads, useTrackJob } from '../store/downloads'
+import { isActive, jobErrorText, useDownloads, useTrackJob } from '../store/downloads'
 import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
 import { useToasts } from '../store/toasts'
@@ -57,7 +57,10 @@ export default function TrackRow({
   // با همان کیفیتی که دکمه‌ی این ردیف دانلود را ثبت می‌کند — وگرنه ردیف
   // وضعیتِ یک دانلودِ دیگر (کیفیتِ دیگر) را نشان می‌دهد
   const job = useTrackJob(track.id, quality)
-  const { enqueue, cancel, retry } = useDownloads()
+  // selector تکی، نه کل استور: هر تیکِ SSE نباید کل لیست را رندر کند
+  const enqueue = useDownloads((s) => s.enqueue)
+  const cancel = useDownloads((s) => s.cancel)
+  const retry = useDownloads((s) => s.retry)
   const { t, lang } = useI18n()
 
   const currentTrackId = usePlayer((s) => s.queue[s.index]?.track?.id)
@@ -201,7 +204,7 @@ export default function TrackRow({
         {job?.status === 'error' && (
           <button
             onClick={() => retry(job.id)}
-            title={job.error}
+            title={jobErrorText(job.error, t)}
             className="me-1 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-danger hover:bg-panel-2"
           >
             <RetryIcon className="size-3" />

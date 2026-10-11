@@ -258,7 +258,7 @@ class TestSourceRetry:
 
         calls = {"n": 0}
 
-        def flaky(tr, source, min_score=resolver.MIN_SCORE):
+        def flaky(tr, source, min_score=resolver.MIN_SCORE, **_kw):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise OSError("network hiccup")
@@ -272,7 +272,7 @@ class TestSourceRetry:
     def test_persistent_error_returns_empty(self, track, monkeypatch):
         from app import resolver
 
-        def always_fail(tr, source, min_score=resolver.MIN_SCORE):
+        def always_fail(tr, source, min_score=resolver.MIN_SCORE, **_kw):
             raise OSError("down for good")
 
         monkeypatch.setattr(resolver, "_search_source", always_fail)
@@ -285,7 +285,7 @@ class TestSourceRetry:
 
         order: list[str] = []
 
-        def by_source(tr, source, min_score=resolver.MIN_SCORE):
+        def by_source(tr, source, min_score=resolver.MIN_SCORE, **_kw):
             order.append(source)
             if source == "soundcloud":
                 return [
@@ -312,7 +312,7 @@ class TestSourceRetry:
 
         order: list[str] = []
 
-        def by_source(tr, source, min_score=resolver.MIN_SCORE):
+        def by_source(tr, source, min_score=resolver.MIN_SCORE, **_kw):
             order.append(source)
             if source == "youtube":
                 return [
@@ -337,7 +337,7 @@ class TestSourceRetry:
         from app import resolver
         from app.resolver import Candidate
 
-        def by_source(tr, source, min_score=resolver.MIN_SCORE):
+        def by_source(tr, source, min_score=resolver.MIN_SCORE, **_kw):
             if source == "soundcloud":
                 raise OSError("soundcloud down")
             return [

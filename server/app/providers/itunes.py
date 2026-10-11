@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 
@@ -61,12 +62,12 @@ def _own_release(row: dict[str, Any], artist_id: Any) -> bool:
     """
     آیا این کالکشن مالِ خودِ هنرمند است، نه compilation که فقط توش ظاهر شده؟
 
-    `lookup?entity=album` هر دو را می‌دهد. اگر `collectionArtistId` با شناسه‌ی
-    هنرمند فرق دارد، یا نوع صریحاً Compilation است، مالِ دیگران است.
+    `lookup?entity=album` هر دو را می‌دهد. اگر `collectionArtistId` یا `artistId`
+    با شناسه‌ی هنرمند فرق دارد، یا نوع صریحاً Compilation است، مالِ دیگران است.
     """
     if (row.get("collectionType") or "").lower() == "compilation":
         return False
-    owner = row.get("collectionArtistId")
+    owner = row.get("collectionArtistId") or row.get("artistId")
     if owner is not None and artist_id is not None and str(owner) != str(artist_id):
         return False
     return True
@@ -201,6 +202,38 @@ async def _artist_image(client: httpx.AsyncClient, artist_id: str) -> str | None
     return None
 
 
+async def _scrape_appears_on_ids(client: httpx.AsyncClient, artist_id: str) -> list[str]:
+    """
+    استخراج شناسه‌های بخش رسمی «Appears On» از صفحه‌ی وب هنرمند در اپل موزیک.
+    """
+    try:
+        res = await client.get(
+            ARTIST_PAGE.format(id=artist_id),
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+            follow_redirects=True,
+            timeout=5.0,
+        )
+        if res.status_code != 200:
+            return []
+        m = re.search(r'<script type="application/json"[^>]*id="serialized-server-data"[^>]*>(.*?)</script>', res.text, re.DOTALL)
+        if not m:
+            return []
+        inner = json.loads(m.group(1))["data"][0]["data"]
+        cids: list[str] = []
+        for s in inner.get("sections", []):
+            sec_id = s.get("id", "")
+            header = s.get("header") or {}
+            ht = header.get("item", {}).get("titleLink", {}).get("title", "") if isinstance(header, dict) else ""
+            if "appearson" in sec_id.lower() or "appears on" in ht.lower():
+                for item in s.get("items", []):
+                    cid = item.get("contentDescriptor", {}).get("identifiers", {}).get("storeAdamID") or item.get("id")
+                    if cid:
+                        cids.append(str(cid))
+        return cids
+    except Exception:
+        return []
+
+
 async def artist_images(
     client: httpx.AsyncClient, artist_ids: list[str]
 ) -> dict[str, str | None]:
@@ -277,10 +310,11 @@ async def album(client: httpx.AsyncClient, collection_id: str) -> AlbumDetail | 
 
 async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | None:
     """صفحه‌ی هنرمند: دیسکوگرافی به‌علاوه‌ی ترک‌های شناخته‌شده‌اش."""
-    albums, songs, images = await asyncio.gather(
-        _get(client, "/lookup", id=artist_id, entity="album", limit=100),
+    albums, songs, images, scraped_ao_ids = await asyncio.gather(
+        _get(client, "/lookup", id=artist_id, entity="album", limit=200),
         _get(client, "/lookup", id=artist_id, entity="song", limit=25),
         artist_images(client, [str(artist_id)]),
+        _scrape_appears_on_ids(client, str(artist_id)),
     )
 
     head = next((r for r in albums if r.get("wrapperType") == "artist"), None) or next(
@@ -294,13 +328,78 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
     # اول می‌گذارد.
     #
     # `lookup?entity=album` هر کالکشنی که هنرمند توش باشد می‌آورد — از جمله
-    # compilation دیگران. آن‌ها دیسکوگرافی این هنرمند نیستند.
+    # compilation دیگران. آن‌ها دیسکوگرافی این هنرمند نیستند بلکه در بخش
+    # «Appears On» / «حضور در آثار دیگران» قرار می‌گیرند.
     own_id = head.get("artistId")
-    discography = [
-        _album(r, head)
-        for r in sorted(albums, key=lambda r: r.get("releaseDate") or "", reverse=True)
-        if r.get("collectionId") and _own_release(r, own_id)
-    ]
+    artist_name = head.get("artistName") or ""
+    sorted_albums = sorted(albums, key=lambda r: r.get("releaseDate") or "", reverse=True)
+
+    discography: list[Album] = []
+    seen_disco: set[tuple[str, int]] = set()
+    for r in sorted_albums:
+        if not r.get("collectionId") or not _own_release(r, own_id):
+            continue
+        alb = _album(r, head)
+        key = (alb.title.strip().lower(), alb.year)
+        if key in seen_disco:
+            continue
+        seen_disco.add(key)
+        discography.append(alb)
+
+    appears_on: list[Album] = []
+    seen_ao: set[tuple[str, int]] = set()
+
+    # اولویت اول: کاتالوگ دقیق و رسمی Appears On همان‌گونه که در وب‌سایت اپل موزیک نمایش داده می‌شود
+    if scraped_ao_ids:
+        try:
+            ao_rows = await _get(client, "/lookup", id=",".join(scraped_ao_ids), entity="album")
+            row_map = {str(r.get("collectionId")): r for r in ao_rows if r.get("collectionId")}
+            for cid in scraped_ao_ids:
+                if r := row_map.get(cid):
+                    alb = _album(r)
+                    key = (alb.title.strip().lower(), alb.year)
+                    if key not in seen_ao and key not in seen_disco:
+                        seen_ao.add(key)
+                        appears_on.append(alb)
+        except Exception:
+            pass
+
+    # در صورتی که کاتالوگ رسمی از صفحه به دست نیامد، فالبک با جستجوی کالکشن‌ها
+    if not appears_on:
+        for r in sorted_albums:
+            if not r.get("collectionId") or _own_release(r, own_id):
+                continue
+            alb = _album(r)
+            key = (alb.title.strip().lower(), alb.year)
+            if key in seen_ao or key in seen_disco:
+                continue
+            seen_ao.add(key)
+            appears_on.append(alb)
+
+        if artist_name:
+            try:
+                featured_songs = await _get(client, "/search", term=f"feat {artist_name}", entity="song", limit=50)
+                norm_name = artist_name.strip().lower()
+                for r in featured_songs:
+                    if not r.get("collectionId"):
+                        continue
+                    aname = (r.get("artistName") or "").strip().lower()
+                    if aname == norm_name:
+                        continue
+                    tname = (r.get("trackName") or "").lower()
+                    if norm_name not in tname and norm_name not in aname:
+                        continue
+                    alb = _album(r)
+                    key = (alb.title.strip().lower(), alb.year)
+                    if key in seen_ao or key in seen_disco:
+                        continue
+                    seen_ao.add(key)
+                    appears_on.append(alb)
+            except Exception:
+                pass
+
+        appears_on.sort(key=lambda a: (a.releaseDate or str(a.year) or ""), reverse=True)
+
     top = [_track(r) for r in songs if r.get("trackId")]
 
     base = _artist(head, images.get(str(artist_id)))
@@ -316,6 +415,7 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         artworkUrl=final_art,
         topTracks=top,
         albums=discography,
+        appearsOn=appears_on,
     )
 
 

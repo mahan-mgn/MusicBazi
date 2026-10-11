@@ -29,6 +29,9 @@ export default defineConfig({
         // خودِ افزونه‌ی سرویس‌ورکر نباید در پیش‌کشِ همان سرویس‌ورکر بنشیند
         globIgnores: ['**/sw-offline.js'],
         importScripts: ['sw-offline.js'],
+        // درخواست‌های /api ناوبری نیستند؛ بدون این، سرویس‌ورکر دانلود ZIP و مسیرهای
+        // API را قاپیده و به index.html هدایت می‌کرد و کاربر به صفحه اصلی برمی‌گشت
+        navigateFallbackDenylist: [/^\/api/],
       },
       // favicon.ico اینجا هم نمی‌آید — `includeAssets` مستقیم به پیش‌کش اضافه
       // می‌کند و همان ۴۰۴ دوباره تکرار می‌شد

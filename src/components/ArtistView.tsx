@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { api } from '../lib/api'
 import { dominantColor } from '../lib/artColor'
 import { digits, formatArtistSubtitle, formatViews, safeFilename } from '../lib/format'
@@ -243,6 +244,7 @@ export default function ArtistView({
   const [discographyFilter, setDiscographyFilter] = useState<'all' | 'albums' | 'singles'>('all')
   const [discographyView, setDiscographyView] = useState<'grid' | 'list'>('grid')
   const [discographySort, setDiscographySort] = useState<'newest' | 'oldest'>('newest')
+  const [showAllAppearsOn, setShowAllAppearsOn] = useState(false)
   const [showAboutModal, setShowAboutModal] = useState(false)
   const [ytmCategory, setYtmCategory] = useState<'all' | 'songs' | 'albums' | 'singles' | 'videos'>('all')
   const [ytTab, setYtTab] = useState<'home' | 'videos' | 'releases' | 'playlists' | 'about'>('home')
@@ -274,6 +276,7 @@ export default function ArtistView({
     setDiscographyFilter('all')
     setDiscographyView('grid')
     setDiscographySort('newest')
+    setShowAllAppearsOn(false)
     setYtmCategory('all')
     setYtTab('home')
     setYtVideoSort('latest')
@@ -283,15 +286,26 @@ export default function ArtistView({
   }, [artist.id])
 
   const quality = useSettings((s) => s.quality)
-  const { enqueueMany, jobs } = useDownloads()
+  const enqueueMany = useDownloads((s) => s.enqueueMany)
   const { t, lang } = useI18n()
   const pushToast = useToasts((s) => s.push)
 
   const knownTracks = allTracks ?? artist.topTracks
-  const knownIds = new Set(knownTracks.map((x) => x.id))
-  const own = jobs.filter((j) => knownIds.has(j.track.id))
-  const activeCount = own.filter((j) => isActive(j.status)).length
-  const readyJobs = own.filter((j) => isDone(j.status))
+  const knownIds = useMemo(() => new Set(knownTracks.map((x) => x.id)), [knownTracks])
+  // selectorهای پایدار — جلوگیری از رندر مجدد درخت ۳۰۰۰ خطی آرتیست با هر تیکِ SSE
+  const activeCount = useDownloads(
+    (s) =>
+      s.jobs.filter((j) => knownIds.has(j.track.id) && j.quality === quality && isActive(j.status))
+        .length,
+  )
+  const readyJobs = useDownloads(
+    useShallow((s) =>
+      s.jobs.filter((j) => knownIds.has(j.track.id) && j.quality === quality && isDone(j.status)),
+    ),
+  )
+  const allReadyJobs = useDownloads(
+    useShallow((s) => s.jobs.filter((j) => isDone(j.status))),
+  )
   const hasMore = allTracks === null || readyJobs.length < allTracks.length
 
   const currentTrackId = usePlayer((s) => s.queue[s.index]?.track?.id)
@@ -384,7 +398,8 @@ export default function ArtistView({
     artist.playlists.length > 0 ||
     (artist.likedTracks?.length ?? 0) > 0 ||
     (artist.repostedTracks?.length ?? 0) > 0 ||
-    (artist.radio?.length ?? 0) > 0
+    (artist.radio?.length ?? 0) > 0 ||
+    (artist.appearsOn?.length ?? 0) > 0
 
   const canShuffle =
     (allTracks?.length ?? 0) > 1 ||
@@ -406,7 +421,7 @@ export default function ArtistView({
 
     const timers: ReturnType<typeof setTimeout>[] = []
     tracksToWarm.forEach((track, i) => {
-      const alreadyDownloaded = jobs.some((j) => j.track.id === track.id && isDone(j.status))
+      const alreadyDownloaded = allReadyJobs.some((j) => j.track.id === track.id)
       if (alreadyDownloaded) return
 
       const timer = setTimeout(() => {
@@ -418,7 +433,7 @@ export default function ArtistView({
     return () => {
       timers.forEach((t) => clearTimeout(t))
     }
-  }, [artist.id, artist.topTracks, jobs])
+  }, [artist.id, artist.topTracks, allReadyJobs])
 
   const handleTopTrackToggle = useCallback(
     (track: Track) => {
@@ -449,6 +464,26 @@ export default function ArtistView({
     [artist.source, artist.topTracks, topTrackItems, currentTrackId, play, onTogglePlay],
   )
 
+  const soundcloudNonDiscographyIds = useMemo(() => {
+    if (artist.source !== 'soundcloud') return new Set<string>()
+    const discoTrackIds = new Set<string>()
+    for (const alb of artist.albums) {
+      if (alb.source === 'soundcloud' && alb.id.startsWith('sc:track:')) {
+        discoTrackIds.add(alb.id)
+      }
+    }
+    for (const t of artist.topTracks) {
+      discoTrackIds.add(t.id)
+    }
+    const excluded = new Set<string>()
+    for (const t of [...(artist.likedTracks ?? []), ...(artist.repostedTracks ?? [])]) {
+      if (!discoTrackIds.has(t.id)) {
+        excluded.add(t.id)
+      }
+    }
+    return excluded
+  }, [artist.source, artist.albums, artist.topTracks, artist.likedTracks, artist.repostedTracks])
+
   const loadDiscography = useCallback(async (): Promise<Track[]> => {
     if (allTracks) return allTracks
     if (loadingPromiseRef.current) return loadingPromiseRef.current
@@ -463,10 +498,15 @@ export default function ArtistView({
           const backendTracks = await api.getArtistDiscography(artist.sourceUrl || artist.id)
           if (backendTracks && backendTracks.length > 0) {
             const seenIds = new Set<string>()
+            const seenKeys = new Set<string>()
             const deduped: Track[] = []
             for (const t of backendTracks) {
               if (!t || !t.id || seenIds.has(t.id)) continue
+              if (soundcloudNonDiscographyIds.has(t.id)) continue
+              const key = trackDedupeKey(t, artist.name)
+              if (seenKeys.has(key)) continue
               seenIds.add(t.id)
+              seenKeys.add(key)
               deduped.push(t)
             }
             if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
@@ -479,38 +519,66 @@ export default function ArtistView({
         }
 
         const seenIds = new Set<string>()
+        const seenKeys = new Set<string>()
         const deduped: Track[] = []
 
         function addTrack(track: Track) {
           if (!track || !track.id) return
           if (seenIds.has(track.id)) return
+          const key = trackDedupeKey(track, artist.name)
+          if (seenKeys.has(key)) return
           seenIds.add(track.id)
+          seenKeys.add(key)
           deduped.push(track)
         }
 
-        // ۱. برترین‌ها / ویدیوها / آپلودهای هنرمند
-        for (const track of artist.topTracks) addTrack(track)
-
-        // ۲. ترک‌های لایک‌شده توسط هنرمند (ساندکلاد)
-        for (const track of artist.likedTracks ?? []) addTrack(track)
-
-        // ۳. ترک‌های بازنشرشده توسط هنرمند (ساندکلاد)
-        for (const track of artist.repostedTracks ?? []) addTrack(track)
-
-        // ۴. رادیوی هنرمند (دیزر)
-        for (const track of artist.radio ?? []) addTrack(track)
-
-        // ۵. آلبوم‌ها و پلی‌لیست‌های هنرمند
+        // آلبوم‌ها و پلی‌لیست‌های هنرمند — اولویت با آلبوم‌های کامل است تا متادیتای آلبوم حفظ شود
         const rawSources: (Album | Playlist)[] = [
           ...artist.albums,
           ...artist.playlists,
         ]
 
+        // مرتب‌سازی بر اساس اولویت: آلبوم کامل > EP > سینگل؛ درون هر رده، نزولی بر اساس سال
+        rawSources.sort((a, b) => {
+          const kindA = 'trackCount' in a ? albumKind(a as Album) : 'album'
+          const kindB = 'trackCount' in b ? albumKind(b as Album) : 'album'
+          const rankA = kindA === 'album' || kindA === 'compilation' ? 0 : kindA === 'ep' ? 1 : 2
+          const rankB = kindB === 'album' || kindB === 'compilation' ? 0 : kindB === 'ep' ? 1 : 2
+          const yearA = 'year' in a ? ((a as Album).year ?? 0) : 0
+          const yearB = 'year' in b ? ((b as Album).year ?? 0) : 0
+          return rankA - rankB || yearB - yearA
+        })
+
         const albumsToFetch: (Album | Playlist)[] = []
+        const soundcloudSingles: (Album | Playlist)[] = []
         for (const item of rawSources) {
           // برای ساندکلاد: سینگل‌های دیسکوگرافی خودشان شناسه ترک دارند
-          // و نیازی به درخواست اضافی و سنگین api.getAlbum برای هر تک‌آهنگ نیست
+          // و بعد از آلبوم‌های اصلی پردازش می‌شوند تا متادیتای آلبوم اولویت داشته باشد
           if (item.source === 'soundcloud' && item.id.startsWith('sc:track:') && 'artist' in item) {
+            soundcloudSingles.push(item)
+          } else {
+            albumsToFetch.push(item)
+          }
+        }
+
+        // همه آلبوم‌ها و سینگل‌ها را واکشی می‌کنیم (آلبوم‌های کامل ابتدا واکشی می‌شوند)
+        if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return deduped
+
+        const details = await mapLimit(albumsToFetch, ALBUM_FETCH_CONCURRENCY, (item) => {
+          if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return Promise.resolve(null)
+          return api.getAlbum(item.sourceUrl || item.id).catch(() => null)
+        })
+
+        if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return deduped
+
+        for (const detail of details) {
+          if (!detail) continue
+          for (const track of detail.tracks) addTrack(track)
+        }
+
+        // سینگل‌های ساندکلاد بعد از آلبوم‌ها اضافه می‌شوند تا ترک‌های آلبوم حفظ شوند
+        for (const item of soundcloudSingles) {
+          if ('artist' in item) {
             const known =
               artist.topTracks.find((t) => t.id === item.id) ??
               artist.likedTracks?.find((t) => t.id === item.id) ??
@@ -528,25 +596,12 @@ export default function ArtistView({
               year: item.year,
               artistId: item.artistId,
             })
-          } else {
-            albumsToFetch.push(item)
           }
         }
 
-        // همه آلبوم‌ها و سینگل‌ها را واکشی می‌کنیم تا اثری از قلم نیفتد
-        if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return deduped
-
-        const details = await mapLimit(albumsToFetch, ALBUM_FETCH_CONCURRENCY, (item) => {
-          if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return Promise.resolve(null)
-          return api.getAlbum(item.sourceUrl || item.id).catch(() => null)
-        })
-
-        if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return deduped
-
-        for (const detail of details) {
-          if (!detail) continue
-          for (const track of detail.tracks) addTrack(track)
-        }
+        // فالبک برای آثاری که در هیچ آلبوم یا تک‌آهنگی نبودند
+        for (const track of artist.topTracks) addTrack(track)
+        for (const track of artist.radio ?? []) addTrack(track)
 
         // پاسخِ در پروازِ هنرمند قبلی نباید صفحه‌ی فعلی را پر کند
         if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
@@ -565,12 +620,11 @@ export default function ArtistView({
 
     loadingPromiseRef.current = promise
     return promise
-  }, [allTracks, artist.albums, artist.id, artist.likedTracks, artist.name, artist.playlists, artist.radio, artist.repostedTracks, artist.topTracks])
+  }, [allTracks, artist.albums, artist.id, artist.name, artist.playlists, artist.radio, artist.topTracks, soundcloudNonDiscographyIds])
 
   const playArtistDiscography = useCallback(
     async (shuffleMode: boolean) => {
       const currentQuality = useSettings.getState().quality
-      const allReadyJobs = jobs.filter((j) => isDone(j.status))
 
       // تنظیم قطعی شافل بر اساس خواسته‌ی کاربر (Play All: خاموش، Shuffle: روشن)
       usePlayer.getState().setShuffle(shuffleMode)
@@ -694,7 +748,7 @@ export default function ArtistView({
         }
       }
     },
-    [allTracks, artist, jobs, play, loadDiscography, pushToast, t],
+    [allTracks, artist, allReadyJobs, play, loadDiscography, pushToast, t],
   )
 
   const handlePlayAll = useCallback(() => {
@@ -735,8 +789,7 @@ export default function ArtistView({
   // قطعات این هنرمند که در دستگاه ذخیره شده و آماده پخش آفلاین‌اند
   const downloadedArtistJobs = useMemo(() => {
     const artistNameLower = (artist.name ?? '').toLowerCase().trim()
-    return jobs.filter((j) => {
-      if (!isDone(j.status)) return false
+    return allReadyJobs.filter((j) => {
       if (knownIds.has(j.track.id)) return true
       // Once a track has an artist id, trust that identity instead of its
       // display name. Names collide frequently across providers and would
@@ -746,7 +799,7 @@ export default function ArtistView({
       const jobArtist = (j.track?.artist ?? '').toLowerCase().trim()
       return jobArtist === artistNameLower
     })
-  }, [jobs, knownIds, artist.id, artist.name, artist.source])
+  }, [allReadyJobs, knownIds, artist.id, artist.name, artist.source])
 
   const offlinePlayItems = useMemo(
     () => downloadedArtistJobs.map((j) => toPlayItem(j.track, j, quality)),
@@ -782,27 +835,33 @@ export default function ArtistView({
     (artist.likedTracks?.length ?? 0) > 0 ||
     (artist.repostedTracks?.length ?? 0) > 0 ||
     relatedArtists.length > 0 ||
-    radioTracks.length > 0
+    radioTracks.length > 0 ||
+    (artist.appearsOn?.length ?? 0) > 0
   const topTracksTitle = artist.source === 'soundcloud' ? t.topTracks : t.popularSongs
 
   async function downloadAll() {
     const tracks = await loadDiscography()
-    if (!tracks.length) return
-    enqueueMany(tracks, quality, { title: artist.name, artworkUrl: artist.artworkUrl })
+    const targetTracks =
+      artist.source === 'soundcloud' && soundcloudNonDiscographyIds.size > 0
+        ? tracks.filter((t) => !soundcloudNonDiscographyIds.has(t.id))
+        : tracks
+    if (!targetTracks.length) return
+    enqueueMany(targetTracks, quality, { title: artist.name, artworkUrl: artist.artworkUrl })
   }
 
   async function downloadZip() {
     setZipping(true)
     try {
+      const filename = `${safeFilename(artist.name)}.zip`
       const url = await api.zip(
-        readyJobs.map((j) => ({ trackId: j.track.id, quality: j.quality })),
+        readyJobs.map((j) => ({ trackId: j.track.id, quality: j.quality, jobId: j.jobId })),
         safeFilename(artist.name),
       )
       if (!url) {
-        pushToast(t.mockNoFile, 'info')
+        pushToast(t.zipUnavailable, 'info')
         return
       }
-      await downloadFile(url)
+      await downloadFile(url, filename)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {
@@ -903,7 +962,6 @@ export default function ArtistView({
     (track: Track) => {
       const idx = allVideos.findIndex((v) => v.id === track.id)
       if (idx < 0) return
-      const allReadyJobs = jobs.filter((j) => isDone(j.status))
       const items = allVideos.slice(idx).map((v) =>
         toPlayItem(v, findBestJob(allReadyJobs, v.id, quality), quality),
       )
@@ -917,12 +975,11 @@ export default function ArtistView({
         player.play(items, 0)
       }
     },
-    [allVideos, jobs, quality],
+    [allVideos, allReadyJobs, quality],
   )
 
   const handleRadioPlay = useCallback(() => {
     if (artist.radio && artist.radio.length > 0) {
-      const allReadyJobs = jobs.filter((j) => isDone(j.status))
       const items = artist.radio.map((t) =>
         toPlayItem(t, findBestJob(allReadyJobs, t.id, quality), quality),
       )
@@ -930,7 +987,7 @@ export default function ArtistView({
     } else {
       void playArtistDiscography(false)
     }
-  }, [artist.radio, jobs, play, playArtistDiscography, quality])
+  }, [artist.radio, allReadyJobs, play, playArtistDiscography, quality])
 
   const artistDiscographyContext = useMemo<ArtistDiscographyContext>(
     () => ({
@@ -1038,7 +1095,6 @@ export default function ArtistView({
             console.error('[ArtistView] Unable to load release or fallback tracks', diagnostic)
           }
         }
-        const allReadyJobs = jobs.filter((job) => isDone(job.status))
         const items = tracksToPlay.map((track) =>
           toPlayItem(track, findBestJob(allReadyJobs, track.id, quality), quality),
         )
@@ -1079,7 +1135,7 @@ export default function ArtistView({
       artistDiscographyContext.releases,
       currentTrack,
       isPlaying,
-      jobs,
+      allReadyJobs,
       loadDiscography,
       play,
       pushToast,
@@ -1116,6 +1172,22 @@ export default function ArtistView({
       (a) => matchesSearch(a.title) || matchesSearch(String(a.year)),
     )
   }, [processedAlbums, cleanQ, matchesSearch])
+
+  const filteredAppearsOn = useMemo(() => {
+    const list = artist.appearsOn ?? []
+    if (!cleanQ) return list
+    return list.filter(
+      (a) =>
+        matchesSearch(a.title) ||
+        matchesSearch(a.artist) ||
+        matchesSearch(String(a.year)),
+    )
+  }, [artist.appearsOn, cleanQ, matchesSearch])
+
+  const allArtistAlbums = useMemo(() => {
+    if (!artist.appearsOn?.length) return artist.albums
+    return [...artist.albums, ...artist.appearsOn]
+  }, [artist.albums, artist.appearsOn])
 
   const filteredPlaylists = useMemo(() => {
     if (!cleanQ) return artist.playlists
@@ -1394,7 +1466,7 @@ export default function ArtistView({
                     ) : activeCount > 0 ? (
                       <>
                         <Spinner className="size-4" />
-                        <span>{t.ofTotal(readyJobs.length, readyJobs.length + activeCount)}</span>
+                        <span>{t.ofTotal(readyJobs.length, allTracks ? allTracks.length : knownTracks.length)}</span>
                       </>
                     ) : (
                       <>
@@ -1720,7 +1792,7 @@ export default function ArtistView({
                           playingId={activePlayingId}
                           onTogglePlay={handleTopTrackToggle}
                           onOpenAlbum={onOpenAlbum}
-                          artistAlbums={artist.albums}
+                          artistAlbums={allArtistAlbums}
                         />
                       ))}
                     </div>
@@ -1885,7 +1957,7 @@ export default function ArtistView({
                       playingId={activePlayingId}
                       onTogglePlay={handleTopTrackToggle}
                       onOpenAlbum={onOpenAlbum}
-                      artistAlbums={artist.albums}
+                      artistAlbums={allArtistAlbums}
                     />
                   ))}
                 </div>
@@ -2446,7 +2518,7 @@ export default function ArtistView({
                   playingId={activePlayingId}
                   onTogglePlay={handleTopTrackToggle}
                   onOpenAlbum={onOpenAlbum}
-                  artistAlbums={artist.albums}
+                  artistAlbums={allArtistAlbums}
                 />
               ))}
             </div>
@@ -2633,6 +2705,59 @@ export default function ArtistView({
                   </button>
                 ))}
               </div>
+            )}
+          </section>
+        )}
+
+        {/* ─── بخش حضور در آثار دیگران (Appears On) ─── */}
+        {filteredAppearsOn.length > 0 && (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-fg sm:text-lg">
+                  {t.appearsOn}
+                </h2>
+                <span className="text-xs font-semibold text-muted-2">
+                  ({digits(filteredAppearsOn.length, lang)})
+                </span>
+              </div>
+              {filteredAppearsOn.length > 5 && !cleanQ && (
+                <button
+                  onClick={() => setShowAllAppearsOn((v) => !v)}
+                  className="text-xs font-bold text-accent hover:underline"
+                >
+                  {showAllAppearsOn ? t.showLess : t.seeAll}
+                </button>
+              )}
+            </div>
+
+            {showAllAppearsOn ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                {filteredAppearsOn.map((album) => (
+                  <AlbumCard
+                    key={album.id}
+                    album={album}
+                    onOpen={() => openDiscographyRelease(album)}
+                    onPlay={() => void playDiscographyRelease(album)}
+                    isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                    isLoading={loadingReleaseId === album.id}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Shelf>
+                {filteredAppearsOn.map((album) => (
+                  <div key={album.id} className="w-36 shrink-0 snap-start sm:w-44">
+                    <AlbumCard
+                      album={album}
+                      onOpen={() => openDiscographyRelease(album)}
+                      onPlay={() => void playDiscographyRelease(album)}
+                      isPlaying={Boolean(isPlaying && currentTrack && trackInAlbum(currentTrack, album))}
+                      isLoading={loadingReleaseId === album.id}
+                    />
+                  </div>
+                ))}
+              </Shelf>
             )}
           </section>
         )}

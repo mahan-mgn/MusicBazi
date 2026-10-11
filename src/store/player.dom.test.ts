@@ -146,4 +146,41 @@ describe('shuffle and history navigation in usePlayer', () => {
     usePlayer.getState().setSleepTimer(null)
     expect(usePlayer.getState().sleepAt).toBeNull()
   })
+
+  it('playNext و enqueue اقلامِ از قبل موجود در صف را اضافه نمی‌کنند (dedupe)', () => {
+    const t1 = makePlayItem('1')
+    const t2 = makePlayItem('2')
+    usePlayer.setState({ queue: [t1, t2], index: 0, playing: true })
+
+    // افزودن تکراری با playNext
+    usePlayer.getState().playNext([t1, makePlayItem('3')])
+    expect(usePlayer.getState().queue.map((x) => x.id)).toEqual(['1', '3', '2'])
+
+    // افزودن تکراری با enqueue
+    usePlayer.getState().enqueue([t1, t2, makePlayItem('4')])
+    expect(usePlayer.getState().queue.map((x) => x.id)).toEqual(['1', '3', '2', '4'])
+  })
+
+  it('clearQueue فقط ترک در حال پخش را نگه می‌دارد و ایندکس را صفر می‌کند', () => {
+    const t1 = makePlayItem('1')
+    const t2 = makePlayItem('2')
+    const t3 = makePlayItem('3')
+    usePlayer.setState({ queue: [t1, t2, t3], index: 1, playing: true })
+
+    usePlayer.getState().clearQueue(true)
+    const { queue, index } = usePlayer.getState()
+    expect(queue.length).toBe(1)
+    expect(queue[0].id).toBe('2')
+    expect(index).toBe(0)
+  })
+
+  it('drop با اندیس فقط ردیفِ مشخص‌شده را حذف می‌کند', () => {
+    const t1 = makePlayItem('1')
+    const t2 = makePlayItem('2')
+    const t3 = makePlayItem('3')
+    usePlayer.setState({ queue: [t1, t2, t3], index: 0, playing: true })
+
+    usePlayer.getState().drop('2', 1)
+    expect(usePlayer.getState().queue.map((x) => x.id)).toEqual(['1', '3'])
+  })
 })

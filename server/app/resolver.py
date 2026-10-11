@@ -233,7 +233,7 @@ def _search_title(title: str) -> str:
     return _BRACKETED.sub("", title).strip() or title.strip()
 
 
-def _queries(track: Track) -> list[str]:
+def _queries(track: Track, include_all_artists: bool = False) -> list[str]:
     """
     کوئری‌ها به‌ترتیبِ «دقیق ولی نه سخت‌گیر» تا «آخرین تیر».
 
@@ -244,14 +244,73 @@ def _queries(track: Track) -> list[str]:
     فینگلیش)؛ چون هنرمند از کوئری می‌افتد، آستانه‌اش هم بالاتر است.
     """
     title = _search_title(track.title)
-    queries = [f"{_primary_artist(track.artist)} - {title}".strip(" -"), title]
+    primary = _primary_artist(track.artist)
+    queries = [f"{primary} - {title}".strip(" -")]
+    if include_all_artists:
+        artists = [a.strip() for a in _ARTIST_SPLIT.split(track.artist) if a.strip()]
+        for extra in artists[1:]:
+            if extra and extra != primary:
+                queries.append(f"{extra} - {title}".strip(" -"))
+    queries.append(title)
     return list(dict.fromkeys(q for q in queries if q))
 
 
+def _search_youtube_music(
+    track: Track,
+    min_score: float | None = MIN_SCORE,
+    include_all_artists: bool = False,
+) -> list[Candidate]:
+    try:
+        from .providers import youtube_music
+        if not youtube_music.enabled():
+            return []
+    except Exception:
+        return []
+
+    found: list[Candidate] = []
+    for index, query in enumerate(_queries(track, include_all_artists=include_all_artists)):
+        floor = min_score
+        if floor is not None and index > 0:
+            floor = max(floor, TITLE_ONLY_MIN_SCORE)
+
+        try:
+            results = youtube_music.search(query, limit=CANDIDATES)
+            for item in (results.tracks if hasattr(results, "tracks") else []):
+                url = item.sourceUrl or (f"https://music.youtube.com/watch?v={item.id.removeprefix('ytm:track:')}" if item.id else "")
+                if not url:
+                    continue
+                score = score_candidate(track, item.title, item.artist, item.durationMs)
+                if floor is not None and score < floor:
+                    continue
+                found.append(
+                    Candidate(
+                        url=url,
+                        title=item.title,
+                        uploader=item.artist,
+                        duration_ms=item.durationMs,
+                        score=score,
+                        source="youtube_music",
+                    )
+                )
+        except Exception as exc:
+            log.warning("جستجوی YouTube Music برای «%s» خطا داد: %s", query, exc)
+
+        if found:
+            break
+
+    return found
+
+
 def _search_source(
-    track: Track, source: str, min_score: float | None = MIN_SCORE
+    track: Track,
+    source: str,
+    min_score: float | None = MIN_SCORE,
+    include_all_artists: bool = False,
 ) -> list[Candidate]:
     """`min_score=None` یعنی بدون آستانه — حالتِ `browse` که تصمیم با کاربر است."""
+    if source == "youtube_music":
+        return _search_youtube_music(track, min_score, include_all_artists=include_all_artists)
+
     prefix = SEARCH_PREFIX.get(source)
     if not prefix:
         return []
@@ -263,7 +322,7 @@ def _search_source(
     )
 
     found: list[Candidate] = []
-    for index, query in enumerate(_queries(track)):
+    for index, query in enumerate(_queries(track, include_all_artists=include_all_artists)):
         floor = min_score
         if floor is not None and index > 0:
             floor = max(floor, TITLE_ONLY_MIN_SCORE)
@@ -304,7 +363,10 @@ def _search_source(
 
 
 def _search_source_retrying(
-    track: Track, source: str, min_score: float | None = MIN_SCORE
+    track: Track,
+    source: str,
+    min_score: float | None = MIN_SCORE,
+    include_all_artists: bool = False,
 ) -> list[Candidate]:
     """
     جستجوی یک منبع، با تلاشِ دوباره روی خطا پیش از تسلیم شدن.
@@ -316,7 +378,10 @@ def _search_source_retrying(
     """
     for attempt in range(SOURCE_RETRIES + 1):
         try:
-            return _search_source(track, source, min_score)
+            try:
+                return _search_source(track, source, min_score, include_all_artists=include_all_artists)
+            except TypeError:
+                return _search_source(track, source, min_score)
         except Exception as exc:  # noqa: BLE001 — هر خطایی از هر منبع یعنی «بعدی»
             if attempt < SOURCE_RETRIES:
                 log.info(
@@ -337,10 +402,16 @@ def _search_source_retrying(
     return []
 
 
-def _search_all_sources(track: Track, sources: Iterable[str] | None = None) -> list[Candidate]:
+def _search_all_sources(
+    track: Track,
+    sources: Iterable[str] | None = None,
+    include_all_artists: bool = False,
+) -> list[Candidate]:
     found: list[Candidate] = []
     for source in AUDIO_SOURCES if sources is None else sources:
-        found += _search_source_retrying(track, source)
+        found += _search_source_retrying(
+            track, source, include_all_artists=include_all_artists
+        )
 
         # منبع بعدی را فقط وقتی می‌زنیم که تا اینجا تطابق قانع‌کننده‌ای نداریم —
         # یعنی یوتیوب فقط زمانی امتحان می‌شود که ساندکلاد چیزی پیدا نکرده یا
@@ -424,7 +495,7 @@ def resolve_fallback(track: Track, tried_sources: frozenset[str] = frozenset()) 
     اگر همه‌ی منبع‌ها از قبل امتحان شده بودند، [] برمی‌گردد بدون هیچ جستجویی.
     """
     remaining = [s for s in AUDIO_SOURCES if s not in tried_sources]
-    return _search_all_sources(track, remaining) if remaining else []
+    return _search_all_sources(track, remaining, include_all_artists=True) if remaining else []
 
 
 def browse(track: Track, source: str | None = None) -> list[Candidate]:
@@ -448,7 +519,7 @@ def browse(track: Track, source: str | None = None) -> list[Candidate]:
     for name in sources:
         # همان تلاشِ دوباره‌ی `resolve`: خطای گذرای ساندکلاد نباید کاربری را که
         # برای انتخابِ دستی آمده بی‌نتیجه برگرداند
-        found += _search_source_retrying(track, name, min_score=None)
+        found += _search_source_retrying(track, name, min_score=None, include_all_artists=True)
 
     found.sort(key=lambda c: c.score, reverse=True)
     return found[:CANDIDATES]

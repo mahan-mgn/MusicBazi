@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import re
@@ -780,6 +781,103 @@ def finalize(path: Path, track: Track) -> Finalized:
     return Finalized(lyrics_path=write_lrc(path, lyrics), cover=cover)
 
 
+def download_stream(
+    track: Track,
+    stream_url: str,
+    quality: Quality,
+    on_progress: ProgressFn,
+    out_dir: Path | None = None,
+    should_abort: Callable[[], bool] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Path:
+    """
+    دانلود مستقیم یک آدرس استریم صوتی خام (استخراج‌شده توسط InnerTubeX یا کلاینت‌های مشابه).
+    """
+    from yt_dlp import YoutubeDL
+
+    base = out_dir or DOWNLOAD_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    stem = base / safe_name(f"{track.artist} - {track.title}")
+
+    def siblings() -> list[Path]:
+        return [
+            p
+            for p in base.iterdir()
+            if p.is_file() and p.name.startswith(stem.name + ".")
+        ]
+
+    for leftover in siblings():
+        leftover.unlink(missing_ok=True)
+
+    opts = _ydl_opts(stem, quality, on_progress, should_abort)
+    opts["extractor_args"] = {}
+    if headers:
+        opts["http_headers"] = dict(headers)
+
+    try:
+        with YoutubeDL(opts) as y:
+            y.extract_info(stream_url, download=True)
+    except DownloadCanceled:
+        for leftover in siblings():
+            leftover.unlink(missing_ok=True)
+        if out_dir is not None:
+            try:
+                base.rmdir()
+            except OSError:
+                pass
+        raise
+
+    wanted = EXT.get(quality)
+    produced = sorted(
+        (p for p in siblings() if p.suffix not in (".part", ".lrc")),
+        key=lambda p: (p.suffix != wanted, -p.stat().st_size),
+    )
+    if not produced:
+        raise FileNotFoundError("فایلی از استریم مستقیم تولید نشد")
+
+    return produced[0]
+
+
+def _is_recoverable_yt_error(err: str) -> bool:
+    low = err.lower()
+    return any(k in low for k in ("drm", "bot", "format", "nsig", "signature", "unavailable", "403"))
+
+
+def _try_innertubex_download(
+    track: Track,
+    video_id: str,
+    quality: Quality,
+    on_progress: ProgressFn,
+    out_dir: Path | None,
+    should_abort: Callable[[], bool] | None,
+) -> Path | None:
+    try:
+        from .stream.resolver import YouTubeStreamResolver
+        stream_resolver = YouTubeStreamResolver()
+
+        async def _resolve():
+            return await stream_resolver.resolve(video_id, purpose="download")
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            stream = pool.submit(asyncio.run, _resolve()).result(timeout=15)
+
+        if stream and stream.url:
+            log.info("InnerTubeX stream resolved for vid=%s, downloading stream...", video_id)
+            return download_stream(
+                track=track,
+                stream_url=stream.url,
+                quality=quality,
+                on_progress=on_progress,
+                out_dir=out_dir,
+                should_abort=should_abort,
+                headers=getattr(stream, "headers", None),
+            )
+    except Exception as exc:
+        log.warning("InnerTubeX fallback download failed for vid=%s: %s", video_id, exc)
+    return None
+
+
 def download(
     track: Track,
     url: str,
@@ -831,6 +929,16 @@ def download(
                 base.rmdir()
             except OSError:
                 pass  # خالی نشد — پاک‌سازی دیسک بعداً می‌بردش
+        raise
+    except Exception as exc:
+        m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/|watch\?v=)([A-Za-z0-9_-]{11})", url)
+        if m and _is_recoverable_yt_error(str(exc)):
+            log.info("تلاش مجدد برای دانلود «%s» از یوتیوب با استخراج‌کننده InnerTubeX", track.title)
+            resolved_file = _try_innertubex_download(
+                track, m.group(1), quality, on_progress, out_dir, should_abort
+            )
+            if resolved_file:
+                return resolved_file
         raise
 
     wanted = EXT.get(quality)

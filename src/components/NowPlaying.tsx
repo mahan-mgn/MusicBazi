@@ -249,6 +249,7 @@ export default function NowPlaying({
     toggleShuffle,
     play,
     drop,
+    clearQueue,
   } = usePlayer()
   const { t, lang } = useI18n()
   const [closing, setClosing] = useState(false)
@@ -892,10 +893,6 @@ export default function NowPlaying({
 
   // ۶. محتوای صف پخش
   const renderQueueContent = () => {
-    const clearText = lang === 'fa' ? 'پاک کردن صف' : 'Clear queue'
-    const tracksCountText = lang === 'fa'
-      ? `${digits(queue.length, lang)} آهنگ در صف`
-      : `${queue.length} tracks in queue`
     const upcomingCount = queue.length - 1
     const upcomingCountLabel = digits(upcomingCount, lang)
 
@@ -904,19 +901,14 @@ export default function NowPlaying({
         <div className="flex shrink-0 items-center justify-between pb-3 px-2 border-b border-white/10">
           <div>
             <h3 className="text-base font-bold text-white">{t.upNext}</h3>
-            <p className="text-xs text-white/50 font-medium">{tracksCountText}</p>
+            <p className="text-xs text-white/50 font-medium">{t.queueCount(queue.length)}</p>
           </div>
           {upcomingCount > 0 && (
             <button
-              onClick={() => {
-                const toRemove = queue.filter((_, i) => i !== index)
-                for (const qItem of toRemove) {
-                  drop(qItem.id)
-                }
-              }}
+              onClick={() => clearQueue(true)}
               className="rounded-full bg-white/10 px-3.5 py-1 text-xs font-semibold text-white/80 hover:text-white hover:bg-white/20 transition cursor-pointer"
             >
-              {clearText}
+              {t.clearQueue}
             </button>
           )}
         </div>
@@ -927,11 +919,11 @@ export default function NowPlaying({
               {t.nowPlayingView}
             </span>
             <QueueRow
-              key={queue[index].id}
+              key={`current-${queue[index]?.id ?? index}`}
               item={queue[index]}
               active={true}
               onPlay={() => play(queue, index)}
-              onRemove={() => drop(queue[index].id)}
+              onRemove={() => drop(queue[index].id, index)}
             />
           </div>
 
@@ -945,11 +937,11 @@ export default function NowPlaying({
                   if (i === index) return null
                   return (
                     <QueueRow
-                      key={qItem.id}
+                      key={`queue-${qItem.id}-${i}`}
                       item={qItem}
                       active={false}
                       onPlay={() => play(queue, i)}
-                      onRemove={() => drop(qItem.id)}
+                      onRemove={() => drop(qItem.id, i)}
                     />
                   )
                 })}
@@ -957,7 +949,7 @@ export default function NowPlaying({
             </div>
           ) : (
             <div className="py-8 text-center text-xs text-white/40 font-medium">
-              {lang === 'fa' ? 'ترک دیگری در صف نیست' : 'No upcoming tracks'}
+              {t.noUpcomingTracks}
             </div>
           )}
         </div>

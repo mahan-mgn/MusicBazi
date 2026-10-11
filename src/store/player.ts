@@ -153,8 +153,10 @@ interface PlayerState {
   toggleRadio: () => void
   /** خاموشیِ خودکار بعد از این تعداد دقیقه یا در پایان همین ترک؛ null یعنی لغو */
   setSleepTimer: (choice: number | 'track_end' | null) => void
-  /** یک مورد از صف بیرون می‌رود (مثلاً از کتابخانه پاک شده) */
-  drop: (id: string) => void
+  /** یک مورد از صف بیرون می‌رود (مثلاً از کتابخانه پاک شده یا از پنل صف حذف شده) */
+  drop: (id: string, atIndex?: number) => void
+  /** پاک‌سازی کل صف با نگه‌داشتن ترک در حال پخش به‌صورت اتمی */
+  clearQueue: (keepCurrent?: boolean) => void
   close: () => void
 }
 
@@ -637,10 +639,15 @@ export const usePlayer = create<PlayerState>((set, get) => {
         get().play(items, 0)
         return
       }
+      // مواردی که همین الان در صف هستند دوباره اضافه نشوند — جلوگیری از کلیدهای تکراری و رفتار مبهم drop
+      const existingIds = new Set(queue.map((i) => i.id))
+      const unique = items.filter((i) => !existingIds.has(i.id))
+      if (!unique.length) return
+
       const insertIndex = Math.min(index + 1, queue.length)
       const nextQueue = [
         ...queue.slice(0, insertIndex),
-        ...items,
+        ...unique,
         ...queue.slice(insertIndex),
       ]
       set({ queue: nextQueue })
@@ -649,7 +656,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     enqueue: (items) => {
       if (!items.length) return
-      set({ queue: [...get().queue, ...items] })
+      const queue = get().queue
+      const existingIds = new Set(queue.map((i) => i.id))
+      const unique = items.filter((i) => !existingIds.has(i.id))
+      if (!unique.length) return
+
+      set({ queue: [...queue, ...unique] })
       // صفِ بلندتر یعنی «بعدی»ِ تازه — بدون این، کراس‌فیدِ انتهای ترکِ فعلی
       // هنوز فکر می‌کند چیزی بعدش نیست
       scheduleNext()
@@ -846,15 +858,21 @@ export const usePlayer = create<PlayerState>((set, get) => {
       }, choice * 60_000)
     },
 
-    drop: (id) => {
+    drop: (id, atIndex) => {
       const { queue, index } = get()
-      const at = queue.findIndex((i) => i.id === id)
+      const at =
+        atIndex !== undefined && atIndex >= 0 && atIndex < queue.length && queue[atIndex].id === id
+          ? atIndex
+          : queue.findIndex((i) => i.id === id)
       if (at < 0) return
-      const rest = queue.filter((i) => i.id !== id)
+      const rest = queue.filter((_, i) => i !== at)
       if (!rest.length) {
         get().close()
         return
       }
+      historyStack = historyStack
+        .filter((idx) => idx !== at)
+        .map((idx) => (idx > at ? idx - 1 : idx))
       if (at === index) {
         const target = Math.min(index, rest.length - 1)
         set({ queue: rest, index: target })
@@ -862,6 +880,24 @@ export const usePlayer = create<PlayerState>((set, get) => {
         return
       }
       set({ queue: rest, index: at < index ? index - 1 : index })
+      scheduleNext()
+    },
+
+    clearQueue: (keepCurrent = true) => {
+      const { queue, index } = get()
+      if (!queue.length) return
+      if (!keepCurrent) {
+        get().close()
+        return
+      }
+      const currentItem = queue[index]
+      if (!currentItem) {
+        get().close()
+        return
+      }
+      historyStack = []
+      pendingNext = null
+      set({ queue: [currentItem], index: 0 })
       scheduleNext()
     },
 

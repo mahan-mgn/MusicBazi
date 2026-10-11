@@ -41,6 +41,7 @@ def fake_search(monkeypatch):
                 return {"entries": entries}
 
         monkeypatch.setattr(resolver, "YoutubeDL", FakeYDL)
+        monkeypatch.setattr(resolver, "_search_youtube_music", lambda *a, **kw: [])
         return queries
 
     return factory
@@ -72,6 +73,7 @@ def fake_search_by_query(monkeypatch):
                 return {"entries": results.get(query.split(":", 1)[1], [])}
 
         monkeypatch.setattr(resolver, "YoutubeDL", FakeYDL)
+        monkeypatch.setattr(resolver, "_search_youtube_music", lambda *a, **kw: [])
         return queries
 
     return factory
@@ -367,3 +369,83 @@ class TestSilentSubstitution:
         کاتالوگ است — آنجا «جایگزین» حالتِ عادی است، نه استثنا.
         """
         assert jobs._substitution(track, self._candidate("https://youtu.be/x")) is None
+
+
+class TestDrmFallback:
+    def test_multi_artist_queries_in_fallback(self, track):
+        featured = track.model_copy(update={"artist": "DORCCI LEAKS, Dorcci"})
+        queries_normal = resolver._queries(featured, include_all_artists=False)
+        queries_fallback = resolver._queries(featured, include_all_artists=True)
+
+        assert len(queries_normal) == 2
+        assert "DORCCI LEAKS - Mard-e Tanha" in queries_normal
+        assert "Dorcci - Mard-e Tanha" not in queries_normal
+
+        assert "Dorcci - Mard-e Tanha" in queries_fallback
+        assert "DORCCI LEAKS - Mard-e Tanha" in queries_fallback
+
+    def test_youtube_music_search_source(self, track, monkeypatch):
+        class FakeTrack:
+            id = "ytm:track:abc12345678"
+            title = "Mard-e Tanha"
+            artist = "Farhad Mehrad"
+            durationMs = 185_000
+            sourceUrl = "https://music.youtube.com/watch?v=abc12345678"
+
+        class FakeSearchResults:
+            tracks = [FakeTrack()]
+
+        class FakeYTM:
+            @staticmethod
+            def enabled():
+                return True
+
+            @staticmethod
+            def search(query, limit=6):
+                return FakeSearchResults()
+
+        monkeypatch.setattr("app.providers.youtube_music.enabled", FakeYTM.enabled)
+        monkeypatch.setattr("app.providers.youtube_music.search", FakeYTM.search)
+
+        found = resolver._search_source(track, "youtube_music")
+        assert len(found) == 1
+        assert found[0].source == "youtube_music"
+        assert found[0].url == "https://music.youtube.com/watch?v=abc12345678"
+
+    def test_downloader_recovers_via_innertubex_on_drm_error(self, track, monkeypatch, tmp_path):
+        from app import downloader
+
+        mock_out = tmp_path / "mock.mp3"
+        mock_out.write_bytes(b"dummy audio")
+
+        def fake_extract_info(url, download=True):
+            raise RuntimeError("ERROR: This video contains DRM protection and cannot be downloaded")
+
+        class FakeYDL:
+            def __init__(self, opts):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def extract_info(self, url, download=True):
+                return fake_extract_info(url, download=download)
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
+        monkeypatch.setattr(
+            downloader,
+            "_try_innertubex_download",
+            lambda t, vid, q, prog, out_dir, abort: mock_out,
+        )
+
+        res = downloader.download(
+            track=track,
+            url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            quality="320",
+            on_progress=lambda p: None,
+            out_dir=tmp_path,
+        )
+        assert res == mock_out

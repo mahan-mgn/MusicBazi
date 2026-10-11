@@ -494,7 +494,7 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
     برای اپ‌های جدید بست). صفحه بدون آن هم کار می‌کند — دیسکوگرافی سرِ جایش است و
     دانلود از صفحه‌ی آلبوم انجام می‌شود — پس خطایش خورده می‌شود و صدا نمی‌کند.
     """
-    head, top, albums = await asyncio.gather(
+    head, top, albums, appears_on_raw = await asyncio.gather(
         _get(client, f"/artists/{artist_id}"),
         _get(client, f"/artists/{artist_id}/top-tracks", market=MARKET),
         _all_pages(
@@ -503,6 +503,14 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
             ARTIST_ALBUM_PAGE,
             ARTIST_ALBUMS,
             include_groups="album,single",
+            market=MARKET,
+        ),
+        _all_pages(
+            client,
+            f"/artists/{artist_id}/albums",
+            ARTIST_ALBUM_PAGE,
+            ARTIST_ALBUMS,
+            include_groups="appears_on",
             market=MARKET,
         ),
         # سرِ صفحه بدون ترک و آلبوم هم به کار می‌آید؛ عکسِ خودِ هنرمند فقط همان‌جاست
@@ -519,6 +527,8 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         log.warning("spotify artist %s: top-tracks failed: %r", artist_id, top)
     if not isinstance(albums, list):
         log.warning("spotify artist %s: albums failed: %r", artist_id, albums)
+    if not isinstance(appears_on_raw, list):
+        log.warning("spotify artist %s: appears_on failed: %r", artist_id, appears_on_raw)
     if not head.get("id"):
         return None
 
@@ -548,6 +558,20 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
             seen.add(key)
             discography.append(album_row)
 
+    appears_on: list[Album] = []
+    if isinstance(appears_on_raw, list):
+        rows = sorted(appears_on_raw, key=lambda r: r.get("release_date") or "", reverse=True)
+        seen_ao: set[tuple[str, int]] = set()
+        for row in rows:
+            if not row.get("id"):
+                continue
+            album_row = _album_head(row)
+            key = (album_row.title.strip().lower(), album_row.year)
+            if key in seen_ao:
+                continue
+            seen_ao.add(key)
+            appears_on.append(album_row)
+
     base = _artist_head(head)
     if base.artworkUrl:
         for t in tracks:
@@ -557,12 +581,29 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         # کلیدِ حالت توسعه ژانر و دنبال‌کننده را هم نمی‌دهد، پس زیرنویس «هنرمند»
         # خالی می‌ماند. تعداد آلبوم را همین‌جا داریم و مثل دیزر گویاتر است.
         base.subtitle = f"{len(discography)} آلبوم"
-    return ArtistDetail(**base.model_dump(), topTracks=tracks, albums=discography)
+    return ArtistDetail(**base.model_dump(), topTracks=tracks, albums=discography, appearsOn=appears_on)
+
+
+def _norm_track_title(title: str) -> str:
+    cleaned = re.sub(
+        r"\s*-\s*(single|ep|album version|remastered|mono|stereo).*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\s*\((single version|remastered[^)]*|mono|stereo|album version)\)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
 
 
 async def artist_discography(client: httpx.AsyncClient, artist_id: str) -> list[Track]:
     """
     تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها + تک‌آهنگ‌ها + برترین‌ها) با دریافت دسته‌ای ۲۰تایی.
+    آلبوم‌های کامل بر تک‌آهنگ‌ها مقدم هستند تا متادیتای آلبوم حفظ شود.
     """
     detail = await artist(client, artist_id)
     if detail is None:
@@ -570,13 +611,34 @@ async def artist_discography(client: httpx.AsyncClient, artist_id: str) -> list[
 
     tracks: list[Track] = []
     seen_ids: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
-    for t in detail.topTracks:
-        if t.id not in seen_ids:
-            seen_ids.add(t.id)
-            tracks.append(t)
+    def _add_track(t: Track) -> bool:
+        if not t or not t.id:
+            return False
+        key = (_norm_track_title(t.title), (detail.name or t.artist).strip().lower())
+        if t.id in seen_ids or key in seen_keys:
+            return False
+        if detail.artworkUrl and not t.artistArtworkUrl:
+            t.artistArtworkUrl = detail.artworkUrl
+        seen_ids.add(t.id)
+        seen_keys.add(key)
+        tracks.append(t)
+        return True
 
-    raw_ids = [a.id.rsplit(":", 1)[-1] for a in detail.albums if a.id]
+    def _album_rank(alb: Album) -> int:
+        if alb.releaseType in ("album", "compilation") or alb.trackCount > 6:
+            return 0
+        if alb.releaseType == "ep" or alb.trackCount > 1:
+            return 1
+        return 2
+
+    # اولویت: آلبوم کامل > EP > سینگل؛ درون هر رتبه، جدیدتر به قدیمی‌تر
+    sorted_albums = sorted(
+        detail.albums,
+        key=lambda a: (_album_rank(a), -(a.year or 0)),
+    )
+    raw_ids = [a.id.rsplit(":", 1)[-1] for a in sorted_albums if a.id]
 
     for i in range(0, len(raw_ids), 20):
         chunk = raw_ids[i : i + 20]
@@ -590,11 +652,12 @@ async def artist_discography(client: httpx.AsyncClient, artist_id: str) -> list[
             item_rows = (alb_row.get("tracks") or {}).get("items") or []
             for item in item_rows:
                 t = _track(item, alb_row)
-                if t and t.id not in seen_ids:
-                    if detail.artworkUrl and not t.artistArtworkUrl:
-                        t.artistArtworkUrl = detail.artworkUrl
-                    seen_ids.add(t.id)
-                    tracks.append(t)
+                if t:
+                    _add_track(t)
+
+    # برترین‌ها فقط برای ترک‌هایی که در هیچ آلبوم یا تک‌آهنگی نبودند
+    for t in detail.topTracks:
+        _add_track(t)
 
     return tracks
 

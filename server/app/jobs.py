@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import sqlite3
 import time
@@ -369,15 +370,25 @@ class JobManager:
                 filled[field] = val
 
         # اگر قبلاً سینگل بود (یا نام آلبوم همان نام ترک بود) و حالا نام آلبوم واقعی آمده
-        if track.album and (job.track.album is None or job.track.album == job.track.title):
+        is_single_album = (
+            job.track.album is None
+            or job.track.album.strip().lower() == job.track.title.strip().lower()
+            or re.sub(r"\s*-\s*single$", "", job.track.album.strip(), flags=re.IGNORECASE).strip().lower() == job.track.title.strip().lower()
+        )
+        is_new_album_real = bool(
+            track.album
+            and track.album.strip().lower() != track.title.strip().lower()
+            and not re.search(r"\s*-\s*single$", track.album.strip(), flags=re.IGNORECASE)
+        )
+        if is_single_album and is_new_album_real:
             filled["album"] = track.album
-            if track.albumArtist:
+            if track.albumArtist and (job.track.albumArtist is None or job.track.albumArtist == job.track.artist):
                 filled["albumArtist"] = track.albumArtist
-            if track.albumId:
+            if track.albumId and job.track.albumId is None:
                 filled["albumId"] = track.albumId
             if track.trackNumber:
                 filled["trackNumber"] = track.trackNumber
-            if track.year:
+            if track.year and job.track.year is None:
                 filled["year"] = track.year
 
         # عنوان یا هنرمند: در صورت تغییر یا اصلاح متادیتا
@@ -548,15 +559,24 @@ class JobManager:
 
                 path, used, last_error = await self._attempt(job, candidates)
 
+                # اگر کاندید انتخابی کاربر DRM داشت، برای جلوگیری از شکست قطعی،
+                # جستجوی خودکار کاندیدهای دیگر را فعال می‌کنیم
+                if path is None and job.candidate_url and any(k in last_error.lower() for k in ("drm", "subscription", "protected")):
+                    log.info("کاندید انتخابی دارای DRM است — جستجوی خودکار برای «%s»", job.track.title)
+                    self._emit(job, status="searching", percent=0)
+                    auto_candidates = await asyncio.to_thread(resolver.resolve, job.track)
+                    if auto_candidates:
+                        path, used, auto_error = await self._attempt(job, auto_candidates)
+                        if auto_error:
+                            last_error = auto_error
+
                 # همه‌ی کاندیدهای resolve() شکست خوردند (DRM، گیتِ ضدربات،
                 # حذف‌شده) — چه آن کاندیدها لینکِ مستقیمِ یوتیوب/ساندکلاد بودند
                 # چه نتیجه‌ی زودهنگامِ «قانع‌کننده»ی یک منبع که مانع پرسیدن از
                 # بقیه‌ی AUDIO_SOURCES شد (مثلاً ساندکلاد امتیازِ بالا داد ولی آن
                 # نسخه DRM داشت، درحالی‌که یوتیوب اصلاً پرسیده نشده بود). آخرین
                 # راه، جستجوی منبع(های)ی است که هنوز امتحان نشده‌اند.
-                # کاربری که خودش نسخه را انتخاب کرده (candidate_url) از این
-                # قاعده جدا می‌ماند: انتخابش را دور نمی‌زنیم.
-                if path is None and not job.candidate_url:
+                if path is None:
                     tried_sources = frozenset(c.source for c in candidates)
                     fallback = await asyncio.to_thread(
                         resolver.resolve_fallback, job.track, tried_sources

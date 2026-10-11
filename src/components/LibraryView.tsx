@@ -422,16 +422,17 @@ export default function LibraryView({ initialTab }: { initialTab?: 'playlists' |
   async function zipSelected(items: LibraryItem[]) {
     setZipping(true)
     try {
+      const filename = `${safeFilename(t.library)}.zip`
       const url = await api.zip(
         items.map((x) => ({ trackId: x.track.id, quality: x.quality, jobId: x.jobId })),
         safeFilename(t.library),
       )
       if (!url) {
-        pushToast(t.mockNoFile, 'info')
+        pushToast(t.zipUnavailable, 'info')
         return
       }
-      // در وب مستقیم، در اندروید با دانلود منیجر سیستم
-      await downloadFile(url)
+      // در وب با تگ دانلودی، در اندروید با دانلود منیجر سیستم
+      await downloadFile(url, filename)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {

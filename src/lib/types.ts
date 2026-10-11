@@ -150,6 +150,8 @@ export interface ArtistDiscographyContext {
 export interface ArtistDetail extends Artist {
   topTracks: Track[]
   albums: Album[]
+  /** حضور در آثار دیگران / کالکشن‌ها (اسپاتیفای و اپل موزیک) */
+  appearsOn?: Album[]
   /** تفکیک تک‌آهنگ‌ها/EPها برای کاتالوگ دقیق (یوتیوب موزیک و ساندکلاد) */
   singles?: Album[]
   /** ویدیوهای رسمی هنرمند (یوتیوب موزیک و کانال یوتیوب) */
@@ -202,7 +204,17 @@ export interface DownloadProgress {
   status: JobStatus
   /** ۰ تا ۱۰۰ — فقط در downloading معنادار است */
   percent: number
-  /** پیام خطا در صورت status === 'error' */
+  /**
+   * شناسه‌ی جاب سمت سرور — با اولین پیام بعد از POST می‌آید. فرانت آن را روی
+   * Job ذخیره می‌کند تا لایک/آمار پخش و re-attach بعد از رفرش با شناسه‌ی
+   * درست کار کنند، نه شناسه‌ی محلیِ فرانت.
+   */
+  jobId?: string
+  /**
+   * کد خطای شناخته‌شده (مثل «connection-lost») یا پیام خام سرور.
+   * کدها قبل از نمایش به رشته‌ی ترجمه‌شده نگاشت می‌شوند — اینجا متن فارسی
+   * هاردکد نمی‌شود چون UI دو زبانه است.
+   */
   error?: string
   /** لینک فایل آماده در صورت status === 'ready' */
   fileUrl?: string
@@ -511,6 +523,13 @@ export interface MusicApi {
    * تابع برگشتی، کار را کنسل می‌کند.
    */
   download(req: DownloadRequest, onProgress: (p: DownloadProgress) => void): () => void
+  /**
+   * وصل‌شدن دوباره به جریانِ پیشرفتِ یک جابِ موجود — بعد از رفرش صفحه که صف از
+   * حافظه‌ی دائمی برمی‌گردد ولی اتصال‌ها نه. سرور با هر وصل‌شدن، وضعیت فعلی
+   * جاب را می‌فرستد، پس چیزی گم نمی‌شود.
+   * تعریف‌نشده یعنی این لایه re-attach ندارد (مود دمو).
+   */
+  attach?(jobId: string, onProgress: (p: DownloadProgress) => void): () => void
   /**
    * نسخه‌های موجود برای یک ترک.
    *
