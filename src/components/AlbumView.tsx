@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { api } from '../lib/api'
 import { cleanArtist, digits, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
@@ -141,15 +142,26 @@ export default function AlbumView({
   const heroRef = useRef<HTMLDivElement>(null)
 
   const quality = useSettings((s) => s.quality)
-  const { enqueueMany, jobs } = useDownloads()
+  const enqueueMany = useDownloads((s) => s.enqueueMany)
   const { t, lang } = useI18n()
   const pushToast = useToasts((s) => s.push)
   const play = usePlayer((s) => s.play)
 
   const albumTrackIds = useMemo(() => new Set(album.tracks.map((x) => x.id)), [album])
-  const own = jobs.filter((j) => albumTrackIds.has(j.track.id))
-  const activeCount = own.filter((j) => isActive(j.status)).length
-  const readyJobs = own.filter((j) => isDone(j.status))
+  // selectorهای پایدار مقید به کیفیت — حین تیکِ percent کل صفحه رندر مجدد نمی‌زند
+  const activeCount = useDownloads(
+    (s) =>
+      s.jobs.filter(
+        (j) => albumTrackIds.has(j.track.id) && j.quality === quality && isActive(j.status),
+      ).length,
+  )
+  const readyJobs = useDownloads(
+    useShallow((s) =>
+      s.jobs.filter(
+        (j) => albumTrackIds.has(j.track.id) && j.quality === quality && isDone(j.status),
+      ),
+    ),
+  )
 
   const allSelected = selected.size === album.tracks.length && album.tracks.length > 0
   const targets = selected.size ? album.tracks.filter((x) => selected.has(x.id)) : album.tracks
@@ -243,15 +255,15 @@ export default function AlbumView({
   const isTrackFromAlbumActive = Boolean(currentTrackId && albumTrackIds.has(currentTrackId))
   const isThisAlbumPlaying = (isCurrentAlbumQueue || isTrackFromAlbumActive) && isPlaying
 
-  // پیش‌گرم‌سازی ۳ ترک اول آلبوم در پس‌زمینه
+  // پیش‌گرم‌سازی ۳ ترک اول آلبوم در پس‌زمینه — وابسته به شناسه‌های آماده، نه آبجکتِ jobs
+  const readyTrackIds = useMemo(() => new Set(readyJobs.map((j) => j.track.id)), [readyJobs])
   useEffect(() => {
     const tracksToWarm = album.tracks.slice(0, 3)
     if (!tracksToWarm.length) return
 
     const timers: ReturnType<typeof setTimeout>[] = []
     tracksToWarm.forEach((track, i) => {
-      const alreadyDownloaded = jobs.some((j) => j.track.id === track.id && isDone(j.status))
-      if (alreadyDownloaded) return
+      if (readyTrackIds.has(track.id)) return
 
       const timer = setTimeout(() => {
         void api.prefetchStream?.(track)
@@ -262,7 +274,7 @@ export default function AlbumView({
     return () => {
       timers.forEach((t) => clearTimeout(t))
     }
-  }, [album.id, album.tracks, jobs])
+  }, [album.id, album.tracks, readyTrackIds])
 
   const handleTrackToggle = useCallback(
     (track: Track) => {
@@ -318,15 +330,16 @@ export default function AlbumView({
   async function downloadZip() {
     setZipping(true)
     try {
+      const filename = `${safeFilename(`${album.artist} - ${album.title}`)}.zip`
       const url = await api.zip(
-        readyJobs.map((j) => ({ trackId: j.track.id, quality: j.quality })),
+        readyJobs.map((j) => ({ trackId: j.track.id, quality: j.quality, jobId: j.jobId })),
         safeFilename(`${album.artist} - ${album.title}`),
       )
       if (!url) {
-        pushToast(t.mockNoFile, 'info')
+        pushToast(t.zipUnavailable, 'info')
         return
       }
-      await downloadFile(url)
+      await downloadFile(url, filename)
     } catch {
       pushToast(t.toastZipFailed, 'error')
     } finally {
@@ -522,7 +535,7 @@ export default function AlbumView({
                     {activeCount > 0 ? (
                       <>
                         <Spinner className="size-4" />
-                        <span>{t.ofTotal(readyJobs.length, readyJobs.length + activeCount)}</span>
+                        <span>{t.ofTotal(readyJobs.length, targets.length || album.tracks.length)}</span>
                       </>
                     ) : (
                       <>

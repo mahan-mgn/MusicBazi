@@ -145,7 +145,7 @@ YTDLP_PROXY = _env("YTDLP_PROXY") or PROXY
 # (اسپاتیفای/اپل/دیزر) نوشته می‌شوند چون tagging از Track می‌آید نه از منبع صوت.
 AUDIO_SOURCES = tuple(
     s.strip()
-    for s in _env("AUDIO_SOURCES", "soundcloud,youtube").split(",")
+    for s in _env("AUDIO_SOURCES", "soundcloud,youtube,youtube_music").split(",")
     if s.strip()
 )
 

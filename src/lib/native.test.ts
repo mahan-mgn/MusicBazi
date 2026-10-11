@@ -8,21 +8,12 @@ describe('downloadFile & openExternal', () => {
     vi.restoreAllMocks()
   })
 
-  it('روی وب از location.href استفاده می‌کند', async () => {
+  it('روی وب تگ <a> با ویژگی download می‌سازد و کلیک می‌کند', async () => {
     vi.spyOn(server, 'isNativeApp').mockReturnValue(false)
-    const originalHref = window.location.href
-    try {
-      // @ts-expect-error jsdom allows setting href or delete
-      delete window.location
-      // @ts-expect-error mock location
-      window.location = { href: originalHref }
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
-      await downloadFile('https://example.com/test.zip')
-      expect(window.location.href).toBe('https://example.com/test.zip')
-    } finally {
-      // @ts-expect-error restore location
-      window.location = { href: originalHref }
-    }
+    await downloadFile('https://example.com/test.zip', 'test.zip')
+    expect(clickSpy).toHaveBeenCalled()
   })
 
   it('در وب openExternal یک تب جدید باز می‌کند', async () => {

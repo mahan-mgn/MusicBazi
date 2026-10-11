@@ -128,6 +128,85 @@ const jobIdByTrack = new Map<string, string>()
 const jobKey = (trackId: string, quality: Quality) => `${trackId}::${quality}`
 
 /**
+ * اتصالِ SSE به جاب و ترجمه‌ی رویدادها به onProgress — مشترک بینِ
+ * `download` (بعد از POST) و `attach` (بعد از رفرش).
+ *
+ * جابِ معوق (منتظرِ اینترنتِ بین‌الملل) اتصالِ دائمی نمی‌گیرد: هر EventSource
+ * یکی از ۶ سوکتِ HTTP/1.1 مرورگر را اشغال می‌کند و صفِ معوقِ بلند، پخش و
+ * کاورها را قفل می‌کرد. با رسیدنِ `deferred` اتصال بسته می‌شود و هر ۳۰
+ * ثانیه یک وصل‌کوتاه وضعیت را می‌پرسد — سرور با برگشتنِ اینترنت خودش جاب را
+ * جلو می‌برد.
+ */
+function listenToJob(
+  jobId: string,
+  onProgress: (p: DownloadProgress) => void,
+  aborted: () => boolean,
+): () => void {
+  let events: EventSource | null = null
+  let staleTimer: ReturnType<typeof setTimeout> | undefined
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+
+  const clearStale = () => {
+    if (staleTimer) {
+      clearTimeout(staleTimer)
+      staleTimer = undefined
+    }
+  }
+
+  const open = () => {
+    if (aborted()) return
+    events = new EventSource(`${base()}/downloads/${jobId}/events`)
+    events.onmessage = (e) => {
+      clearStale()
+      // این‌یکی از fetch نمی‌آید، پس خودش باید مطلق شود
+      const p = absolute(JSON.parse(e.data) as DownloadProgress)
+      onProgress(p)
+      if (p.status === 'deferred') {
+        events?.close()
+        events = null
+        if (!pollTimer) pollTimer = setInterval(open, 30000)
+        return
+      }
+      if (p.status === 'ready' || p.status === 'error' || p.status === 'canceled') {
+        if (pollTimer) {
+          clearInterval(pollTimer)
+          pollTimer = undefined
+        }
+        events?.close()
+      }
+    }
+    events.onerror = () => {
+      if (!events) return
+      // EventSource خودش وصل دوباره می‌زند و در آن حالت readyState روی
+      // CONNECTING است. قبلاً هر خطایی — از جمله یک قطعیِ گذرا — کار را
+      // شکست‌خورده اعلام می‌کرد، درحالی‌که دانلود روی سرور ادامه داشت.
+      // سرور موقع وصل دوباره وضعیت فعلی را می‌فرستد، پس چیزی گم نمی‌شود.
+      if (events.readyState === EventSource.CLOSED) {
+        clearStale()
+        onProgress({ status: 'error', percent: 0, error: 'connection-lost' })
+        return
+      }
+      // ولی اگر تلاش برای وصل دوباره خیلی طول بکشد (قطعیِ دائمی، نه گذرا)،
+      // برای همیشه در حالت «در حال تلاش» گیر نکنیم
+      if (!staleTimer) {
+        staleTimer = setTimeout(() => {
+          staleTimer = undefined
+          events?.close()
+          onProgress({ status: 'error', percent: 0, error: 'connection-lost' })
+        }, 20000)
+      }
+    }
+  }
+
+  open()
+  return () => {
+    clearStale()
+    if (pollTimer) clearInterval(pollTimer)
+    events?.close()
+  }
+}
+
+/**
  * پیاده‌سازی واقعی روی بک‌اند FastAPI.
  * پروگرس از طریق SSE می‌آید: POST /downloads → {jobId} سپس GET /downloads/{jobId}/events
  */
@@ -216,9 +295,8 @@ export const httpApi: MusicApi = {
 
   download({ track, quality, candidateUrl }, onProgress) {
     const ctrl = new AbortController()
-    let events: EventSource | null = null
     let id: string | null = null
-    let staleTimer: ReturnType<typeof setTimeout> | undefined
+    let listen: (() => void) | null = null
 
     onProgress({ status: 'queued', percent: 0 })
 
@@ -237,59 +315,40 @@ export const httpApi: MusicApi = {
       .then(({ jobId }) => {
         id = jobId
         jobIdByTrack.set(jobKey(track.id, quality), jobId)
+        // شناسه‌ی سروری هرچه زودتر به استور برسد — لایک/ثبتِ پخش و
+        // re-attach بعد از رفرش به همین شناسه وابسته‌اند، نه شناسه‌ی محلی
+        onProgress({ status: 'queued', percent: 0, jobId })
         // لغو قبل از رسیدن jobId: حالا که id داریم، به سرور هم خبر بده
         if (ctrl.signal.aborted) {
           void abortJob(jobId)
           return
         }
-        events = new EventSource(`${base()}/downloads/${jobId}/events`)
-        events.onmessage = (e) => {
-          if (staleTimer) {
-            clearTimeout(staleTimer)
-            staleTimer = undefined
-          }
-          // این‌یکی از fetch نمی‌آید، پس خودش باید مطلق شود
-          const p = absolute(JSON.parse(e.data) as DownloadProgress)
-          onProgress(p)
-          if (p.status === 'ready' || p.status === 'error' || p.status === 'canceled') {
-            events?.close()
-          }
-        }
-        events.onerror = () => {
-          // EventSource خودش وصل دوباره می‌زند و در آن حالت readyState روی
-          // CONNECTING است. قبلاً هر خطایی — از جمله یک قطعیِ گذرا — کار را
-          // شکست‌خورده اعلام می‌کرد، درحالی‌که دانلود روی سرور ادامه داشت.
-          // سرور موقع وصل دوباره وضعیت فعلی را می‌فرستد، پس چیزی گم نمی‌شود.
-          if (events?.readyState === EventSource.CLOSED) {
-            onProgress({ status: 'error', percent: 0, error: 'ارتباط با سرور قطع شد' })
-            return
-          }
-          // ولی اگر تلاش برای وصل دوباره خیلی طول بکشد (قطعیِ دائمی، نه گذرا)،
-          // برای همیشه در حالت «در حال تلاش» گیر نکنیم
-          if (!staleTimer) {
-            staleTimer = setTimeout(() => {
-              staleTimer = undefined
-              events?.close()
-              onProgress({ status: 'error', percent: 0, error: 'ارتباط با سرور قطع شد' })
-            }, 20000)
-          }
-        }
+        listen = listenToJob(jobId, onProgress, () => ctrl.signal.aborted)
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return
         onProgress({
           status: 'error',
           percent: 0,
-          error: err instanceof Error ? err.message : 'خطای ناشناخته',
+          error: err instanceof Error ? err.message : 'unknown-error',
         })
       })
 
     return () => {
       ctrl.abort()
-      if (staleTimer) clearTimeout(staleTimer)
-      events?.close()
+      listen?.()
       // بستن EventSource کار را روی سرور متوقف نمی‌کند — باید صریح لغو شود
       if (id) void abortJob(id)
+    }
+  },
+
+  attach(jobId, onProgress) {
+    const ctrl = new AbortController()
+    // فقط گوش می‌دهد؛ لغوِ خودِ جاب از مسیر صریحِ DELETE انجام می‌شود
+    const stop = listenToJob(jobId, onProgress, () => ctrl.signal.aborted)
+    return () => {
+      ctrl.abort()
+      stop()
     }
   },
 

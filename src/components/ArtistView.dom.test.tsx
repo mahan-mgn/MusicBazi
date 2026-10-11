@@ -1378,6 +1378,433 @@ describe('ArtistView', () => {
     discoSpy.mockRestore()
   })
 
+  it('prioritizes full album tracks over single versions when downloading all', async () => {
+    useDownloads.setState({ jobs: [], batches: [] })
+    const discoTracks = [
+      { ...createTrack('d-1', 'Song 1'), album: 'FUCK MUSIC', trackNumber: 1 },
+      { ...createTrack('d-1-single', 'Song 1 - Single'), album: 'Song 1', trackNumber: 1 },
+      { ...createTrack('d-2', 'Song 2'), album: 'FUCK MUSIC', trackNumber: 2 },
+    ]
+    const discoSpy = vi.spyOn(api, 'getArtistDiscography').mockResolvedValue(discoTracks)
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={mockArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const downloadAllBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('دانلود همه') || b.textContent?.includes('Download all'),
+    )
+    expect(downloadAllBtn).toBeDefined()
+
+    await act(async () => {
+      downloadAllBtn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(discoSpy).toHaveBeenCalled()
+    const jobs = useDownloads.getState().jobs
+    expect(jobs.length).toBe(2)
+    expect(jobs.every((j) => j.track.album === 'FUCK MUSIC')).toBe(true)
+    expect(jobs.find((j) => j.track.title === 'Song 1')?.track.trackNumber).toBe(1)
+    expect(jobs.find((j) => j.track.title === 'Song 2')?.track.trackNumber).toBe(2)
+
+    discoSpy.mockRestore()
+  })
+
+  it('prioritizes soundcloud full album over direct soundcloud single in client fallback', async () => {
+    useDownloads.setState({ jobs: [], batches: [] })
+    const scArtist: ArtistDetail = {
+      ...mockArtist,
+      source: 'soundcloud',
+      topTracks: [],
+      albums: [
+        {
+          id: 'sc:track:s1',
+          title: 'Album Song 1',
+          artist: 'Mvshreghi',
+          year: 2025,
+          trackCount: 1,
+          artworkUrl: null,
+          source: 'soundcloud',
+          sourceUrl: 'https://soundcloud.com/mvshreghi/s1',
+        },
+        {
+          id: 'sc:playlist:alb1',
+          title: 'Full Album',
+          artist: 'Mvshreghi',
+          year: 2025,
+          trackCount: 2,
+          artworkUrl: null,
+          source: 'soundcloud',
+          sourceUrl: 'https://soundcloud.com/mvshreghi/sets/alb1',
+        },
+      ],
+    }
+
+    const getAlbumSpy = vi.spyOn(api, 'getAlbum').mockResolvedValue({
+      id: 'sc:playlist:alb1',
+      title: 'Full Album',
+      artist: 'Mvshreghi',
+      year: 2025,
+      trackCount: 2,
+      artworkUrl: null,
+      source: 'soundcloud',
+      sourceUrl: 'https://soundcloud.com/mvshreghi/sets/alb1',
+      durationMs: 200000,
+      tracks: [
+        { ...createTrack('sc:track:t1', 'Album Song 1'), album: 'Full Album', trackNumber: 1, source: 'soundcloud' },
+        { ...createTrack('sc:track:t2', 'Album Song 2'), album: 'Full Album', trackNumber: 2, source: 'soundcloud' },
+      ],
+    })
+
+    const discoSpy = vi.spyOn(api, 'getArtistDiscography').mockRejectedValue(new Error('backend offline'))
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={scArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const downloadAllBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('دانلود همه') || b.textContent?.includes('Download all'),
+    )
+    expect(downloadAllBtn).toBeDefined()
+
+    await act(async () => {
+      downloadAllBtn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const jobs = useDownloads.getState().jobs
+    expect(jobs.length).toBe(2)
+    expect(jobs.every((j) => j.track.album === 'Full Album')).toBe(true)
+
+    discoSpy.mockRestore()
+    getAlbumSpy.mockRestore()
+  })
+
+  it('excludes likedTracks and repostedTracks when downloading all on SoundCloud in client fallback', async () => {
+    useDownloads.setState({ jobs: [], batches: [] })
+    const scArtist: ArtistDetail = {
+      ...mockArtist,
+      source: 'soundcloud',
+      topTracks: [createTrack('sc:track:top1', 'Top Track')],
+      likedTracks: [createTrack('sc:track:liked1', 'Liked Track')],
+      repostedTracks: [createTrack('sc:track:repost1', 'Reposted Track')],
+      albums: [
+        {
+          id: 'sc:track:s1',
+          title: 'Single 1',
+          artist: 'Mvshreghi',
+          year: 2025,
+          trackCount: 1,
+          artworkUrl: null,
+          source: 'soundcloud',
+          sourceUrl: 'https://soundcloud.com/mvshreghi/s1',
+        },
+      ],
+      playlists: [],
+    }
+
+    const discoSpy = vi.spyOn(api, 'getArtistDiscography').mockRejectedValue(new Error('backend offline'))
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={scArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const downloadAllBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('دانلود همه') || b.textContent?.includes('Download all'),
+    )
+    expect(downloadAllBtn).toBeDefined()
+
+    await act(async () => {
+      downloadAllBtn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const jobs = useDownloads.getState().jobs
+    expect(jobs.some((j) => j.track.title === 'Single 1')).toBe(true)
+    expect(jobs.some((j) => j.track.title === 'Top Track')).toBe(true)
+    expect(jobs.some((j) => j.track.title === 'Liked Track')).toBe(false)
+    expect(jobs.some((j) => j.track.title === 'Reposted Track')).toBe(false)
+
+    discoSpy.mockRestore()
+  })
+
+  it('filters out likedTracks and repostedTracks from backend discography response on SoundCloud', async () => {
+    useDownloads.setState({ jobs: [], batches: [] })
+    const scArtist: ArtistDetail = {
+      ...mockArtist,
+      source: 'soundcloud',
+      topTracks: [],
+      likedTracks: [createTrack('sc:track:liked1', 'Liked Track')],
+      repostedTracks: [createTrack('sc:track:repost1', 'Reposted Track')],
+      albums: [
+        {
+          id: 'sc:track:s1',
+          title: 'Single 1',
+          artist: 'Mvshreghi',
+          year: 2025,
+          trackCount: 1,
+          artworkUrl: null,
+          source: 'soundcloud',
+          sourceUrl: 'https://soundcloud.com/mvshreghi/s1',
+        },
+      ],
+      playlists: [],
+    }
+
+    const backendTracksWithLikes = [
+      createTrack('sc:track:s1', 'Single 1'),
+      createTrack('sc:track:liked1', 'Liked Track'),
+      createTrack('sc:track:repost1', 'Reposted Track'),
+    ]
+    const discoSpy = vi.spyOn(api, 'getArtistDiscography').mockResolvedValue(backendTracksWithLikes)
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={scArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const downloadAllBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('دانلود همه') || b.textContent?.includes('Download all'),
+    )
+    expect(downloadAllBtn).toBeDefined()
+
+    await act(async () => {
+      downloadAllBtn?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const jobs = useDownloads.getState().jobs
+    expect(jobs.length).toBe(1)
+    expect(jobs[0].track.title).toBe('Single 1')
+    expect(jobs.some((j) => j.track.title === 'Liked Track')).toBe(false)
+    expect(jobs.some((j) => j.track.title === 'Reposted Track')).toBe(false)
+
+    discoSpy.mockRestore()
+  })
+
+  it('renders Appears On section for Spotify and Apple Music and handles interaction', () => {
+    const onOpenAlbum = vi.fn()
+    const appearsOnAlbums = [
+      {
+        id: 'sp:album:feat-1',
+        title: 'Collaborative Album 1',
+        artist: 'Various Artists',
+        year: 2024,
+        trackCount: 12,
+        artworkUrl: 'https://example.com/collab1.jpg',
+        source: 'spotify' as const,
+        sourceUrl: 'https://open.spotify.com/album/feat-1',
+      },
+      {
+        id: 'sp:album:feat-2',
+        title: 'Featured Single',
+        artist: 'Other Artist',
+        year: 2023,
+        trackCount: 1,
+        artworkUrl: 'https://example.com/collab2.jpg',
+        source: 'spotify' as const,
+        sourceUrl: 'https://open.spotify.com/album/feat-2',
+      },
+    ]
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={{
+            ...mockArtist,
+            appearsOn: appearsOnAlbums,
+          }}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={onOpenAlbum}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    expect(container.textContent).toContain('حضور در آثار دیگران')
+    expect(container.textContent).toContain('Collaborative Album 1')
+    expect(container.textContent).toContain('Featured Single')
+
+    // Click on the album card
+    const albumCardBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.getAttribute('aria-label') === 'Collaborative Album 1',
+    )
+    expect(albumCardBtn).toBeDefined()
+    act(() => {
+      albumCardBtn?.click()
+    })
+    expect(onOpenAlbum).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'sp:album:feat-1',
+        title: 'Collaborative Album 1',
+      }),
+      expect.anything(),
+    )
+  })
+
+  it('toggles between Shelf and Grid in Appears On section when items exceed 5', () => {
+    const sixAppearsOn = Array.from({ length: 6 }, (_, i) => ({
+      id: `sp:album:feat-${i + 1}`,
+      title: `Feature Release ${i + 1}`,
+      artist: `Artist ${i + 1}`,
+      year: 2020 + i,
+      trackCount: 10,
+      artworkUrl: null,
+      source: 'spotify' as const,
+      sourceUrl: '',
+    }))
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={{
+            ...mockArtist,
+            appearsOn: sixAppearsOn,
+          }}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    // Should have See All button
+    const seeAllBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'همه',
+    )
+    expect(seeAllBtn).toBeDefined()
+
+    // Click see all to toggle grid view
+    act(() => {
+      seeAllBtn?.click()
+    })
+
+    expect(seeAllBtn?.textContent?.trim()).toBe('نمایش کمتر')
+    expect(container.textContent).toContain('Feature Release 6')
+
+    // Click show less
+    act(() => {
+      seeAllBtn?.click()
+    })
+    expect(seeAllBtn?.textContent?.trim()).toBe('همه')
+  })
+
+  it('filters Appears On releases with in-page search', () => {
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={{
+            ...mockArtist,
+            appearsOn: [
+              {
+                id: 'sp:album:f1',
+                title: 'Special Compilation',
+                artist: 'Various Artists',
+                year: 2024,
+                trackCount: 10,
+                artworkUrl: null,
+                source: 'spotify',
+                sourceUrl: '',
+              },
+              {
+                id: 'sp:album:f2',
+                title: 'Ignored Project',
+                artist: 'Nobody',
+                year: 2022,
+                trackCount: 5,
+                artworkUrl: null,
+                source: 'spotify',
+                sourceUrl: '',
+              },
+            ],
+          }}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const searchInput = container.querySelector('input[type="text"]') as HTMLInputElement
+    act(() => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set
+      nativeSetter?.call(searchInput, 'Special')
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    expect(container.textContent).toContain('Special Compilation')
+    expect(container.textContent).not.toContain('Ignored Project')
+  })
+
+  it('does not render Appears On section when appearsOn is empty or missing', () => {
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={{
+            ...mockArtist,
+            appearsOn: [],
+          }}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    expect(container.textContent).not.toContain('حضور در آثار دیگران')
+  })
+
   describe('English localization (zero Persian text)', () => {
     beforeEach(() => {
       act(() => {
@@ -1405,6 +1832,39 @@ describe('ArtistView', () => {
       expect(container.textContent).toContain('13 albums')
       expect(container.textContent).toContain('Discography')
       expect(container.textContent).toContain('Popular Songs')
+      expect(container.textContent).not.toMatch(/[؀-ۿ]/)
+    })
+
+    it('renders Appears On section with zero Persian text in English mode', () => {
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={{
+              ...mockArtist,
+              appearsOn: [
+                {
+                  id: 'sp:album:feat-en',
+                  title: 'English Collab',
+                  artist: 'Various Artists',
+                  year: 2024,
+                  trackCount: 10,
+                  artworkUrl: null,
+                  source: 'spotify',
+                  sourceUrl: '',
+                },
+              ],
+            }}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+
+      expect(container.textContent).toContain('Appears On')
+      expect(container.textContent).toContain('English Collab')
       expect(container.textContent).not.toMatch(/[؀-ۿ]/)
     })
 

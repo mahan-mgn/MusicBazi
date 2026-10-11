@@ -471,6 +471,22 @@ async def resolve_artist(client: httpx.AsyncClient, ref: str) -> ArtistDetail | 
     return None if detail is None else await _fill_tracks(client, detail)
 
 
+def _norm_track_title(title: str) -> str:
+    cleaned = re.sub(
+        r"\s*-\s*(single|ep|album version|remastered|mono|stereo).*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\s*\((single version|remastered[^)]*|mono|stereo|album version)\)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+
 async def resolve_artist_discography(client: httpx.AsyncClient, ref: str) -> list[Track]:
     """
     ترک‌های همان کاتالوگِ هنرمند، به‌ترتیب انتشارها و ترک‌های هر انتشار.
@@ -478,6 +494,7 @@ async def resolve_artist_discography(client: httpx.AsyncClient, ref: str) -> lis
     یوتیوب دیسکوگرافی آلبومی ندارد؛ ویدیوهای کانال، همان ترتیبی که صفحه‌ی
     هنرمند نشان می‌دهد، فهرست پخش آن هستند. برای سایر منابع، جزئیات هر انتشار
     جداگانه resolve می‌شود تا آلبوم و تک‌آهنگ با شناسه‌ی همان provider برگردد.
+    آلبوم‌های کامل بر تک‌آهنگ‌ها تقدم دارند تا متادیتای آلبوم حفظ شود.
     """
     expected_source = _artist_source_from_ref(ref)
     clean_ref = _canonical_ref(ref.strip())
@@ -498,48 +515,44 @@ async def resolve_artist_discography(client: httpx.AsyncClient, ref: str) -> lis
 
     tracks: list[Track] = []
     seen: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
-    def add(t: Track) -> None:
-        if t and t.id and t.source == detail.source and t.id not in seen:
-            seen.add(t.id)
-            tracks.append(t)
+    def add(t: Track) -> bool:
+        if not t or not t.id or t.source != detail.source:
+            return False
+        key = (_norm_track_title(t.title), (detail.name or t.artist).strip().lower())
+        if t.id in seen or key in seen_keys:
+            return False
+        seen.add(t.id)
+        seen_keys.add(key)
+        tracks.append(t)
+        return True
 
-    # کانال یوتیوب در این اپ، ویدیوهای تب Videos و در صورت وجود آلبوم‌های
-    # تب Releases را نمایش می‌دهد.
-    if detail.source == "youtube":
-        for track in detail.topTracks:
-            add(track)
-        releases = [album for album in detail.albums if album.source == detail.source]
-        if releases:
-            found = await asyncio.gather(
-                *(resolve_ref(client, album.sourceUrl or album.id) for album in releases),
-                return_exceptions=True,
-            )
-            for outcome in found:
-                if isinstance(outcome, AlbumDetail) and outcome.source == detail.source:
-                    for t in outcome.tracks:
-                        add(t)
-        return tracks
-
-    for t in detail.topTracks:
-        add(t)
-    for t in detail.likedTracks or []:
-        add(t)
-    for t in detail.repostedTracks or []:
-        add(t)
-    for t in detail.radio or []:
-        add(t)
+    def _album_rank(alb: Album) -> int:
+        if alb.releaseType in ("album", "compilation") or alb.trackCount > 6:
+            return 0
+        if alb.releaseType == "ep" or alb.trackCount > 1:
+            return 1
+        return 2
 
     releases = [album for album in detail.albums if album.source == detail.source]
-    if releases:
+    sorted_releases = sorted(
+        releases,
+        key=lambda a: (_album_rank(a), -(a.year or 0)),
+    )
+    if sorted_releases:
         found = await asyncio.gather(
-            *(resolve_ref(client, album.sourceUrl or album.id) for album in releases),
+            *(resolve_ref(client, album.sourceUrl or album.id) for album in sorted_releases),
             return_exceptions=True,
         )
         for outcome in found:
             if isinstance(outcome, AlbumDetail) and outcome.source == detail.source:
                 for t in outcome.tracks:
                     add(t)
+
+    # فالبک برای آثاری که در هیچ آلبوم یا تک‌آهنگی نبودند (ویدیوها و آپلودها)
+    for t in detail.topTracks:
+        add(t)
 
     return tracks
 

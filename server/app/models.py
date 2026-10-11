@@ -170,6 +170,8 @@ class ArtistDetail(Artist):
 
     topTracks: list[Track] = Field(default_factory=list)
     albums: list[Album] = Field(default_factory=list)
+    # حضور در آثار دیگران و کالکشن‌ها (اسپاتیفای و اپل موزیک)
+    appearsOn: list[Album] = Field(default_factory=list)
     # تفکیک تک‌آهنگ‌ها/EPها برای کاتالوگ دقیق (یوتیوب موزیک و ساندکلاد)
     singles: list[Album] = Field(default_factory=list)
     # ویدیوهای رسمی هنرمند (یوتیوب موزیک و کانال یوتیوب)

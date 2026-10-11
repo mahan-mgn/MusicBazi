@@ -149,6 +149,17 @@ public class DownloadsPlugin extends Plugin {
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), FOLDER);
         if (!dir.exists() && !dir.mkdirs()) return null;
         File file = new File(dir, name);
+        if (file.exists()) {
+            String suffix = (name.contains(".")) ? name.substring(name.lastIndexOf(".")) : "";
+            String baseNoExt = suffix.isEmpty() ? name : name.substring(0, name.lastIndexOf("."));
+            int counter = 1;
+            while (file.exists() && counter < 100) {
+                file = new File(dir, baseNoExt + " (" + counter + ")" + suffix);
+                counter++;
+            }
+            name = file.getName();
+            values.put(MediaStore.Audio.Media.DISPLAY_NAME, name);
+        }
         values.put(MediaStore.Audio.Media.DATA, file.getAbsolutePath());
         return resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values);
     }
@@ -211,7 +222,8 @@ public class DownloadsPlugin extends Plugin {
      */
     private static String fileName(String title, String artist, String ext) {
         String base = artist.isEmpty() ? title : artist + " - " + title;
-        String safe = base.replaceAll("[\\\\/:*?\"<>|]", "").trim();
+        String safe = base.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "").trim();
+        safe = safe.replaceAll("^\\.+|\\.+$", "").trim();
         if (safe.isEmpty()) safe = "track";
         if (safe.length() > 80) safe = safe.substring(0, 80).trim();
         String suffix = (ext == null || ext.isEmpty()) ? "mp3" : ext.replace(".", "");

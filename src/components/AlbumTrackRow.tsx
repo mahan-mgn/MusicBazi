@@ -10,7 +10,7 @@ import {
 } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import type { Track } from '../lib/types'
-import { isActive, useDownloads, useTrackJob } from '../store/downloads'
+import { isActive, jobErrorText, useDownloads, useTrackJob } from '../store/downloads'
 import { useFavorites } from '../store/favorites'
 import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
@@ -67,9 +67,12 @@ export default function AlbumTrackRow({
 }: Props) {
   const quality = useSettings((s) => s.quality)
   const job = useTrackJob(track.id, quality)
-  const isFavorite = useFavorites((s) => (job ? Boolean(s.items[job.id]) : false))
+  const isFavorite = useFavorites((s) => (job ? Boolean(s.items[job.jobId ?? job.id]) : false))
   const toggleFavorite = useFavorites((s) => s.toggle)
-  const { enqueue, cancel, retry } = useDownloads()
+  // selector تکی، نه کل استور: هر تیکِ SSE نباید کل لیست را رندر کند
+  const enqueue = useDownloads((s) => s.enqueue)
+  const cancel = useDownloads((s) => s.cancel)
+  const retry = useDownloads((s) => s.retry)
   const { t, lang } = useI18n()
 
   const currentTrackId = usePlayer((s) => s.queue[s.index]?.track?.id)
@@ -259,7 +262,7 @@ export default function AlbumTrackRow({
         {job?.status === 'error' && (
           <button
             onClick={() => retry(job.id)}
-            title={job.error}
+            title={jobErrorText(job.error, t)}
             className="me-1 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-danger hover:bg-panel-2"
           >
             <RetryIcon className="size-3" />
@@ -271,7 +274,7 @@ export default function AlbumTrackRow({
         {job?.status === 'ready' && (
           <LikeHeart
             liked={isFavorite}
-            onToggle={() => toggleFavorite(job.id)}
+            onToggle={() => toggleFavorite(job.jobId ?? job.id)}
             ariaLabel={isFavorite ? t.favoriteRemove : t.favoriteAdd}
             className={`grid size-7 place-items-center rounded-md transition hover:bg-panel-2 ${
               isFavorite ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'

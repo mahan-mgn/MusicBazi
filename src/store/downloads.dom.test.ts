@@ -98,4 +98,53 @@ describe('enqueueMany و صف کلاینت', () => {
       'track-6',
     ])
   })
+
+  it('ترک‌های معوق (deferred) را دوباره در صف اضافه نمی‌کند', async () => {
+    const { useDownloads } = await import('./downloads')
+    useDownloads.setState({
+      jobs: [job('t-def', '320', 'deferred')],
+      batches: [{ id: 'b1', title: 'Batch', artworkUrl: null, quality: '320', createdAt: 1 }],
+    })
+    // تلاش برای اضافه کردن دوباره همان ترک با همان کیفیت
+    useDownloads.getState().enqueue(track('t-def'), '320')
+    expect(useDownloads.getState().jobs.length).toBe(1)
+
+    // تلاش با enqueueMany
+    useDownloads.getState().enqueueMany([track('t-def')], '320', { title: 'Batch 2' })
+    expect(useDownloads.getState().jobs.length).toBe(1)
+  })
+
+  it('clearFinished کارهای معوق (deferred) را پاک نمی‌کند', async () => {
+    const { useDownloads } = await import('./downloads')
+    useDownloads.setState({
+      jobs: [
+        job('t-done', '320', 'ready'),
+        job('t-err', '320', 'error'),
+        job('t-wait', '320', 'deferred'),
+      ],
+      batches: [{ id: 'b1', title: 'Batch', artworkUrl: null, quality: '320', createdAt: 1 }],
+    })
+
+    useDownloads.getState().clearFinished()
+    const remaining = useDownloads.getState().jobs
+    expect(remaining.length).toBe(1)
+    expect(remaining[0].status).toBe('deferred')
+  })
+
+  it('retry مقدار gainDb را ریست می‌کند', async () => {
+    const { useDownloads } = await import('./downloads')
+    const erroredJob: Job = {
+      ...job('t-err', '320', 'error'),
+      gainDb: -3.5,
+    }
+    useDownloads.setState({
+      jobs: [erroredJob],
+      batches: [{ id: 'b1', title: 'Batch', artworkUrl: null, quality: '320', createdAt: 1 }],
+    })
+
+    useDownloads.getState().retry(erroredJob.id)
+    const retried = useDownloads.getState().jobs.find((j) => j.id === erroredJob.id)
+    expect(retried?.status).toBe('queued')
+    expect(retried?.gainDb).toBeUndefined()
+  })
 })

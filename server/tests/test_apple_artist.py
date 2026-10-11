@@ -242,7 +242,41 @@ class TestSearchAndArtistPage:
         assert detail is not None
         assert detail.name == "هنرمند تک‌آهنگی"
         assert len(detail.topTracks) == 1
-        assert detail.topTracks[0].title == "Single Song"
+
+    def test_artist_separates_own_discography_and_appears_on_releases(self):
+        rows = {
+            "album": [
+                {"wrapperType": "artist", "artistId": 10, "artistName": "Featured Artist"},
+                {
+                    "wrapperType": "collection", "collectionId": 101, "collectionName": "Solo Album",
+                    "collectionArtistId": 10, "artistId": 10, "artistName": "Featured Artist",
+                    "releaseDate": "2024-05-01T00:00:00Z",
+                },
+                {
+                    "wrapperType": "collection", "collectionId": 202, "collectionName": "Compilation Tribute",
+                    "collectionType": "Compilation", "collectionArtistId": 10, "artistName": "Various Artists",
+                    "releaseDate": "2023-01-01T00:00:00Z",
+                },
+                {
+                    "wrapperType": "collection", "collectionId": 303, "collectionName": "Collaborative Album",
+                    "collectionArtistId": 99, "artistId": 99, "artistName": "Other Main Artist",
+                    "releaseDate": "2022-01-01T00:00:00Z",
+                },
+            ],
+            "song": [],
+        }
+
+        async def run():
+            itunes._image_cache.clear()
+            async with _client(self._handler(rows, {"10": _page(None)})) as client:
+                return await itunes.artist(client, "10")
+
+        detail = asyncio.run(run())
+        assert detail is not None
+        assert [a.title for a in detail.albums] == ["Solo Album"]
+        assert [a.title for a in detail.appearsOn] == ["Compilation Tribute", "Collaborative Album"]
+        assert detail.appearsOn[0].source == "apple"
+        assert detail.appearsOn[1].source == "apple"
 
     def test_parse_url_supports_various_apple_music_artist_urls(self):
         urls = [

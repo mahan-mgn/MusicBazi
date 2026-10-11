@@ -643,8 +643,10 @@ class TestSpotifyArtistPage:
             if path == "/artists/art1":
                 return self.HEAD
             if path.endswith("/albums"):
-                sent.append(params["offset"])
-                return pages[params["offset"] // 10]
+                if params.get("include_groups") == "album,single":
+                    sent.append(params["offset"])
+                    return pages[params["offset"] // 10]
+                return {"items": [], "next": None}
             return {}
 
         monkeypatch.setattr(spotify, "_get", fake_get)
@@ -653,6 +655,24 @@ class TestSpotifyArtistPage:
 
         assert sent == [0, 10, 20]
         assert len(albums) == 30
+
+    def test_spotify_artist_fetches_appears_on(self, monkeypatch):
+        async def fake_get(client, path, **params):
+            if path == "/artists/art1":
+                return self.HEAD
+            if path.endswith("/albums"):
+                if params.get("include_groups") == "appears_on":
+                    return {
+                        "items": [self._album_row("ao1", "Collab Album", "2024-01-01")],
+                        "next": None,
+                    }
+                return {"items": [self._album_row("a1", "Solo Album", "2024-02-01")], "next": None}
+            return {}
+
+        monkeypatch.setattr(spotify, "_get", fake_get)
+        detail = asyncio.run(spotify.artist(None, "art1"))
+        assert [a.title for a in detail.albums] == ["Solo Album"]
+        assert [a.title for a in detail.appearsOn] == ["Collab Album"]
 
     def test_artist_discography_fetches_all_tracks_in_batches(self, monkeypatch):
         """دیسکوگرافی کامل تمام آلبوم‌ها و سینگل‌ها را با بچ دریافت می‌کند."""
@@ -689,7 +709,52 @@ class TestSpotifyArtistPage:
 
         tracks = asyncio.run(spotify.artist_discography(None, "art1"))
         assert len(tracks) == 3
-        assert [t.title for t in tracks] == ["Top Track", "Track a1", "Track a2"]
+        assert [t.title for t in tracks] == ["Track a1", "Track a2", "Top Track"]
+
+    def test_artist_discography_prioritizes_album_over_single_and_top_tracks(self, monkeypatch):
+        """آلبوم کامل بر تک‌آهنگ و برترین‌ها اولویت دارد و نام آلبوم حفظ می‌شود."""
+        albums_list = [
+            {"id": "s1", "name": "Song A - Single", "release_date": "2025-05-01", "total_tracks": 1, "album_type": "single", "artists": [{"name": "Mvshreghi"}]},
+            {"id": "a1", "name": "FUCK MUSIC", "release_date": "2025-04-01", "total_tracks": 10, "album_type": "album", "artists": [{"name": "Mvshreghi"}]},
+        ]
+
+        def _track_item(tid: str, title: str, num: int = 1):
+            return {"id": tid, "name": title, "duration_ms": 180000, "track_number": num, "artists": [{"name": "Mvshreghi", "id": "art1"}]}
+
+        async def fake_get(client, path, **params):
+            if path == "/artists/art1":
+                return self.HEAD
+            if path == "/artists/art1/top-tracks":
+                return {"tracks": [_track_item("top1", "Song A")]}
+            if path == "/albums":
+                ids = params.get("ids", "").split(",")
+                results = []
+                for aid in ids:
+                    if aid == "s1":
+                        results.append({
+                            "id": "s1", "name": "Song A - Single", "release_date": "2025-05-01",
+                            "tracks": {"items": [_track_item("t_s1", "Song A", 1)]},
+                        })
+                    elif aid == "a1":
+                        results.append({
+                            "id": "a1", "name": "FUCK MUSIC", "release_date": "2025-04-01",
+                            "tracks": {"items": [_track_item("t_a1_1", "Song A", 1), _track_item("t_a1_2", "Song B", 2)]},
+                        })
+                return {"albums": results}
+            if path.endswith("/albums"):
+                return {"items": albums_list, "next": None}
+            return {}
+
+        monkeypatch.setattr(spotify, "_get", fake_get)
+        monkeypatch.setattr(spotify, "enabled", lambda: True)
+
+        tracks = asyncio.run(spotify.artist_discography(None, "art1"))
+        assert len(tracks) == 2
+        assert [t.title for t in tracks] == ["Song A", "Song B"]
+        assert tracks[0].album == "FUCK MUSIC"
+        assert tracks[0].trackNumber == 1
+        assert tracks[1].album == "FUCK MUSIC"
+        assert tracks[1].trackNumber == 2
 
     def test_catalog_resolve_artist_discography_routes_to_spotify(self, monkeypatch):
         from app import catalog
@@ -2098,7 +2163,261 @@ class TestPlaybackAndResolverCompatibility:
 
         tracks = asyncio.run(catalog.resolve_artist_discography(None, "ytm:artist:UC_weeknd"))
         assert len(tracks) == 2
-        assert [t.title for t in tracks] == ["T1", "Album Track"]
+        assert [t.title for t in tracks] == ["Album Track", "T1"]
+
+    def test_resolve_artist_discography_prioritizes_albums_for_apple(self, monkeypatch):
+        """برای اپل موزیک، آلبوم کامل بر سینگل و تاپ‌ترک اولویت دارد."""
+        mock_detail = ArtistDetail(
+            id="itunes:artist:123",
+            name="Artist A",
+            source="apple",
+            sourceUrl="https://music.apple.com/artist/123",
+            subtitle="Apple Music",
+            topTracks=[_track("Song 1", "Artist A", "apple")],
+            albums=[
+                Album(
+                    id="itunes:album:single1",
+                    title="Song 1 - Single",
+                    artist="Artist A",
+                    year=2025,
+                    trackCount=1,
+                    releaseType="single",
+                    source="apple",
+                    sourceUrl="https://music.apple.com/album/single1",
+                ),
+                Album(
+                    id="itunes:album:alb1",
+                    title="Real Album",
+                    artist="Artist A",
+                    year=2024,
+                    trackCount=10,
+                    releaseType="album",
+                    source="apple",
+                    sourceUrl="https://music.apple.com/album/alb1",
+                ),
+            ],
+        )
+
+        async def fake_artist(client, ref):
+            return mock_detail
+
+        async def fake_release(client, ref):
+            if "single1" in ref:
+                t = _track("Song 1", "Artist A", "apple")
+                t.album = "Song 1 - Single"
+                t.trackNumber = 1
+                return AlbumDetail(
+                    id="itunes:album:single1", title="Song 1 - Single", artist="Artist A",
+                    year=2025, trackCount=1, releaseType="single", source="apple",
+                    sourceUrl=ref, durationMs=1000, tracks=[t],
+                )
+            t1 = _track("Song 1", "Artist A", "apple")
+            t1.album = "Real Album"
+            t1.trackNumber = 1
+            t2 = _track("Song 2", "Artist A", "apple")
+            t2.album = "Real Album"
+            t2.trackNumber = 2
+            return AlbumDetail(
+                id="itunes:album:alb1", title="Real Album", artist="Artist A",
+                year=2024, trackCount=2, releaseType="album", source="apple",
+                sourceUrl=ref, durationMs=2000, tracks=[t1, t2],
+            )
+
+        monkeypatch.setattr(catalog, "resolve_artist", fake_artist)
+        monkeypatch.setattr(catalog, "resolve_ref", fake_release)
+
+        tracks = asyncio.run(catalog.resolve_artist_discography(None, "itunes:artist:123"))
+        assert len(tracks) == 2
+        assert [t.title for t in tracks] == ["Song 1", "Song 2"]
+        assert tracks[0].album == "Real Album"
+        assert tracks[1].album == "Real Album"
+
+    def test_resolve_artist_discography_prioritizes_albums_for_youtube(self, monkeypatch):
+        """برای یوتیوب، آلبوم‌های تب Releases بر ویدیوهای عادی تقدم دارند."""
+        mock_detail = ArtistDetail(
+            id="yt:artist:UC123",
+            name="Channel",
+            source="youtube",
+            sourceUrl="https://youtube.com/channel/UC123",
+            subtitle="YouTube",
+            topTracks=[_track("Video 1", "Channel", "youtube")],
+            albums=[
+                Album(
+                    id="yt:playlist:alb1",
+                    title="Album Release",
+                    artist="Channel",
+                    year=2024,
+                    trackCount=2,
+                    releaseType="album",
+                    source="youtube",
+                    sourceUrl="https://youtube.com/playlist?list=alb1",
+                ),
+            ],
+        )
+
+        async def fake_artist(client, ref):
+            return mock_detail
+
+        async def fake_release(client, ref):
+            t1 = _track("Video 1", "Channel", "youtube")
+            t1.album = "Album Release"
+            t1.trackNumber = 1
+            t2 = _track("Video 2", "Channel", "youtube")
+            t2.album = "Album Release"
+            t2.trackNumber = 2
+            return AlbumDetail(
+                id="yt:playlist:alb1", title="Album Release", artist="Channel",
+                year=2024, trackCount=2, releaseType="album", source="youtube",
+                sourceUrl=ref, durationMs=2000, tracks=[t1, t2],
+            )
+
+        monkeypatch.setattr(catalog, "resolve_artist", fake_artist)
+        monkeypatch.setattr(catalog, "resolve_ref", fake_release)
+
+        tracks = asyncio.run(catalog.resolve_artist_discography(None, "yt:artist:UC123"))
+        assert len(tracks) == 2
+        assert [t.title for t in tracks] == ["Video 1", "Video 2"]
+        assert tracks[0].album == "Album Release"
+        assert tracks[1].album == "Album Release"
+
+    def test_resolve_artist_discography_prioritizes_albums_for_deezer(self, monkeypatch):
+        """برای دیزر، آلبوم کامل بر سینگل تقدم دارد و ترک‌های تکراری سینگل فیلتر می‌شوند."""
+        mock_detail = ArtistDetail(
+            id="deezer:artist:456",
+            name="Deezer Artist",
+            source="deezer",
+            sourceUrl="https://deezer.com/artist/456",
+            subtitle="Deezer",
+            topTracks=[_track("Hit Song", "Deezer Artist", "deezer")],
+            albums=[
+                Album(
+                    id="deezer:album:s1",
+                    title="Hit Song - Single",
+                    artist="Deezer Artist",
+                    year=2025,
+                    trackCount=1,
+                    releaseType="single",
+                    source="deezer",
+                    sourceUrl="https://deezer.com/album/s1",
+                ),
+                Album(
+                    id="deezer:album:a1",
+                    title="Main Album",
+                    artist="Deezer Artist",
+                    year=2024,
+                    trackCount=8,
+                    releaseType="album",
+                    source="deezer",
+                    sourceUrl="https://deezer.com/album/a1",
+                ),
+            ],
+        )
+
+        async def fake_artist(client, ref):
+            return mock_detail
+
+        async def fake_release(client, ref):
+            if "s1" in ref:
+                t = _track("Hit Song", "Deezer Artist", "deezer")
+                t.album = "Hit Song - Single"
+                t.trackNumber = 1
+                return AlbumDetail(
+                    id="deezer:album:s1", title="Hit Song - Single", artist="Deezer Artist",
+                    year=2025, trackCount=1, releaseType="single", source="deezer",
+                    sourceUrl=ref, durationMs=1000, tracks=[t],
+                )
+            t1 = _track("Hit Song", "Deezer Artist", "deezer")
+            t1.album = "Main Album"
+            t1.trackNumber = 1
+            t2 = _track("Other Song", "Deezer Artist", "deezer")
+            t2.album = "Main Album"
+            t2.trackNumber = 2
+            return AlbumDetail(
+                id="deezer:album:a1", title="Main Album", artist="Deezer Artist",
+                year=2024, trackCount=2, releaseType="album", source="deezer",
+                sourceUrl=ref, durationMs=2000, tracks=[t1, t2],
+            )
+
+        monkeypatch.setattr(catalog, "resolve_artist", fake_artist)
+        monkeypatch.setattr(catalog, "resolve_ref", fake_release)
+
+        tracks = asyncio.run(catalog.resolve_artist_discography(None, "deezer:artist:456"))
+        assert len(tracks) == 2
+        assert [t.title for t in tracks] == ["Hit Song", "Other Song"]
+        assert tracks[0].album == "Main Album"
+        assert tracks[1].album == "Main Album"
+
+    def test_resolve_artist_discography_prioritizes_albums_for_soundcloud(self, monkeypatch):
+        """برای ساندکلاد، آلبوم‌ها/ست‌ها بر سینگل‌ها اولویت دارند."""
+        mock_detail = ArtistDetail(
+            id="sc:artist:mvshreghi",
+            name="Mvshreghi",
+            source="soundcloud",
+            sourceUrl="https://soundcloud.com/mvshreghi",
+            subtitle="SoundCloud",
+            topTracks=[_track("FUCK MUSIC 1", "Mvshreghi", "soundcloud")],
+            likedTracks=[_track("Liked Track 1", "Other Artist", "soundcloud")],
+            repostedTracks=[_track("Reposted Track 1", "Another Artist", "soundcloud")],
+            albums=[
+                Album(
+                    id="sc:track:single1",
+                    title="FUCK MUSIC 1",
+                    artist="Mvshreghi",
+                    year=2026,
+                    trackCount=1,
+                    releaseType="single",
+                    source="soundcloud",
+                    sourceUrl="https://soundcloud.com/mvshreghi/fuck-music-1",
+                ),
+                Album(
+                    id="sc:playlist:album1",
+                    title="FUCK MUSIC",
+                    artist="Mvshreghi",
+                    year=2026,
+                    trackCount=2,
+                    releaseType="album",
+                    source="soundcloud",
+                    sourceUrl="https://soundcloud.com/mvshreghi/sets/fuck-music",
+                ),
+            ],
+        )
+
+        async def fake_artist(client, ref):
+            return mock_detail
+
+        async def fake_release(client, ref):
+            if "single1" in ref:
+                t = _track("FUCK MUSIC 1", "Mvshreghi", "soundcloud")
+                t.album = "FUCK MUSIC 1"
+                t.trackNumber = 1
+                return AlbumDetail(
+                    id="sc:track:single1", title="FUCK MUSIC 1", artist="Mvshreghi",
+                    year=2026, trackCount=1, releaseType="single", source="soundcloud",
+                    sourceUrl=ref, durationMs=1000, tracks=[t],
+                )
+            t1 = _track("FUCK MUSIC 1", "Mvshreghi", "soundcloud")
+            t1.album = "FUCK MUSIC"
+            t1.trackNumber = 1
+            t2 = _track("FUCK MUSIC 2", "Mvshreghi", "soundcloud")
+            t2.album = "FUCK MUSIC"
+            t2.trackNumber = 2
+            return AlbumDetail(
+                id="sc:playlist:album1", title="FUCK MUSIC", artist="Mvshreghi",
+                year=2026, trackCount=2, releaseType="album", source="soundcloud",
+                sourceUrl=ref, durationMs=2000, tracks=[t1, t2],
+            )
+
+        monkeypatch.setattr(catalog, "resolve_artist", fake_artist)
+        monkeypatch.setattr(catalog, "resolve_ref", fake_release)
+
+        tracks = asyncio.run(catalog.resolve_artist_discography(None, "sc:artist:mvshreghi"))
+        assert len(tracks) == 2
+        assert [t.title for t in tracks] == ["FUCK MUSIC 1", "FUCK MUSIC 2"]
+        assert tracks[0].album == "FUCK MUSIC"
+        assert tracks[1].album == "FUCK MUSIC"
+        assert tracks[0].trackNumber == 1
+        assert tracks[1].trackNumber == 2
+        assert not any(t.title in ("Liked Track 1", "Reposted Track 1") for t in tracks)
 
     def test_resolve_ref_music_youtube_browse_url(self, monkeypatch):
         mock_alb = AlbumDetail(

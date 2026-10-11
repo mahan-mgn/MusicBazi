@@ -1,0 +1,89 @@
+node_modules/
+# خروجیِ `scripts/android-release.mjs` — APK و mapping، حجمِ زیاد، بارِ تاریخچه نه
+release-out/
+dist/
+.env.local
+.env*.local
+*.local
+.DS_Store
+
+# اسکرین‌رکورد‌ها و هر ویدیوی محلی — نباید در مخزن باشند
+*.mp4
+
+# لاگ‌های اجرا — جدا از حجمشان، خروجیِ بات ممکن است توکن داشته باشد
+*.log
+
+# خروجی tsc -b
+*.tsbuildinfo
+
+# بک‌اند
+server/.venv/
+**/__pycache__/
+server/downloads/
+server/.env
+# `.env` ریشه را compose می‌خواند و کلیدهای واقعی داکر داخلش می‌رود. بیرون از
+# این لیست بود و `git add .` آن را با کلیدها بیرون می‌داد.
+.env
+server/data/
+.pytest_cache/
+.coverage
+
+# سرور PO Token از سورس بیلد می‌شود — setup_potoken.sh بازش می‌سازد
+server/vendor/
+
+# کوکی و کلیدهایی که به داکر سوار می‌شوند
+secrets/*
+!secrets/.gitkeep
+
+# APK و AAB ساخته‌شده‌ی اندروید — خروجی بیلد است، نه سورس
+*.apk
+*.aab
+
+# وضعیت ماشین‌محلیِ ابزارها (Spec Kit / Claude / Hermes) — سهم‌گذاری نمی‌شود
+.claude/
+.hermes/
+.specify/
+.agents/
+.playwright-mcp/
+.vros/
+.zcode/
+
+# خروجی‌های گریدل میکروسرویس Bridge
+server/bridge/.gradle/
+server/bridge/build/
+server/bridge/bin/
+server/bridge/.kotlin/
+
+# موکاپ‌های دورریختنیِ طراحی — محصول نیستند
+sketches/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
