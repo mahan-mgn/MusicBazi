@@ -168,6 +168,140 @@ LRCLIB_API = _env("LRCLIB_API", "https://lrclib.net")
 # کلید رایگان: https://genius.com/api-clients → New API Client → Generate Access Token
 GENIUS_ACCESS_TOKEN = _env("GENIUS_ACCESS_TOKEN") or None
 
+# ترتیب و فعال‌بودنِ Providerهای متن. پیش‌فرض دقیقاً همان رفتار ثابت‌شده‌ی
+# قبلی است: LRCLIB بعد Genius. اسم‌ها با کاما جدا می‌شوند و اسمِ ناشناس بی‌صدا
+# نادیده گرفته می‌شود تا اضافه‌کردن Provider بعدی نیازی به تغییر اینجا نداشته باشد.
+#
+# `MUSICBAZI_LYRICS_PROVIDERS_ORDER` کل ترتیب را عوض می‌کند.
+# `MUSICBAZI_LYRICS_PROVIDER_<NAME>_ENABLED` (مثل `..._GENIUS_ENABLED=0`) فقط
+# یک Provider را خاموش می‌کند، بدون دست‌زدن به ترتیب.
+LYRICS_PROVIDERS_ORDER = tuple(
+    s.strip().lower()
+    for s in _env("LYRICS_PROVIDERS_ORDER", "lrclib,genius").split(",")
+    if s.strip()
+)
+
+
+def lyrics_provider_enabled(name: str, default: bool = True) -> bool:
+    """
+    آیا این Provider روشن است؟ صریحاً ست‌نشده یعنی `default`.
+
+    `default` از `ProviderEntry.default_enabled` می‌آید، پس Providerی که
+    عمداً «پیش‌فرض خاموش» ثبت شده با همین مقدار خاموش می‌ماند — و متغیر محیطی
+    همچنان بر آن غلبه می‌کند.
+
+    Providerهای وابسته به کلید (Genius) خودشان هم `enabled()` دارند و آن
+    جداگانه چک می‌شود؛ این تابع فقط کلیدِ خاموش‌کردنِ دستی است.
+    """
+    return _flag(f"LYRICS_PROVIDER_{name.upper()}_ENABLED", default)
+
+
+# بازه‌ی تحملِ اختلاف مدت (ثانیه) در تطبیقِ نسخه.
+#
+# ⚠️ عددِ ۵ **موروثی** است: از `providers/lrclib.py:_DURATION_TOLERANCE_S`
+# آمده که تنها عددِ واقعیِ موجود در این پروژه بود، و تست مرزش هم همان‌جاست.
+# این یک انتخابِ *موقت و تأییدنشده* است، نه یک مقدارِ اندازه‌گیری‌شده:
+# هیچ smoke test زنده‌ای با داده‌ی واقعی LRCLIB اجرا نشده تا ببینیم ترک‌های
+# واقعی چقدر اختلاف مدت دارند (برشِ ابتدا/انتها، سکوتِ اضافه، نسخه‌ی رادیویی).
+#
+# قبل از اعتماد به این عدد باید یک smoke test زنده اجرا شود و توزیعِ اختلاف
+# مدت روی نمونه‌ای از ترک‌های واقعی دیده شود. تا آن موقع تنگ‌تر کردنش یعنی
+# رد کردنِ نتیجه‌ی درست، و گشادتر کردنش یعنی پذیرشِ نسخه‌ی اشتباه.
+LYRICS_DURATION_TOLERANCE_S = int(_env("LYRICS_DURATION_TOLERANCE_S", "5"))
+
+# کش منفی: «هیچ Provider متنی نداشت» چند ثانیه تازه بماند تا جستجوهای پشت‌سرهم
+# یک ترکِ بی‌متن، هر بار کل زنجیره را دوباره نزند. صفر یعنی خاموش.
+# فقط پاسخِ معتبرِ خالی کش می‌شود — خطای شبکه و تایم‌اوت هرگز.
+LYRICS_MISS_TTL_S = int(_env("LYRICS_MISS_TTL", "300"))
+
+# آدرسِ سرویس‌های ثالثِ متن. هر دو Provider مربوطه **پیش‌فرض خاموش‌اند**
+# (`default_enabled=False` در `lyrics/manager.py`) و بدون روشن‌کردنِ صریح هرگز
+# صدا زده نمی‌شوند. دلیلش دو چیز است: مجوز/شرایطِ استفاده‌شان بررسی نشده، و
+# روی شبکه‌ی اینترانتِ ایران اصلاً در دسترس نیستند.
+#
+# LyricsPlus (بک‌اندِ KpoeTools) چند میزبان دارد و کلاینتِ مرجعش بین آن‌ها
+# می‌چرخد: `https://lyricsplus.prjktla.my.id` ،
+# `https://lyricsplus.binimum.org` ، `https://lyricsplus.prjktla.workers.dev`.
+# عمداً فقط یکی نگه داشته شده: چرخشِ خودکار یعنی چند برابر درخواست به سرویسِ
+# رایگان و رفتارِ غیرقابلِ پیش‌بینی. کاربر می‌تواند دستی عوض کند.
+LYRICSPLUS_API = _env("LYRICSPLUS_API", "https://lyricsplus.prjktla.my.id")
+
+# Unison — متن را به‌صورت رشته‌ی LRC یا TTML می‌دهد، پس مصرف‌کننده‌ی
+# `lyrics/parsers.py` است.
+UNISON_API = _env("UNISON_API", "https://unison.boidu.dev")
+
+# BetterLyrics — همان قراردادِ Unison ولی میزبانِ خودش. دو مبدأِ داده با یک
+# قرارداد (توضیحش در `providers/betterlyrics.py`).
+BETTERLYRICS_API = _env("BETTERLYRICS_API", "https://unison.betterlyrics.org")
+
+# BiniLyrics — جستجو + فایلِ TTML جدا روی میزبانِ storage.
+BINILYRICS_API = _env("BINILYRICS_API", "https://lyrics-api.binimum.org")
+
+# SimpMusic — کلیدش videoId یوتیوب است، نه عنوان/هنرمند.
+#
+# ⚠️ UNREACHABLE: هیچ مسیری در جریانِ اصلی این شناسه را به Provider نمی‌رساند
+# (نه `Track` فیلدش را دارد، نه `Manager` عبورش می‌دهد). پس روشن‌کردنِ این
+# Provider هم نتیجه‌ای نمی‌دهد تا مدل/امضا عوض شود. توضیح کامل در
+# `providers/simpmusic.py`.
+SIMPMUSIC_API = _env("SIMPMUSIC_API", "https://api-lyrics.simpmusic.org")
+
+# lrc.red — سورسِ رسمی ندارد؛ قرارداد از سه کلاینتِ ثالث بازسازی شده.
+LRC_RED_API = _env("LRC_RED_API", "https://lrc.red")
+
+# قطع‌کننده‌ی مدار: Providerی که این تعداد خطای *پیاپی* بدهد، این چند ثانیه
+# از زنجیره بیرون می‌ماند. صفر برای threshold یعنی خاموش، و صفر برای cooldown
+# یعنی هرگز قطع نکن.
+#
+# هدفش کندنشدنِ پخش است: با چند Providerِ ثالث، یک سرویسِ قطع هر ترکِ کاربر
+# را یک تایم‌اوتِ کامل عقب می‌اندازد.
+LYRICS_BREAKER_THRESHOLD = int(_env("LYRICS_BREAKER_THRESHOLD", "3"))
+LYRICS_BREAKER_COOLDOWN_S = float(_env("LYRICS_BREAKER_COOLDOWN_S", "120"))
+
+# زمان‌بندیِ کلمه‌ای (LRC تقویت‌شده: `<mm:ss.xx>`) در خروجی — **پیش‌فرض خاموش**.
+#
+# خاموش یعنی همان رفتارِ قبل از ۲B.5: هر جا متنِ هم‌زمان می‌رود (کشِ استریم،
+# پاسخِ `GET /api/stream/lyrics`، فایلِ `.lrc` کنارِ ترکِ دانلودشده) فقط
+# `[mm:ss.xx]` خطی می‌نشیند. اگر Providerی فقط داده‌ی کلمه‌ای بدهد، با
+# `parsers.to_lrc` به خطی تبدیل می‌شود — هیچ متنی از دست نمی‌رود، فقط دقتِ
+# زیرِ خط.
+#
+# روشن یعنی تگِ کلمه هم نوشته می‌شود. `src/lib/lrc.ts` آن را می‌فهمد و
+# `LyricsPanel` هایلایتِ کلمه‌ای می‌کند، ولی فایلِ `.lrc` دیگر «LRC استاندارد»
+# خالص نیست — بعضی پخش‌کننده‌های خارجی تگِ `<...>` را متنی می‌بینند. به همین
+# دلیل پیش‌فرض خاموش است و روشن‌کردنش تصمیمِ کاربر است.
+def lyrics_enhanced_lrc() -> bool:
+    """
+    آیا تگِ کنترلِ کلمه در خروجی نوشته شود؟
+
+    عمداً *تابع* است و ثابتِ ماژولی نیست: مقدارش در زمانِ فراخوانی خوانده
+    می‌شود تا بدونِ راه‌اندازی مجددِ سرور هم بتوان عوضش کرد (و تست‌ها بتوانند
+    مستقیماً سنجندش).
+    """
+    return _flag("LYRICS_ENHANCED_LRC", False)
+
+# قطع‌کننده برای دو Providerِ *قدیمی* پیش‌فرض خاموش است.
+#
+# دلیلش این است که `lrclib` و `genius` قبل از ۲B.4 قطع‌کننده نداشتند؛ روشن
+# گذاشتنش رفتارِ پیش‌فرض را عوض می‌کرد (درخواستِ کمتر به Providerی که خطا
+# می‌دهد) و آن «حفظِ دقیقِ رفتارِ قبلی» را نقض می‌کرد. برای Providerهای
+# واسطه که تازه اضافه شده‌اند پیش‌فرض روشن است، چون هدفِ اصلیِ ساختشان همین
+# بود: قطع‌شدنِ یک سرویسِ ثالث نباید پخش را کند کند.
+#
+# با `MUSICBAZI_LYRICS_BREAKER_<NAME>_ENABLED=1` می‌شود برای این دو هم روشن کرد.
+_BREAKER_OFF_BY_DEFAULT = frozenset({"lrclib", "genius"})
+
+
+def lyrics_breaker_enabled(name: str) -> bool:
+    """
+    آیا قطع‌کننده برای این Provider اعمال شود؟
+
+    پیش‌فرض بر اساسِ نام است، نه سراسری: `lrclib`/`genius` خاموش، بقیه روشن.
+    متغیر محیطی بر پیش‌فرض غلبه می‌کند (مثلِ `lyrics_provider_enabled`).
+    """
+    return _flag(
+        f"LYRICS_BREAKER_{name.upper()}_ENABLED", name not in _BREAKER_OFF_BY_DEFAULT
+    )
+
 # تحلیل حس‌وحالِ صوتی (والانس/انرژی) بعد از هر دانلود — با librosa، بدون کلید.
 # چند ثانیه CPU به‌ازای هر ترک می‌گیرد؛ اگر librosa نصب نباشد یا خاموش شود،
 # فقط این دو مقدار خالی می‌مانند و شافل به حالت کاملاً تصادفیِ قبلی برمی‌گردد.

@@ -19,9 +19,15 @@ from html.parser import HTMLParser
 import httpx
 
 from ..config import GENIUS_ACCESS_TOKEN, GENIUS_API, PROXY
+from ..lyrics.models import Lyrics
+from ..lyrics.registry import ProviderError
 
 _HEADERS = {"user-agent": "Mozilla/5.0 (compatible; MusicBazi/1.4)"}
 _TIMEOUT = 8.0
+
+_NAME = "genius"
+# صفحه‌ی متن ممکن است حذف شده باشد؛ آن «چیزی نیست»، نه خطا.
+_EMPTY_STATUSES = frozenset({404})
 
 _BLANK_RUN = re.compile(r"\n{3,}")
 _WORDS = re.compile(r"\w+", re.UNICODE)
@@ -34,14 +40,25 @@ _ARTIST_SPLIT = re.compile(r"\s*(?:,|&|\+|/|؛|،|\bfeat\.?|\bft\.?|\bwith\b|\bx
 # «mordi»↔«moordi» می‌شود ۰٫۹۱ ولی «mordi»↔«mahdi» می‌شود ۰٫۶.
 _TITLE_RATIO = 0.8
 
+# کلماتی که یعنی «نسخه‌ی دیگری از همان آهنگ»: ضبطِ لایو، ریمیکس و آکوستیک متنِ
+# متفاوتی دارند، پس با نسخه‌ی استودیو یکی نیستند. «Remastered» عمداً اینجا
+# نیست — ریمستر همان ضبط با مسترینگِ تازه است و متنش عوض نشده.
+#
+# این تنها سیگنالِ نسخه است چون `/search` گینس مدتِ ترک را برنمی‌گرداند؛ اگر
+# روزی فیلدی برای مدت اضافه شد، آن دقیق‌تر از تطبیقِ کلمه‌ای خواهد بود.
+_VERSION_MARKERS = frozenset(
+    {"live", "remix", "acoustic", "unplugged", "instrumental", "demo"}
+)
 
-@dataclass
-class Lyrics:
-    plain: str | None
-    synced: None = None
 
-    def __bool__(self) -> bool:
-        return bool(self.plain)
+def _has_unwanted_version(got_title: str, want_title: str) -> bool:
+    """
+    عنوانِ نتیجه نسخه‌ی دیگری را علامت زده که عنوانِ درخواستی ندارد؟
+
+    نسبت به عنوانِ *درخواستی* سنجیده می‌شود نه به‌طور مطلق: کاربری که خودش
+    «Barf (Live)» خواسته، باید نسخه‌ی لایو را بگیرد نه استودیو.
+    """
+    return bool((_norm(got_title) & _VERSION_MARKERS) - _norm(want_title))
 
 
 @dataclass
@@ -107,21 +124,32 @@ def _best_hit(hits: list[dict], title: str, artist: str) -> dict | None:
     """
     want_title, want_artist = _norm(title), _norm(artist)
     close_enough: dict | None = None
+    unwanted: dict | None = None
     for hit in hits:
         result = hit.get("result") or {}
         if not result.get("url") or result.get("lyrics_state") != "complete":
             continue
-        got_title = _norm(result.get("title") or "")
+        got_raw = result.get("title") or ""
+        got_title = _norm(got_raw)
         got_artist = _norm((result.get("primary_artist") or {}).get("name") or "")
         if want_artist and not (want_artist & got_artist):
             continue
+        marked = _has_unwanted_version(got_raw, title)
         # تطابق کامل هر دو سمت لازم نیست — همپوشانیِ کلمات کافیست، چون Genius
         # اسم آهنگ را با پسوندهایی مثل «(Remastered)» برمی‌گرداند
         if not want_title or want_title & got_title:
-            return result
-        if close_enough is None and want_artist and _close(title, result.get("title") or ""):
+            # نسخه‌ی علامت‌دار هرگز فوراً برنده نمی‌شود؛ فقط اگر در کلِ فهرست
+            # نسخه‌ی بی‌علامت نبود، به‌عنوان آخرین چاره برمی‌گردد.
+            if not marked:
+                return result
+            if unwanted is None:
+                unwanted = result
+            continue
+        if marked:
+            continue
+        if close_enough is None and want_artist and _close(title, got_raw):
             close_enough = result
-    return close_enough
+    return close_enough or unwanted
 
 
 def _best_url(hits: list[dict], title: str, artist: str) -> str | None:
@@ -135,9 +163,15 @@ def _search(client: httpx.Client, query: str) -> list[dict]:
         params={"q": query},
         headers={"Authorization": f"Bearer {GENIUS_ACCESS_TOKEN}"},
     )
-    if res.status_code != 200:
-        return []
-    return ((res.json().get("response") or {}).get("hits")) or []
+    # غیر-۲۰۰ خطاست نه «صفر نتیجه»: ۴۲۹ و ۵xx یعنی درخواست نرسید، و اگر
+    # آن را خالی حساب کنیم یک قطعیِ گذرا به کشِ منفی می‌رود. ۴۰۴ روی endpoint
+    # جستجو در Genius معنا ندارد، پس اینجا استثنا نیست.
+    if res.status_code >= 400:
+        raise ProviderError(_NAME, "http", status=res.status_code)
+    try:
+        return ((res.json().get("response") or {}).get("hits")) or []
+    except Exception as exc:
+        raise ProviderError(_NAME, "body", detail=exc.__class__.__name__) from exc
 
 
 def _find(client: httpx.Client, title: str, artist: str) -> dict | None:
@@ -221,24 +255,59 @@ def _extract(page_html: str) -> str | None:
     return text or None
 
 
-def fetch(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
+def _error_from(exc: Exception) -> ProviderError:
+    """خطای httpx را به ProviderError با دسته‌ی درست تبدیل کن."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return ProviderError(_NAME, "network", detail=exc.__class__.__name__)
+    return ProviderError(_NAME, "body", detail=exc.__class__.__name__)
+
+
+def fetch_strict(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
+    """
+    مثل `fetch`، ولی خطای گذرا را با `ProviderError` اعلام می‌کند.
+
+    بدون توکن `None` می‌دهد نه خطا: «پیکربندی نشده» با «قطع بود» یکی نیست،
+    و Providerِ پیکربندی‌نشده نباید مانع کشِ منفی شود.
+    """
     if not title or not GENIUS_ACCESS_TOKEN:
         return None
 
-    try:
-        with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True, proxy=PROXY) as client:
+    with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True, proxy=PROXY) as client:
+        try:
             hit = _find(client, title, artist)
-            if not hit:
-                return None
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise _error_from(exc) from exc
 
+        if not hit:
+            return None
+
+        try:
             page = client.get(hit["url"])
-            if page.status_code != 200:
-                return None
-    except Exception:
-        return None
+        except Exception as exc:
+            raise _error_from(exc) from exc
+
+        if page.status_code in _EMPTY_STATUSES:
+            return None
+        if page.status_code >= 400:
+            raise ProviderError(_NAME, "http", status=page.status_code)
 
     text = _extract(page.text)
-    return Lyrics(plain=text) if text else None
+    return Lyrics(plain=text, format="plain", sync_type="plain") if text else None
+
+
+def fetch(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
+    """
+    قرارداد عمومی — دست‌نخورده: هر خطایی `None` می‌شود.
+
+    فراخوان‌های قدیمی (و هر کدی که فقط «متن یا هیچ» می‌خواهد) همین را صدا
+    می‌زنند. آن‌که باید خطا را ببیند، `fetch_strict` را صدا می‌زند.
+    """
+    try:
+        return fetch_strict(title, artist, album, duration_ms)
+    except Exception:
+        return None
 
 
 def _names(entries: list[dict] | None) -> list[str]:

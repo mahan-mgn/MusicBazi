@@ -33,9 +33,9 @@ from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 
 from . import artcache, artwork, ydl
-from .config import DOWNLOAD_DIR, FFMPEG_BIN, LYRICS_ENABLED, PROXY, YTDLP_PROXY
+from .config import DOWNLOAD_DIR, FFMPEG_BIN, PROXY, YTDLP_PROXY
 from .models import Quality, Track
-from .providers import genius, lrclib
+from .lyrics import manager as lyrics_manager
 
 log = logging.getLogger(__name__)
 
@@ -703,16 +703,8 @@ def fetch_lyrics(track: Track):
     اول LRCLIB (بی‌کلید، هم‌زمان‌شده هم می‌دهد)، بعد در صورت نبود نتیجه —
     مثلاً چون Genius بدون کلید کار نمی‌کند — Genius (فقط متن ساده).
     """
-    if not LYRICS_ENABLED:
-        return None
     try:
-        found = lrclib.fetch(track.title, track.artist, track.album, track.durationMs)
-    except Exception:
-        found = None
-    if found:
-        return found
-    try:
-        return genius.fetch(track.title, track.artist, track.album, track.durationMs)
+        return lyrics_manager.fetch(track)
     except Exception:
         return None
 
@@ -725,15 +717,44 @@ def write_lrc(path: Path, lyrics) -> Path | None:
     هم‌نام بودن با فایل صوتی قرارداد عملاً جهانی است — VLC، foobar2000، Poweramp
     و بقیه بدون تنظیمات پیدایش می‌کنند؛ بدون تایم‌استمپ هم بازش می‌کنند، فقط
     خط‌به‌خط دنبال نمی‌کنند. فرانت‌اندِ خودمان هم همین رفتار را دارد.
+
+    ⚠️ **هرگز** LRC تقویت‌شده (`<mm:ss.xx>`) نمی‌نویسد مگر کاربر صریحاً
+    `MUSICBAZI_LYRICS_ENHANCED_LRC=1` را روشن کند. فایلِ `.lrc` کنارِ آهنگ را
+    پخش‌کننده‌های زیادی می‌خوانند و تگِ کلمه را متنِ اضافه نشان می‌دهند؛ پس
+    پیش‌فرض «استانداردِ خالص» است.
     """
-    if not lyrics or not (lyrics.synced or lyrics.plain):
+    content = _lrc_body(lyrics)
+    if content is None:
         return None
     lrc = path.with_suffix(".lrc")
     try:
-        lrc.write_text(lyrics.synced or lyrics.plain, encoding="utf-8")
+        lrc.write_text(content, encoding="utf-8")
         return lrc
     except Exception:
         return None
+
+
+def _lrc_body(lyrics) -> str | None:
+    """
+    متنی که در فایلِ `.lrc` می‌نشیند.
+
+    `lyrics.synced` دست‌نخورده رد می‌شود (همان قراردادِ Providerها). فقط وقتی
+    `synced` نیست ولی `lines` زمان‌دار هست — حالتِ Providerِ کلمه‌ای — متن از
+    `lines` ساخته می‌شود: خطی، یا اگر کاربر صریحاً خواسته تقویت‌شده.
+    """
+    if not lyrics:
+        return None
+    if lyrics.synced:
+        return lyrics.synced
+    lines = getattr(lyrics, "lines", ())
+    if lines:
+        from .config import lyrics_enhanced_lrc
+        from .lyrics.parsers import to_enhanced_lrc, to_lrc
+
+        if lyrics_enhanced_lrc() and any(line.words for line in lines):
+            return to_enhanced_lrc(lines)
+        return to_lrc(lines)
+    return lyrics.plain
 
 
 def tag(path: Path, track: Track, lyrics=None) -> bool:

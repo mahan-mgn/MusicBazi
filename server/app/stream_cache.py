@@ -23,9 +23,9 @@ from fastapi.responses import FileResponse
 from yt_dlp import YoutubeDL
 
 from . import db, resolver, ydl
-from .config import STREAM_CACHE_DIR, STREAM_CACHE_MAX_MB
+from .config import STREAM_CACHE_DIR, STREAM_CACHE_MAX_MB, lyrics_enhanced_lrc
 from .models import Track
-from .providers import lrclib
+from .lyrics import manager as lyrics_manager
 
 log = logging.getLogger(__name__)
 
@@ -231,6 +231,11 @@ def _extract_direct_stream_info(url: str, quality: str | None = None) -> dict | 
 
 _pending_fetches: dict[str, asyncio.Task[Path]] = {}
 _guard = asyncio.Lock()
+
+# همان ادغامِ درخواست‌های هم‌زمانِ صوت، برای متن: دو تب که هم‌زمان یک ترک را باز
+# کنند نباید دو دورِ کاملِ درخواست به LRCLIB و Genius بفرستند.
+_pending_lyrics: dict[str, asyncio.Task[str | None]] = {}
+_lyrics_guard = asyncio.Lock()
 
 
 def cache_key_for(track_id: str, quality: str | None = None) -> str:
@@ -482,7 +487,13 @@ async def get_stream_response(
 
 
 async def get_or_fetch_lyrics(track: Track) -> str | None:
-    """دریافت لیریکس همگام برای ترک استریم‌شده (با کش روی دیسک)."""
+    """
+    دریافت لیریکس همگام برای ترک استریم‌شده (با کش روی دیسک).
+
+    درخواست‌های هم‌زمانِ یک ترک ادغام می‌شوند (`_pending_lyrics`). شکست هم
+    فقط همان منتظران را بی‌نتیجه می‌گذارد: تسک در `finally` از دیکشنری
+    برداشته می‌شود، پس درخواست بعدی از صفر تلاش می‌کند و قفل دائمی نمی‌ماند.
+    """
     cache_key = cache_key_for(track.id)
     lrc_path = STREAM_CACHE_DIR / f"{cache_key}.lrc"
     if lrc_path.exists():
@@ -491,17 +502,66 @@ async def get_or_fetch_lyrics(track: Track) -> str | None:
         except OSError:
             pass
 
-    def _fetch_sync():
-        try:
-            found = lrclib.fetch(track.title, track.artist, track.album, track.durationMs)
-            if not found:
-                return None
-            content = found.synced or found.plain
-            if content:
-                STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                lrc_path.write_text(content, encoding="utf-8")
-            return content
-        except Exception:
-            return None
+    async with _lyrics_guard:
+        # شاید همین حالا تسکِ دیگری برای همین کلید در جریان است
+        task = _pending_lyrics.get(cache_key)
+        if task is None:
+            task = asyncio.create_task(
+                asyncio.to_thread(_fetch_lyrics_sync, track, lrc_path)
+            )
+            _pending_lyrics[cache_key] = task
 
-    return await asyncio.to_thread(_fetch_sync)
+    try:
+        return await task
+    finally:
+        async with _lyrics_guard:
+            if _pending_lyrics.get(cache_key) is task:
+                _pending_lyrics.pop(cache_key, None)
+
+
+def _rendered_lrc(found) -> str | None:
+    """
+    شکلِ رشته‌ایِ متنی که به کلاینت می‌رود.
+
+    `found.synced` همیشه اولویت دارد و **دست‌نخورده** می‌ماند: Providerی که
+    خودش متنِ هم‌زمان دارد (`lrclib`, `genius`, `lrc.red`, `unison`,
+    `betterlyrics`, `simpmusic`) رفتارش عوض نمی‌شود.
+
+    `lines` فقط وقتی لازم می‌شود که Provider `synced` نداشته باشد ولی
+    داده‌ی زمان‌دار داشته باشد (`lyricsplus`) — آن حالت قبلاً کامل دور
+    ریخته می‌شد و تنها `plain` می‌ماند.
+
+    تگِ کنترلِ کلمه (`<mm:ss.xx>`) فقط با `LYRICS_ENHANCED_LRC` **روشن**
+    نوشته می‌شود؛ پیش‌فرض خاموش است تا فایلِ `.lrc` استانداردِ خالص بماند.
+    در حالتِ خاموش، همان داده‌ی کلمه‌ای با `to_lrc` به LRC خطی تبدیل
+    می‌شود — هیچ خطی از دست نمی‌رود، فقط دقتِ زیرِ خط.
+    """
+    if found.synced:
+        return found.synced
+    lines = getattr(found, "lines", ())
+    if lines:
+        from .lyrics.parsers import to_enhanced_lrc, to_lrc
+
+        if lyrics_enhanced_lrc() and any(line.words for line in lines):
+            return to_enhanced_lrc(lines)
+        return to_lrc(lines)
+    return found.plain
+
+
+def _fetch_lyrics_sync(track: Track, lrc_path: Path) -> str | None:
+    """کارِ بلاک‌کننده‌ی شبکه — در thread جدا اجرا می‌شود."""
+    try:
+        found = lyrics_manager.fetch(track)
+        if not found:
+            return None
+        content = _rendered_lrc(found)
+        if content:
+            STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            # نوشتن اتمیک: اگر دو نویسنده هم‌زمان پیش بیایند، یکی نیمه‌کاره
+            # دیده نمی‌شود. `.tmp` هرگز توسط خواننده‌ها برداشته نمی‌شود.
+            tmp = lrc_path.with_suffix(".lrc.tmp")
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(lrc_path)
+        return content
+    except Exception:
+        return None

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app import db, main, stream_cache
+from app.lyrics.models import Lyrics
 from app.models import Track
 from app.resolver import Candidate
 
@@ -126,6 +127,222 @@ def test_stream_lyrics_endpoint(clean_stream_cache, track):
 
     assert response.media_type == "text/plain; charset=utf-8"
     assert "[00:10.00] Line 1" in response.body.decode("utf-8")
+
+
+def test_concurrent_lyrics_requests_are_merged(clean_stream_cache, track, monkeypatch):
+    """
+    دو تب که هم‌زمان یک ترک را باز کنند نباید دو دورِ کاملِ درخواست به
+    LRCLIB/Genius بفرستند — یک تسک باید برای هر دو جواب بدهد.
+    """
+    from app.lyrics import manager as lyrics_manager
+
+    calls = []
+
+    def slow_fetch(_track):
+        calls.append(1)
+        time.sleep(0.05)
+        return Lyrics(plain="text", synced="[00:01.00]x")
+
+    monkeypatch.setattr(lyrics_manager, "fetch", slow_fetch)
+
+    async def both():
+        return await asyncio.gather(
+            stream_cache.get_or_fetch_lyrics(track),
+            stream_cache.get_or_fetch_lyrics(track),
+        )
+
+    first, second = asyncio.run(both())
+
+    assert calls == [1]
+    assert first == second == "[00:01.00]x"
+
+
+def test_a_negative_result_is_merged_too(clean_stream_cache, track, monkeypatch):
+    """
+    وقتی Providerها متنی ندارند، درخواست‌های هم‌زمان هم باید یک‌بار بیشتر
+    نروند — همان ادغامی که برای نتیجه‌ی موفق کار می‌کند.
+    """
+    from app.lyrics import manager as lyrics_manager
+
+    calls = []
+
+    def miss(_track):
+        calls.append(1)
+        time.sleep(0.05)
+        return None
+
+    monkeypatch.setattr(lyrics_manager, "fetch", miss)
+
+    async def both():
+        return await asyncio.gather(
+            stream_cache.get_or_fetch_lyrics(track),
+            stream_cache.get_or_fetch_lyrics(track),
+        )
+
+    first, second = asyncio.run(both())
+
+    assert calls == [1]
+    assert first is None and second is None
+
+
+def test_a_failed_lyrics_fetch_does_not_wedge_the_cache(clean_stream_cache, track, monkeypatch):
+    """
+    شکست نباید قفل دائمی بسازد: درخواست بعدی باید دوباره سراغ Provider برود
+    و وقتی موفق شد، نتیجه کش شود.
+    """
+    from app.lyrics import manager as lyrics_manager
+
+    calls = []
+
+    def flaky(_track):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("network down")
+        return Lyrics(plain="text", synced="[00:01.00]recovered")
+
+    monkeypatch.setattr(lyrics_manager, "fetch", flaky)
+
+    assert asyncio.run(stream_cache.get_or_fetch_lyrics(track)) is None
+    assert asyncio.run(stream_cache.get_or_fetch_lyrics(track)) == "[00:01.00]recovered"
+    assert len(calls) == 2
+    # بار سوم از کش دیسک می‌آید، بدون تماس دوباره
+    assert asyncio.run(stream_cache.get_or_fetch_lyrics(track)) == "[00:01.00]recovered"
+    assert len(calls) == 2
+
+
+def test_lyrics_are_not_rewritten_when_already_cached(clean_stream_cache, track, monkeypatch):
+    """وجود فایل `.lrc` یعنی هیچ درخواستی زده نمی‌شود."""
+    from app.lyrics import manager as lyrics_manager
+
+    cache_key = stream_cache.cache_key_for(track.id)
+    (clean_stream_cache / f"{cache_key}.lrc").write_text("[00:01.00]cached", encoding="utf-8")
+
+    def unexpected(_track):
+        raise AssertionError("should not fetch")
+
+    monkeypatch.setattr(lyrics_manager, "fetch", unexpected)
+
+    assert asyncio.run(stream_cache.get_or_fetch_lyrics(track)) == "[00:01.00]cached"
+
+
+class TestEnhancedLrcIsOffByDefault:
+    """
+    فاز ۲B.8 — پیش‌فرضِ پروژه «فقط LRC خطی» است، مثل قبل از ۲B.5.
+
+    تگِ کنترلِ کلمهٔ `<mm:ss.xx>` یک افزودنی است و روی خروجیِ *همهٔ*
+    مصرف‌کننده‌ها اثر می‌گذارد (کشِ استریم، پاسخِ endpoint، فایل `.lrc`
+    دانلود). پس باید صریحاً روشن شود، نه پیش‌فرض.
+
+    `MUSICBAZI_LYRICS_ENHANCED_LRC=1` رفتارِ ۲B.5 را برمی‌گرداند.
+    """
+
+    def _word_timed(self):
+        from app.lyrics.models import LyricLine, LyricWord
+
+        return Lyrics(
+            lines=(
+                LyricLine(
+                    start_ms=1000,
+                    text="hello world",
+                    words=(
+                        LyricWord(start_ms=1000, text="hello "),
+                        LyricWord(start_ms=1500, text="world"),
+                    ),
+                ),
+            ),
+            sync_type="word",
+        )
+
+    def _run(self, clean_stream_cache, track, monkeypatch, found):
+        from app.lyrics import manager as lyrics_manager
+
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: found)
+        return asyncio.run(stream_cache.get_or_fetch_lyrics(track))
+
+    def test_the_default_never_writes_a_word_tag(self, clean_stream_cache, track, monkeypatch):
+        monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
+
+        content = self._run(clean_stream_cache, track, monkeypatch, self._word_timed())
+
+        assert content is not None
+        assert "<00:01.00>" not in content, "تگِ کلمه در حالتِ پیش‌فرض نباید باشد"
+        assert content == "[00:01.00]hello world"
+
+    def test_the_default_still_keeps_the_line_timestamps(self, clean_stream_cache, track, monkeypatch):
+        """حذفِ تگِ کلمه نباید زمان‌بندیِ خط را هم از بین ببرد."""
+        monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
+
+        content = self._run(clean_stream_cache, track, monkeypatch, self._word_timed())
+
+        assert content.startswith("[00:01.00]")
+
+    def test_the_flag_on_restores_the_word_tags(self, clean_stream_cache, track, monkeypatch):
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+
+        content = self._run(clean_stream_cache, track, monkeypatch, self._word_timed())
+
+        assert "<00:01.00>" in content
+        assert "hello " in content
+
+    def test_a_line_only_result_is_identical_in_both_modes(self, clean_stream_cache, track, monkeypatch):
+        """وقتی داده‌ی کلمه‌ای نیست، فلگ هیچ تفاوتی نمی‌سازد."""
+        from app.lyrics import manager as lyrics_manager
+
+        found = Lyrics(plain="t", synced="[00:01.00]plain", sync_type="line")
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: found)
+
+        monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
+        off = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
+
+        (clean_stream_cache / f"{stream_cache.cache_key_for(track.id)}.lrc").unlink()
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+        on = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
+
+        assert off == on == "[00:01.00]plain"
+
+    def test_a_written_synced_field_is_never_rewritten(self, clean_stream_cache, track, monkeypatch):
+        """
+        Providerی که خودش `synced` دارد (lrclib، lrc.red، unison) دست‌نخورده
+        می‌ماند — فلگ فقط وقتی دخالت می‌کند که تنها `lines` وجود دارد.
+        """
+        from app.lyrics import manager as lyrics_manager
+
+        found = Lyrics(plain="t", synced="[00:01.00]raw from provider")
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: found)
+        monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
+
+        assert asyncio.run(stream_cache.get_or_fetch_lyrics(track)) == "[00:01.00]raw from provider"
+
+    def test_the_old_frontend_parser_still_finds_the_lines_when_on(
+        self, clean_stream_cache, track, monkeypatch
+    ):
+        """حالتِ روشن هم باید برای پارسرِ خطی معتبر بماند (رگرسیونِ کلاینتِ قدیمی)."""
+        from app.lyrics.parsers import parse_lrc
+
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+        content = self._run(clean_stream_cache, track, monkeypatch, self._word_timed())
+
+        assert parse_lrc(content) is not None
+        assert parse_lrc(content).lines[0].start_ms == 1000
+
+    def test_the_flag_is_read_at_call_time_not_at_import(self, clean_stream_cache, track, monkeypatch):
+        """
+        فلگ باید هر بار خوانده شود، نه در زمانِ import قفل شود — وگرنه تست و
+        اجرای واقعی نمی‌توانند بدونِ راه‌اندازی مجدد عوضش کنند.
+        """
+        from app.lyrics import manager as lyrics_manager
+
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: self._word_timed())
+
+        monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
+        first = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
+        (clean_stream_cache / f"{stream_cache.cache_key_for(track.id)}.lrc").unlink()
+
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+        second = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
+
+        assert "<" not in first
+        assert "<" in second
 
 
 def test_stream_prefetch_endpoint(clean_stream_cache, track):

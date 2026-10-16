@@ -84,6 +84,33 @@ class TestId3:
         # USLT عمداً نسخه‌ی بی‌زمان است؛ نسخه‌ی هم‌زمان‌شده فایل .lrc کناری است
         assert tags.getall("USLT")[0].text == "متن"
 
+    def test_word_timed_lyrics_still_tag_as_plain(
+        self, tagged, monkeypatch
+    ):
+        """
+        تگِ صوتی **هرگز** تگِ کلمه نمی‌گیرد، حتی با فلگ روشن: USLT متنِ ساده
+        است و زمان‌بندی در آن جا نمی‌شود. فقط `Lyrics.plain` نوشته می‌شود.
+        """
+        from app.lyrics.models import LyricLine, LyricWord
+
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+        lyrics = Lyrics(
+            lines=(
+                LyricLine(
+                    start_ms=1000,
+                    text="hello world",
+                    words=(LyricWord(start_ms=1000, text="hello world"),),
+                ),
+            ),
+            sync_type="word",
+        )
+        tags = ID3()
+
+        _id3(tags, tagged, None, lyrics)
+
+        # `plain` خالی است، پس هیچ USLT نوشته نمی‌شود
+        assert tags.getall("USLT") == []
+
 
 class TestMp4:
     def test_track_and_disc_are_pairs(self, tagged):
