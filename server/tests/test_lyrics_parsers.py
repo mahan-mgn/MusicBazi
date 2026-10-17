@@ -237,16 +237,63 @@ class TestParseTtmlClockTime:
 
         assert [line.start_ms for line in found.lines] == [12_500, 62_500, 3_600_000]
 
-    def test_a_bare_number_without_a_unit_is_not_a_time(self):
-        """`12.5` بی‌واحد نه ساعت است نه ثانیه — TTML واحد را الزامی می‌داند."""
+    @pytest.mark.parametrize(
+        "stamp,expected_ms",
+        [
+            ("27.395", 27_395),
+            ("0.5", 500),
+            ("12.5", 12_500),
+            ("60.9", 60_900),
+            ("3:21.570", 201_570),
+        ],
+    )
+    def test_a_bare_number_is_seconds(self, stamp, expected_ms):
+        """
+        وقتي `ttp:timeBase="media"` باشد (پيش‌فرضِ متعارفِ TTML)، يك عددِ
+        بدونِ واحد **ثانيه** است — نه «نامفهوم».
+
+        اين رگرسيونِ يك باگِ واقعي است: منابعِ عينيِ binilyrics/lrc.red زمان‌ها
+        را به شكلِ `27.395` و `2:52.186` مي‌دهند. پارسر قبلاً هر عددِ
+        بدونِ واحد را رد مي‌كرد، پس **هر خطي زيرِ يك دقيقه حذف مي‌شد** و
+        اولين خطِ باقي‌مانده حدودِ ۶۰ ثانيه به نظر مي‌رسيد — يك متنِ ناقص
+        با شروعِ به‌ظاهر غلط.
+        """
+        text = (
+            '<tt xmlns="http://www.w3.org/ns/ttml"><body><div>'
+            f'<p begin="{stamp}">x</p>'
+            "</div></body></tt>"
+        )
+
+        found = parse_ttml(text)
+
+        assert found is not None
+        assert found.lines[0].start_ms == expected_ms
+
+    def test_the_longest_surviving_line_is_not_mistaken_for_the_first(self):
+        """
+        شكلِ باگِ واقعي: خطوطِ زيرِ ۶۰ ثانيه دور ريخته مي‌شدند و اولين خطِ
+        بازمانده (كه با `1:00.964` شروع مي‌شود) «شروعِ متن» به نظر مي‌رسيد.
+        با اصلاح، خطِ اولِ واقعي بايد باقي بماند.
+        """
         text = """<tt xmlns="http://www.w3.org/ns/ttml"><body><div>
-        <p begin="12.5">ambiguous</p>
-        <p begin="00:01.00">valid</p>
+        <p begin="27.395" end="28.960">early</p>
+        <p begin="1:00.964" end="1:02.000">later</p>
         </div></body></tt>"""
 
         found = parse_ttml(text)
 
-        assert [line.text for line in found.lines] == ["valid"]
+        assert [line.start_ms for line in found.lines] == [27_395, 60_964]
+
+    def test_an_unparsable_stamp_still_yields_a_partial_result(self):
+        """عددِ نامفهوم نبايد بقيّهٔ سند را از بين ببرد."""
+        text = """<tt xmlns="http://www.w3.org/ns/ttml"><body><div>
+        <p begin="not-a-time">bad</p>
+        <p begin="5s">good</p>
+        </div></body></tt>"""
+
+        found = parse_ttml(text)
+
+        assert [line.text for line in found.lines] == ["good"]
 
     def test_a_clock_with_frames_is_accepted(self):
         text = """<tt xmlns="http://www.w3.org/ns/ttml"
