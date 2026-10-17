@@ -70,7 +70,8 @@ class TestListSourcesMakesNoRequest:
 
         rows = sources.list_sources(_track())
 
-        assert len(rows) == 2
+        # دو Providerِ ثبت‌شده + دو ورودیِ متادیتاییِ ممنوع (بدونِ کد)
+        assert [r["id"] for r in rows][:2] == ["a", "b"]
         assert calls == []
 
     def test_listing_reports_every_registered_provider(self):
@@ -78,14 +79,14 @@ class TestListSourcesMakesNoRequest:
 
         names = [row["id"] for row in sources.list_sources(_track())]
 
-        assert names == ["a", "b"]
+        assert names[:2] == ["a", "b"]
 
     def test_listing_follows_the_registry_order(self):
         sources = _sources(
             [_entry("a", _ok()), _entry("b", _ok())], order=("b", "a")
         )
 
-        assert [row["id"] for row in sources.list_sources(_track())] == ["b", "a"]
+        assert [row["id"] for row in sources.list_sources(_track())][:2] == ["b", "a"]
 
     def test_the_metadata_fields_are_exposed(self):
         sources = _sources(
@@ -110,17 +111,18 @@ class TestStatusReporting:
 
         assert sources.list_sources(_track())[0]["status"] == STATUS_NEEDS_SETUP
 
-    def test_a_dark_by_default_provider_is_disabled_not_needs_setup(self):
+    def test_a_dark_by_default_provider_is_selectable_but_not_automatic(self):
         """
-        تفکیکِ مهم: Providerی که فقط پیش‌فرض خاموش است با Providerی که کلید
-        می‌خواهد یکی نیست. اولی با یک سوئیچ روشن می‌شود، دومی با پیکربندی.
+        P1: پیش‌فرض‌خاموش یعنی «در زنجیرهٔ خودکار نیست»، نه «از UI غایب است».
+        کاربر باید بتواند آگاهانه انتخابش کند.
         """
         sources = _sources([_entry("a", _ok(), default_enabled=False)])
 
         row = sources.list_sources(_track())[0]
 
-        assert row["status"] == STATUS_DISABLED
-        assert row["selectable"] is False
+        assert row["selectable"] is True
+        assert row["in_auto_chain"] is False
+        assert row["status"] == STATUS_AVAILABLE
 
     def test_a_cached_result_shows_as_cached(self):
         sources = _sources([_entry("a", _ok())])
@@ -175,23 +177,25 @@ class TestFetchFrom:
         assert result.ok and result.lyrics.plain == "b"
         assert calls == ["b"]
 
-    def test_a_dark_provider_is_not_auto_enabled_by_manual_selection(self):
-        """انتخابِ دستی نباید Providerِ خاموش را به زنجیرهٔ خودکار اضافه کند."""
+    def test_manual_selection_works_without_widening_the_auto_chain(self):
+        """
+        P1: Providerِ پیش‌فرض‌خاموش با انتخابِ دستی **صدا زده می‌شود**، ولی
+        زنجیرهٔ خودکار دست‌نخورده می‌ماند.
+        """
         calls: list[str] = []
         sources = _sources(
             [
                 _entry("auto", _ok("auto")),
-                _entry("dark", lambda *a: (calls.append("dark"), Lyrics(plain="d"))[1],
+                _entry("dark", lambda *a, **k: (calls.append("dark"), Lyrics(plain="d", synced="[00:01.00]d"))[1],
                        default_enabled=False),
             ]
         )
         manager = sources._manager
 
-        asyncio.run(sources.fetch_from("dark", _track()))
+        result = asyncio.run(sources.fetch_from("dark", _track()))
 
-        # زنجیرهٔ خودکار دست‌نخورده: فقط `auto`
+        assert result.ok and calls == ["dark"]
         assert [e.name for e in manager.registry.available()] == ["auto"]
-        assert calls == []  # dark خاموش است، پس صدا زده نشد
 
     def test_an_unknown_provider_is_rejected(self):
         sources = _sources([_entry("a", _ok())])

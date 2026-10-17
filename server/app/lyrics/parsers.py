@@ -483,6 +483,60 @@ def _ttml_paragraph(element: ET.Element, ctx: _TtmlClock, index: int) -> LyricLi
     )
 
 
+def _is_supported(root: ET.Element) -> bool:
+    """
+    آیا این سند در محدودهٔ چیزی است که پارسر واقعاً پیاده کرده؟
+
+    سه چیزی که **پشتیبانی نمی‌شوند** و در نتیجه سند را رد می‌کنند:
+
+    ۱. `ttp:timeBase` غیر از `media` (و `clock` هم که آنجا عددِ بی‌واحد
+       ثانیه نیست). نبودنش یعنی media — همان پیش‌فرضِ متعارف.
+    ۲. `timeContainer` غیر از `par` روی هر عنصری. در `seq` زمانِ هر فرزند از
+       پایانِ قبلی شمرده می‌شود، نه از صفر.
+    ۳. `begin` روی والدِ یک `<p>` **وقتی با خوانشِ مطلق تناقض داشته باشد** —
+       یعنی `begin` فرزند از `begin` والدش کوچک‌تر باشد. توضیح پایین.
+
+    هر سه در داده‌های واقعیِ این پروژه دیده نشدند، پس رد کردنشان چیزی را از
+    دست نمی‌دهد؛ ولی اگر روزی بیایند، سکوتِ غلط جلویشان گرفته می‌شود.
+    """
+    base = root.get(f"{{{_TTP_PARAMETER}}}timeBase")
+    if base is not None and base.strip().lower() not in ("", "media"):
+        return False
+
+    for element in root.iter():
+        container = _attr(element, "timeContainer")
+        if container is not None and container.strip().lower() not in ("", "par"):
+            return False
+
+    # `begin` روی والد: با خوانشِ مطلق مشکلی ندارد، با خوانشِ نسبی نه.
+    #
+    # ⚠️ اینجا عمداً **همهٔ** والدهای `begin`دار رد نمی‌شوند، چون دادهٔ واقعیِ
+    # binilyrics/lrc.red دقیقاً همین شکل است: `<div begin="27.395">` که
+    # `<p begin="27.395">` را در خود دارد — یعنی زمانِ فرزند با والد **برابر**
+    # است، که فقط با خوانشِ مطلق می‌خواند. رد کردنِ شکلِ والد به‌طورِ کلی یعنی
+    # از دست دادنِ ۳۵ خطِ متنِ واقعی.
+    #
+    # پس فقط جایی که دو خوانش ناسازگار می‌شوند رد می‌کنیم: اگر `begin` فرزند
+    # از `begin` والدش **کوچک‌تر** باشد، هر دو خوانش غلط می‌شوند (نسبی یعنی
+    # عددِ کوچکِ بی‌معنا، مطلق یعنی خارج از پنجرهٔ والد). آن تناقض است و
+    # سند رد می‌شود.
+    ctx = _TtmlClock(root)
+    for parent in root.iter():
+        if _local(parent.tag) not in ("div", "body"):
+            continue
+        parent_begin = _ttml_time(_attr(parent, "begin"), ctx)
+        if parent_begin is None:
+            continue
+        for child in parent:
+            if _local(child.tag) != "p":
+                continue
+            child_begin = _ttml_time(_attr(child, "begin"), ctx)
+            if child_begin is not None and child_begin < parent_begin:
+                return False
+
+    return True
+
+
 def parse_ttml(text: str | None) -> Lyrics | None:
     """
     TTML → `Lyrics`. فقط کتابخانه‌ی استانداردِ XML.
@@ -508,6 +562,14 @@ def parse_ttml(text: str | None) -> Lyrics | None:
         # بعضی منابع بدونِ ریشه‌ی `<tt>` یک `<body>` یا `<div>` تنها می‌دهند
         if _local(root.tag) not in ("body", "div"):
             return None
+
+    # ---- دروازهٔ پشتیبانیِ ساختار (P2) ----
+    #
+    # اگر سند از چیزی که پارسر پیاده کرده بیرون باشد، `None` می‌دهیم — نه
+    # زمان‌بندیِ خاموشِ غلط. متنِ با زمانِ اشتباه بدتر از نبودِ متن است:
+    # کاربر نمی‌فهمد چرا پخش هماهنگ نیست و فکر می‌کند فایلش خراب است.
+    if not _is_supported(root):
+        return None
 
     ctx = _TtmlClock(root)
     language = _attr(root, "lang")

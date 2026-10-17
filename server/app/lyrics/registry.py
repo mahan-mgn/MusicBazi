@@ -118,6 +118,11 @@ class ProviderEntry:
     # اگر Provider برای کار کردن به راه‌اندازیِ کاربر نیاز دارد (توکن)، این
     # متنِ راهنما نشان داده می‌شود. متنِ خودِ کلید هرگز اینجا نمی‌آید.
     setup_hint: str | None = None
+    # قرارداد یا کارکردش کامل تأیید نشده — UI برچسبِ «آزمایشی» می‌زند.
+    experimental: bool = False
+    # Providerی که اصلاً کد ندارد (ممنوع) — فقط برای اینکه در فهرست با علت
+    # دیده شود، نه اینکه بی‌صدا غایب باشد.
+    blocked_reason: str | None = None
 
     def display_label(self) -> str:
         return self.label or self.name
@@ -271,17 +276,21 @@ class ProviderRegistry:
         """
         آیا این Provider برای انتخابِ دستی در دسترس است؟
 
-        عمداً `is_available()` نیست: آن تابع `default_enabled` را هم لحاظ
-        می‌کند، پس Providerی که فقط *پیش‌فرض خاموش* است (نه پیکربندی‌نشده)
-        با «نیازمندِ راه‌اندازی» اشتباه گرفته می‌شد. اینجا فقط چیزی سنجیده
-        می‌شود که کاربر نمی‌تواند با یک سوئیچ عوضش کند: **آماده‌بودنِ خودِ
-        Provider** (مثلِ وجودِ توکن) و کلیدِ خاموش‌کردنِ صریح.
+        قاعده (P1): انتخابِ دستی به `default_enabled` و عضویت در زنجیرهٔ
+        خودکار **وابسته نیست**. `env` فقط دو نقش دارد: kill-switch برای
+        خاموش‌کردنِ صریح (`..._ENABLED=0`)، و روشن‌کردنِ Providerی که
+        خودش به کلید نیاز ندارد.
 
-        یعنی Providerی که با env روشن شود، فوراً قابلِ‌انتخاب است.
+        پس یک Providerِ «پیش‌فرض خاموش» **قابلِ انتخاب** است — تا کاربر
+        بتواند آگاهانه از آن استفاده کند بدونِ اینکه به زنجیرهٔ خودکار
+        اضافه شود. تنها چیزی که مانع می‌شود: خاموشیِ صریح با env، یا
+        نبودِ پیش‌نیازِ خودِ Provider (مثلِ توکنِ Genius).
         """
         entry = self._by_name.get(name)
         if entry is None:
             return False
-        if not lyrics_provider_enabled(name, default=entry.default_enabled):
+        # kill-switch صریح: `default=True` صرفاً برای اینکه «ست‌نشده» یعنی
+        # روشن؛ خودِ مقدارِ پیش‌فرضِ زنجیره اینجا نقشی ندارد.
+        if not lyrics_provider_enabled(name, default=True):
             return False
         return entry.enabled() if entry.enabled is not None else True

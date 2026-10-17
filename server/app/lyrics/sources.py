@@ -45,6 +45,34 @@ STATUS_CACHED = "cached"  # نتیجه برای همین آهنگ در حافظ�
 STATUS_EMPTY = "empty"  # امتحان شد، متنی نداشت
 STATUS_ERROR = "error"  # آخرین تلاش خطا داد
 STATUS_EXPERIMENTAL = "experimental"  # قراردادش کامل تأیید نشده
+STATUS_BLOCKED = "blocked"  # از نظرِ شرایطِ استفاده یا قرارداد قابلِ استفاده نیست
+
+
+# منابعی که کد ندارند و **نخواهند داشت** — فقط برای نمایش در فهرست.
+# «نبودنشان در فهرست» یعنی کاربر نمی‌فهمد چرا نیستند؛ «بودنشان با علت»
+# یعنی تصمیم شفاف است. هیچ کدِ Providerی برای این‌ها وجود ندارد.
+_PROHIBITED_SOURCES: tuple[ProviderEntry, ...] = (
+    ProviderEntry(
+        "kugou",
+        lambda *a, **k: None,
+        None,
+        lambda *a, **k: None,
+        label="KuGou",
+        capabilities=frozenset(),
+        terms_note="Not implemented: requires impersonating the mobile app.",
+        blocked_reason="Requires bypassing the provider's app authentication.",
+    ),
+    ProviderEntry(
+        "megalobiz",
+        lambda *a, **k: None,
+        None,
+        lambda *a, **k: None,
+        label="Megalobiz",
+        capabilities=frozenset(),
+        terms_note="Not implemented: robots.txt blocks this kind of client sitewide.",
+        blocked_reason="The site's robots.txt disallows this client entirely.",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -105,40 +133,67 @@ class LyricsSources:
         out: list[dict] = []
         for entry in self._ordered_entries():
             key = (track.id, entry.name)
+            selectable = self._selectable(entry)
             out.append(
                 {
                     "id": entry.name,
                     "label": entry.display_label(),
                     "capabilities": sorted(entry.capabilities),
                     "in_auto_chain": self._in_auto_chain(entry),
-                    "selectable": self._selectable(entry),
+                    "selectable": selectable,
                     "status": self._status_of(entry, key),
                     "terms_note": entry.terms_note,
                     "setup_hint": entry.setup_hint,
+                    "experimental": entry.experimental,
+                    # چرا قابلِ انتخاب نیست — UI به‌جای خاکستریِ بی‌توضیح،
+                    # همان دلیل را نشان می‌دهد. برای منابعِ قابلِ انتخاب خالی است.
+                    "unavailable_reason": None if selectable else self._reason_of(entry),
                 }
             )
         return out
 
+    def _reason_of(self, entry: ProviderEntry) -> str:
+        if entry.blocked_reason:
+            return entry.blocked_reason
+        if entry.enabled is not None and not entry.enabled():
+            return entry.setup_hint or "needs_setup"
+        return "disabled"
+
+    def _blocked_entries(self) -> list[ProviderEntry]:
+        """
+        منابعی که کد ندارند (ممنوع) ولی باید در فهرست دیده شوند.
+
+        جدا از رجیستری نگه داشته می‌شوند: رجیستری فقط چیزهایی را دارد که
+        واقعاً قابلِ‌صدا‌زدن‌اند. این‌ها صرفاً متادیتا هستند — **هیچ کد
+        Providerی برایشان وجود ندارد و اضافه هم نمی‌شود**.
+        """
+        return list(_PROHIBITED_SOURCES)
+
     def _ordered_entries(self) -> list[ProviderEntry]:
-        return [
+        live = [
             self._manager.registry.get(name)
             for name in self._manager.registry.order
             if self._manager.registry.get(name) is not None
         ]
+        return live + self._blocked_entries()
 
     def _in_auto_chain(self, entry: ProviderEntry) -> bool:
         return any(e.name == entry.name for e in self._manager.registry.available())
 
     def _selectable(self, entry: ProviderEntry) -> bool:
         """
-        قابلِ‌انتخابِ دستی؟ یعنی روشن است و کلید/تنظیمش هم آماده.
+        قابلِ‌انتخابِ دستی؟
 
-        Providerی که در زنجیره نیست (Genius زیر `manual_only`) همچنان
-        قابلِ‌انتخاب است — تفاوتش این است که خودبه‌خود اجرا نمی‌شود.
+        Providerی که در زنجیره نیست (Genius زیر `manual_only`) یا پیش‌فرض
+        خاموش است، همچنان قابلِ‌انتخاب است. منابعِ ممنوع (بدونِ کد) هرگز.
         """
+        if entry.blocked_reason:
+            return False
         return self._manager.registry.is_selectable(entry.name)
 
     def _status_of(self, entry: ProviderEntry, key: tuple[str, str]) -> str:
+        if entry.blocked_reason:
+            return STATUS_BLOCKED
         if not self._selectable(entry):
             # دو علتِ متفاوت که کاربر باید تفکیکشان کند: Providerی که خودش
             # کلید/تنظیم می‌خواهد (Genius، Musixmatch) با Providerی که فقط
