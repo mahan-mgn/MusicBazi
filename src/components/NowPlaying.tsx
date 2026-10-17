@@ -10,6 +10,12 @@ import { useCoverSwipe, type SwipeDir } from '../lib/useCoverSwipe'
 import { COVER_VT } from '../lib/viewTransition'
 import { useI18n } from '../lib/i18n'
 import { parseLrc, type LyricLine } from '../lib/lrc'
+import {
+  clearLyricsPreference,
+  fetchLyricsPreference,
+  saveLyricsPreference,
+  streamLyricsUrlForProvider,
+} from '../lib/lyricsSources'
 import { haptic, share } from '../lib/native'
 import { useFavorites } from '../store/favorites'
 import { jobIdOf, usePlayer, type PlayItem } from '../store/player'
@@ -20,6 +26,7 @@ import AudioSettings from './AudioSettings'
 import Artwork, { artBlurUrl } from './Artwork'
 import LikeHeart from './LikeHeart'
 import LyricsPanel from './LyricsPanel'
+import LyricsSourceMenu from './LyricsSourceMenu'
 import PlayPauseIcon from './PlayPauseIcon'
 import QualitySelector from './QualitySelector'
 import ThinSlider from './ThinSlider'
@@ -258,6 +265,12 @@ export default function NowPlaying({
   const closeTimer = useRef<number | null>(null)
   const [panel, setPanel] = useState<PanelView>('cover')
   const [lyrics, setLyrics] = useState<LyricsState>({ kind: 'loading' })
+  // منبعِ انتخابیِ همین آهنگ؛ `null` یعنی «خودکار».
+  const [lyricsSource, setLyricsSource] = useState<string | null>(null)
+  // ذخیره‌ی ترجیح در جریان است — از زدنِ دکمه‌ی دوم قبل از تمام‌شدن جلوگیری می‌کند
+  const [sourceBusy, setSourceBusy] = useState(false)
+  // منبعِ انتخابی جواب نداد و به خودکار برگشتیم
+  const [sourceFailed, setSourceFailed] = useState(false)
   const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
 
@@ -447,31 +460,68 @@ export default function NowPlaying({
     }
   }, [item?.track.artworkUrl])
 
-  // واکشی متن ترانه
+  // ترجیحِ ذخیره‌شده‌ی همین آهنگ را بخوان (یک بار به ازای هر آهنگ)
+  useEffect(() => {
+    const trackId = item?.track.id
+    setSourceFailed(false)
+    if (!trackId) {
+      setLyricsSource(null)
+      return
+    }
+    let cancelled = false
+    fetchLyricsPreference(trackId).then((provider) => {
+      if (!cancelled) setLyricsSource(provider)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [item?.track.id])
+
+  // واکشی متن ترانه — با منبعِ انتخابی اگر بود، وگرنه زنجیرهٔ خودکار
   useEffect(() => {
     if (panel !== 'lyrics') return
-    if (!item?.lyricsUrl) {
+    const track = item?.track
+    if (!track) {
+      setLyrics({ kind: 'none' })
+      return
+    }
+    // با منبعِ انتخابی، آدرسِ همان منبع ساخته می‌شود؛ بدونش آدرسِ پیش‌فرض
+    // سرور عیناً همان چیزی است که تا امروز بود.
+    const url = lyricsSource
+      ? streamLyricsUrlForProvider(track, lyricsSource)
+      : item.lyricsUrl
+    if (!url) {
       setLyrics({ kind: 'none' })
       return
     }
     setLyrics({ kind: 'loading' })
+    const wantedTrack = track.id
     let cancelled = false
-    fetch(item.lyricsUrl)
+    fetch(url)
       .then((r) => (r.ok ? r.text() : Promise.reject()))
       .then((raw) => {
-        if (cancelled) return
+        // رقابتِ تغییرِ آهنگ: نتیجهٔ دیررس نباید به آهنگِ بعدی نشت کند
+        if (cancelled || item?.track.id !== wantedTrack) return
         const lines = parseLrc(raw)
         if (lines.length > 0) setLyrics({ kind: 'synced', lines })
         else if (raw.trim()) setLyrics({ kind: 'plain', text: raw.trim() })
         else setLyrics({ kind: 'none' })
       })
-      .catch(() => {
-        if (!cancelled) setLyrics({ kind: 'none' })
+      .catch(async () => {
+        if (cancelled || item?.track.id !== wantedTrack) return
+        if (!lyricsSource) {
+          setLyrics({ kind: 'none' })
+          return
+        }
+        // منبعِ انتخابی جواب نداد ⇒ به خودکار برگرد، ولی انتخاب را پاک نکن:
+        // ممکن است سرویس لحظه‌ای خراب باشد و کاربر نخواهد انتخابش برود.
+        setSourceFailed(true)
+        setLyricsSource(null)
       })
     return () => {
       cancelled = true
     }
-  }, [panel, item?.lyricsUrl])
+  }, [panel, item?.lyricsUrl, item?.track.id, lyricsSource])
 
   useEffect(() => {
     if (!item) finishDismiss()
@@ -869,6 +919,46 @@ export default function NowPlaying({
     </div>
   )
 
+  /**
+   * انتخابِ منبعِ متن برای همین آهنگ.
+   *
+   * رشتهٔ خالی یعنی «خودکار» — همان قراردادِ سرور. انتخابِ فرانت همیشه
+   * خوش‌بینانه است: اول state عوض می‌شود تا متن بلافاصله بارگذاری شود، بعد
+   * ذخیره در پس‌زمینه. اگر ذخیره شکست بخورد، انتخاب برای همین نشست کار
+   * می‌کند و فقط دفعه‌ی بعد برنمی‌گردد — بهتر از بلاک‌کردنِ UI.
+   */
+  const selectLyricsSource = (provider: string) => {
+    const trackId = item?.track.id
+    if (!trackId || sourceBusy) return
+    setSourceFailed(false)
+    setLyricsSource(provider || null)
+    setSourceBusy(true)
+    const save = provider
+      ? saveLyricsPreference(trackId, provider)
+      : clearLyricsPreference(trackId)
+    save.finally(() => setSourceBusy(false))
+  }
+
+  /** تلاشِ دوباره برای منبعِ فعلی — سرور با force کشِ «نتیجه‌ای نیست» را دور می‌زند. */
+  const retryLyricsSource = () => {
+    const track = item?.track
+    if (!track || !lyricsSource) return
+    setLyrics({ kind: 'loading' })
+    const wantedTrack = track.id
+    fetch(streamLyricsUrlForProvider(track, lyricsSource) + '&force=1')
+      .then((r) => (r.ok ? r.text() : Promise.reject()))
+      .then((raw) => {
+        if (item?.track.id !== wantedTrack) return
+        const lines = parseLrc(raw)
+        if (lines.length > 0) setLyrics({ kind: 'synced', lines })
+        else if (raw.trim()) setLyrics({ kind: 'plain', text: raw.trim() })
+        else setLyrics({ kind: 'none' })
+      })
+      .catch(() => {
+        if (item?.track.id === wantedTrack) setLyrics({ kind: 'none' })
+      })
+  }
+
   // ۵. محتوای لیریکس
   const renderLyricsContent = () =>
     lyrics.kind === 'synced' ? (
@@ -1137,6 +1227,22 @@ export default function NowPlaying({
                   </div>
                 ) : (
                   <div className="flex flex-col h-full overflow-hidden w-full">
+                    {panel === 'lyrics' && item && (
+                      <div className="shrink-0 flex items-center justify-center gap-2 pb-1">
+                        <LyricsSourceMenu
+                          track={item.track}
+                          current={lyricsSource}
+                          onSelect={selectLyricsSource}
+                          onRetry={lyricsSource ? retryLyricsSource : undefined}
+                          disabled={sourceBusy}
+                        />
+                        {sourceFailed && (
+                          <span className="text-[10px] text-amber-300/80">
+                            {t.lyricsSourceFailed}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <div className="relative flex-1 min-h-0 w-full overflow-hidden">
                       {panel === 'lyrics' ? renderLyricsContent() : renderQueueContent()}
                     </div>
@@ -1173,6 +1279,20 @@ export default function NowPlaying({
             ) : (
               /* در نمای لیریکس یا صف: تمام‌صفحه و فراگیر با فوتر در پایین (Images 4 & 5) */
               <>
+                {panel === 'lyrics' && item && (
+                  <div className="shrink-0 flex items-center justify-center gap-2 pb-1 max-w-2xl mx-auto w-full">
+                    <LyricsSourceMenu
+                      track={item.track}
+                      current={lyricsSource}
+                      onSelect={selectLyricsSource}
+                      onRetry={lyricsSource ? retryLyricsSource : undefined}
+                      disabled={sourceBusy}
+                    />
+                    {sourceFailed && (
+                      <span className="text-[10px] text-amber-300/80">{t.lyricsSourceFailed}</span>
+                    )}
+                  </div>
+                )}
                 <div className="relative flex min-h-0 flex-1 overflow-hidden w-full max-w-2xl mx-auto py-2">
                   {panel === 'lyrics' ? renderLyricsContent() : renderQueueContent()}
                 </div>

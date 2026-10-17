@@ -1238,6 +1238,7 @@ async def stream_lyrics(
     videoId: str | None = None,
     isrc: str | None = None,
     provider: str | None = None,
+    force: bool = False,
 ) -> Response:
     """
     متن ترانه همگام برای ترک استریم‌شده.
@@ -1258,7 +1259,7 @@ async def stream_lyrics(
     track = _lyrics_track(track_id, title, artist, album, duration_ms, videoId, isrc)
 
     if provider:
-        result = await lyrics_sources.fetch_from(provider, track)
+        result = await lyrics_sources.fetch_from(provider, track, force=force)
         if result.error == "unknown-provider":
             raise HTTPException(404, "منبعِ متنِ ناشناخته")
         if result.error == "needs-setup":
