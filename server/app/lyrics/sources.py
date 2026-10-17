@@ -78,13 +78,31 @@ _PROHIBITED_SOURCES: tuple[ProviderEntry, ...] = (
 )
 
 
+def _error_kind_of(kind: str, status: int | None) -> str:
+    """
+    `kind`ِ خامِ ProviderError → دسته‌ای که UI می‌فهمد.
+
+    ۴۲۹ تنها حالتی است که جدا می‌شود: «بعداً دوباره امتحان کن» با «سرویس
+    خراب است» یکی نیست و پیامِ درست برای کاربر فرق دارد.
+    """
+    return "rate_limited" if status == 429 else kind
+
+
 @dataclass(frozen=True)
 class SourceResult:
-    """نتیجهٔ یک تلاشِ تک‌منبعی."""
+    """
+    نتیجهٔ یک تلاشِ تک‌منبعی.
+
+    `error` یک کدِ ماشین‌خوان است، نه متنِ خطا: `unknown-provider`،
+    `needs-setup`، `disabled`، `blocked`، یا `kind`ِ خودِ ProviderError
+    (`network`/`http`/`body`). `http_status` فقط وقتی پر می‌شود که عددی
+    واقعی از Provider آمده باشد.
+    """
 
     provider: str
     lyrics: Lyrics | None
-    error: str | None = None  # نامِ کلاسِ خطا یا kind، بدونِ داده‌ی حساس
+    error: str | None = None  # کدِ ماشین‌خوان، بدونِ داده‌ی حساس
+    http_status: int | None = None
 
     @property
     def ok(self) -> bool:
@@ -121,6 +139,8 @@ class LyricsSources:
         self._clock = clock
         self._cache: dict[tuple[str, str], _Entry] = {}
         self._errors: dict[tuple[str, str], str] = {}
+        # کدِ HTTPِ آخرین خطا، برای نمایشِ «HTTP 502» بدونِ لو دادنِ جزئیات
+        self._error_status: dict[tuple[str, str], int | None] = {}
         self._lock = asyncio.Lock()
         self._pending: dict[tuple[str, str], asyncio.Task] = {}
 
@@ -148,6 +168,10 @@ class LyricsSources:
                     "terms_note": entry.terms_note,
                     "setup_hint": entry.setup_hint,
                     "experimental": entry.experimental,
+                    # آخرین نتیجهٔ همین آهنگ — از کش و breaker، بدونِ شبکه
+                    "last_outcome": self._last_outcome(entry, key),
+                    "last_error_kind": self._last_error_kind(key),
+                    "http_status": self._last_http_status(key),
                     # چرا قابلِ انتخاب نیست — UI به‌جای خاکستریِ بی‌توضیح،
                     # همان دلیل را نشان می‌دهد. برای منابعِ قابلِ انتخاب خالی است.
                     "unavailable_reason": None if selectable else self._reason_of(entry),
@@ -156,11 +180,30 @@ class LyricsSources:
         return out
 
     def _reason_of(self, entry: ProviderEntry) -> str:
+        """متنِ *نمایشی* برای ردیفِ غیرقابلِ‌انتخاب (می‌تواند راهنمای راه‌اندازی باشد)."""
         if entry.blocked_reason:
             return entry.blocked_reason
         if entry.enabled is not None and not entry.enabled():
             return entry.setup_hint or "needs_setup"
         return "disabled"
+
+    @staticmethod
+    def _code_of(entry: ProviderEntry) -> str:
+        """
+        کدِ *ماشین‌خوانِ* علتِ غیرقابلِ‌انتخاب بودن — جدا از متنِ نمایشی.
+
+        `disabled` یعنی «با یک سوئیچ روشن می‌شود»؛ `needs_setup` یعنی «کلید
+        لازم دارد»؛ `blocked` یعنی «هرگز». فرانت برای هرکدام پیامِ متفاوتی
+        نشان می‌دهد، پس نمی‌شود همه را یک رشته کرد.
+        """
+        if entry.blocked_reason:
+            return "blocked"
+        if entry.enabled is not None and not entry.enabled():
+            return "needs_setup"
+        return "disabled"
+
+    def _is_blocked_name(self, name: str) -> bool:
+        return any(e.name == name and e.blocked_reason for e in self._blocked_entries())
 
     def _blocked_entries(self) -> list[ProviderEntry]:
         """
@@ -212,6 +255,29 @@ class LyricsSources:
             return STATUS_ERROR
         return STATUS_AVAILABLE
 
+    def _last_outcome(self, entry: ProviderEntry, key: tuple[str, str]) -> str:
+        """
+        آخرین نتیجهٔ شناخته‌شدهٔ این منبع برای این آهنگ — بدونِ هیچ درخواستی.
+
+        چهار مقدار: `cached` (متن دارد)، `not_found` («خالیِ معتبر»)، `error`
+        (خطا)، `never_tried`. UI با این می‌تواند «Not tried» و «Failed – retry»
+        را از هم جدا کند، چیزی که قبلاً ممکن نبود.
+        """
+        if entry.blocked_reason or not self._selectable(entry):
+            return "never_tried"
+        cached = self._cache.get(key)
+        if cached is not None and cached.expires > self._clock():
+            return "cached" if cached.value is not None else "not_found"
+        if key in self._errors:
+            return "error"
+        return "never_tried"
+
+    def _last_error_kind(self, key: tuple[str, str]) -> str | None:
+        return self._errors.get(key)
+
+    def _last_http_status(self, key: tuple[str, str]) -> int | None:
+        return self._error_status.get(key)
+
     # ------------------------------------------------------------ واکشی
 
     async def fetch_from(self, name: str, track: Track, *, force: bool = False) -> SourceResult:
@@ -223,14 +289,19 @@ class LyricsSources:
         """
         entry = self._manager.registry.get(name)
         if entry is None:
+            # منابعِ ممنوع در رجیستری نیستند ولی ثبت‌شده‌اند — «ناشناس» با
+            # «ممنوع» یکی نیست و پیامِ درست برای کاربر فرق دارد.
+            if self._is_blocked_name(name):
+                return SourceResult(provider=name, lyrics=None, error="blocked")
             return SourceResult(provider=name, lyrics=None, error="unknown-provider")
         if not self._selectable(entry):
-            return SourceResult(provider=name, lyrics=None, error="needs-setup")
+            return SourceResult(provider=name, lyrics=None, error=self._code_of(entry))
 
         key = (track.id, name)
         if force:
             self._cache.pop(key, None)
             self._errors.pop(key, None)
+            self._error_status.pop(key, None)
 
         async with self._lock:
             cached = self._cache.get(key)
@@ -261,18 +332,23 @@ class LyricsSources:
             found = _invoke(entry.strict(), track)
         except ProviderError as exc:
             # خطا کش نمی‌شود؛ فقط برای نمایشِ وضعیت نگه داشته می‌شود.
-            self._errors[key] = exc.kind
+            self._errors[key] = _error_kind_of(exc.kind, exc.status)
+            self._error_status[key] = exc.status
             log.warning(
                 "lyrics source %s failed (%s%s)", exc.provider, exc.kind,
                 f" {exc.status}" if exc.status is not None else "",
             )
-            return SourceResult(provider=entry.name, lyrics=None, error=exc.kind)
+            return SourceResult(
+                provider=entry.name, lyrics=None, error=exc.kind, http_status=exc.status
+            )
         except Exception as exc:  # noqa: BLE001
             self._errors[key] = exc.__class__.__name__
+            self._error_status.pop(key, None)
             log.warning("lyrics source %s failed (unexpected)", entry.name, exc_info=True)
             return SourceResult(provider=entry.name, lyrics=None, error=exc.__class__.__name__)
 
         self._errors.pop(key, None)
+        self._error_status.pop(key, None)
         if found is None and self._miss_ttl_s > 0:
             # «خالیِ معتبر» کش می‌شود تا زدنِ مکرر دکمه، سرویس را نکوبد.
             self._cache[key] = _Entry(None, self._clock() + self._miss_ttl_s)
@@ -313,6 +389,7 @@ class LyricsSources:
             self._cache.pop(key, None)
         for key in [k for k in self._errors if k[0] == track_id and (name is None or k[1] == name)]:
             self._errors.pop(key, None)
+            self._error_status.pop(key, None)
 
 
 lyrics_sources = LyricsSources()

@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from . import (
     artblur,
@@ -62,6 +62,7 @@ from .config import (
     PROXY,
 )
 from .downloader import safe_name
+from .lyrics import sources as sources_mod
 from .lyrics.sources import lyrics_sources
 from .lyrics.manager import lyrics_manager
 from .stream.feature_flags import is_stream_v2_enabled
@@ -1204,6 +1205,50 @@ async def clear_lyrics_preference(track_id: str) -> dict:
     return {"trackId": track_id, "provider": None}
 
 
+# کدِ ماشین‌خوانِ خطا → (کدِ HTTP، متنِ فارسیِ detail).
+#
+# `detail` عیناً همان چیزی است که قبلاً برمی‌گشت، تا کلاینتِ قدیمی نشکند؛
+# `code` فیلدِ تازه است که فرانت واقعاً به آن تصمیم می‌گیرد.
+_PROVIDER_ERRORS: dict[str, tuple[int, str]] = {
+    "unknown-provider": (404, "منبعِ متنِ ناشناخته"),
+    "unknown_provider": (404, "منبعِ متنِ ناشناخته"),
+    "blocked": (403, "این منبع قابلِ استفاده نیست"),
+    "disabled": (409, "این منبع خاموش است"),
+    "needs-setup": (409, "این منبع پیکربندی نشده است"),
+    "needs_setup": (409, "این منبع پیکربندی نشده است"),
+    "rate_limited": (429, "منبعِ متن فعلاً درخواست‌ها را محدود کرده است"),
+    "not_found": (404, "متنی برای این آهنگ یافت نشد"),
+}
+
+
+def _provider_error_response(result, provider: str) -> JSONResponse:
+    """
+    خطای منبع‌محور → JSON با کدِ ماشین‌خوان.
+
+    فیلدها: `detail` (سازگاریِ عقب‌رو)، `code` (تصمیمِ فرانت)، `provider`
+    (نامِ رجیستری)، و `http_status` فقط وقتی Provider عددی داده باشد.
+    هیچ URL، کلید یا متنی از آهنگ اینجا نیست.
+    """
+    # نام‌ها روی مرزِ HTTP یکدست می‌شوند: سرویس با خطِ تیره (`unknown-provider`)
+    # حرف می‌زند و قرارداد با زیرخط — تا فرانت یک شکل ببیند.
+    error = (result.error or "provider_error").replace("-", "_")
+    # یک HTTP ۴۲۹ از خودِ Provider، «محدودیتِ نرخ» است نه «سرویس خراب» —
+    # کاربر باید «بعداً دوباره امتحان کن» ببیند، نه «خطا».
+    if error in ("http", "network", "body") and result.http_status == 429:
+        error = "rate_limited"
+    status, detail = _PROVIDER_ERRORS.get(error, (502, "منبعِ متن پاسخ نداد"))
+    body: dict[str, object] = {
+        "detail": detail,
+        # کدهای سرویسی (`http`/`network`/`body`) همه به یک نامِ معنادار برای
+        # فرانت نگاشت می‌شوند؛ بقیه نامِ خودشان را نگه می‌دارند.
+        "code": "provider_error" if error in ("http", "network", "body") else error,
+        "provider": provider,
+    }
+    if result.http_status is not None:
+        body["http_status"] = result.http_status
+    return JSONResponse(status_code=status, content=body)
+
+
 def _video_id_from_track_id(track_id: str) -> str | None:
     """
     videoId از قالبِ شناسهٔ ترک — بدونِ حدس.
@@ -1260,15 +1305,13 @@ async def stream_lyrics(
 
     if provider:
         result = await lyrics_sources.fetch_from(provider, track, force=force)
-        if result.error == "unknown-provider":
-            raise HTTPException(404, "منبعِ متنِ ناشناخته")
-        if result.error == "needs-setup":
-            raise HTTPException(409, "این منبع پیکربندی نشده است")
         if result.error is not None:
-            # ۵۰۲: منبع در دسترس نبود. جزئیاتِ خطا هرگز به کلاینت نمی‌رود.
-            raise HTTPException(502, "منبعِ متن پاسخ نداد")
+            return _provider_error_response(result, provider)
         if result.lyrics is None:
-            raise HTTPException(404, "متنی برای این آهنگ یافت نشد")
+            return _provider_error_response(
+                sources_mod.SourceResult(provider=provider, lyrics=None, error="not_found"),
+                provider,
+            )
         return Response(
             content=_render_lyrics(result.lyrics),
             media_type="text/plain; charset=utf-8",

@@ -209,7 +209,7 @@ class TestFetchFrom:
 
         result = asyncio.run(sources.fetch_from("a", _track()))
 
-        assert result.ok is False and result.error == "needs-setup"
+        assert result.ok is False and result.error == "needs_setup"
 
     def test_a_successful_result_is_cached_in_memory(self):
         calls: list[int] = []
