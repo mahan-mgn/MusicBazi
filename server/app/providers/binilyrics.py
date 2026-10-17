@@ -118,8 +118,20 @@ def _fetch_ttml(client: httpx.Client, url: str) -> Lyrics | None:
         raise ProviderError(_NAME, "body", detail=exc.__class__.__name__) from exc
 
 
-def fetch_strict(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
+def fetch_strict(
+    title: str,
+    artist: str,
+    album: str | None,
+    duration_ms: int,
+    *,
+    video_id: str | None = None,
+    isrc: str | None = None,
+) -> Lyrics | None:
     """
+    `video_id` و `isrc` پذیرفته می‌شوند ولی **استفاده نمی‌شوند**: این منبع
+    کلیدش عنوان/هنرمند است. پارامترها فقط برای یکدستیِ امضای Providerها
+    هستند تا `Manager` همه را با یک شکل صدا بزند.
+
     مثل `fetch`، ولی خطای گذرا را با `ProviderError` اعلام می‌کند.
 
     تطبیقِ مشترک **قبل** از خواندنِ فایلِ TTML اجرا می‌شود: بی‌آن، یک جستجوی

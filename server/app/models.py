@@ -54,6 +54,18 @@ class Track(BaseModel):
     valence: float | None = None
     energy: float | None = None
     views: str | None = None
+    # شناسه‌هایی که فقط *بعضی* منابعِ متن لازم دارند، نه کلِ اپ.
+    #
+    # `videoId` کلیدِ SimpMusic است و `isrc` کلیدِ تطبیقِ دقیق در چند منبعِ
+    # دیگر. هیچ‌کدام هویتِ ترک نیستند — ترک با `id`/`sourceUrl` شناسایی
+    # می‌شود — پس اختیاری‌اند و فقط وقتی پر می‌شوند که منبعِ ترک آن‌ها را
+    # داشته باشد (یوتیوب videoId دارد، آی‌تیونز/دیزر isrc).
+    #
+    # این دو عمداً روی `Track` نشستند نه در یک مسیرِ جدا: تنها راهِ رساندنشان
+    # از فرانت به Provider است، و `Track` همان چیزی است که این مسیر عبور
+    # می‌دهد. `src/lib/types.ts` آینهٔ همین فیلدها را دارد.
+    videoId: str | None = None
+    isrc: str | None = None
 
 
 class Artist(BaseModel):

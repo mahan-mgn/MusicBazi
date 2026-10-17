@@ -51,6 +51,11 @@ _TTML_FRAMES = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2}):(\d+)(?:\.(\d+))?$")
 _TTML_OFFSET_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s|f|t)")
 _TTML_OFFSET_UNITS = {"h", "m", "s", "ms", "f", "t"}
 
+# عددِ ساده با نقطهٔ اعشار و **بدونِ واحد** — در `ttp:timeBase="media"`
+# (پیش‌فرضِ متعارف) ثانیه است. منابعِ واقعی مثل binilyrics/lrc.red زمان‌ها را
+# دقیقاً به همین شکل می‌دهند: `27.395` و `2:52.186`.
+_TTML_BARE_NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
+
 # namespaceها. با local-name تطبیق می‌دهیم چون پیشوندها در سندهای واقعی
 # دلخواه‌اند و نامِ کاملِ namespace تنها چیزی است که ثابت می‌ماند.
 _XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
@@ -311,13 +316,27 @@ def _ttml_time(raw: str | None, ctx: "_TtmlClock") -> int | None:
 
     # `0s` یک زمانِ کاملاً معتبر است، پس بررسیِ None لازم است نه truthiness —
     # با `if offset := ...` خطِ شروع‌ازصفر بی‌صدا حذف می‌شد.
-    return _parse_offset_time(value, ctx)
+    offset = _parse_offset_time(value, ctx)
+    if offset is not None:
+        return offset
+
+    # عددِ **بدونِ واحد**: در `ttp:timeBase="media"` (پیش‌فرضِ متعارف) ثانیه است.
+    #
+    # این شاخه بعد از `offset` می‌آید تا `27.395s` همچنان از مسیرِ واحددار
+    # برود؛ ولی خودش *آخرین* چاره است وگرنه زمانِ بدونِ واحد بی‌صدا حذف
+    # می‌شد — که دقیقاً همان باگی است که خط‌های زیرِ یک دقیقه را از فایل‌های
+    # واقعیِ TTML دور می‌ریخت.
+    if _TTML_BARE_NUMBER.match(value):
+        return int(round(float(value) * 1000))
+
+    return None
 
 
 def _parse_offset_time(value: str, ctx: "_TtmlClock") -> int | None:
     """
     زمانِ آفستِ TTML → ms. تنها اگر *کلِ* رشته از «عدد+واحد» ساخته شده باشد
-    قبول می‌شود، وگرنه `12.5` بی‌واحد هم به‌عنوان ثانیه خوانده می‌شد.
+    قبول می‌شود (مثل `1500ms` یا `2m30s`)، وگرنه `None` — تا عددِ بی‌واحد به
+    مسیرِ `_ttml_time` برگردد و آنجا ثانیه حساب شود.
     """
     parts = list(_TTML_OFFSET_PART.finditer(value))
     if not parts or "".join(part.group(0) for part in parts) != value:

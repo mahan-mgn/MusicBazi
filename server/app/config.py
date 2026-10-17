@@ -182,6 +182,26 @@ LYRICS_PROVIDERS_ORDER = tuple(
 )
 
 
+def lyrics_auto_enabled(name: str) -> bool:
+    """
+    آیا این Provider در **زنجیرهٔ خودکار** باشد؟
+
+    جدا از `lyrics_provider_enabled` است که «اصلاً روشن باشد یا نه» را می‌گوید.
+    Providerی می‌تواند روشن باشد (یعنی قابلِ‌صدا‌زدنِ دستی) ولی از زنجیرهٔ
+    خودکار بیرون بماند.
+
+    تنها موردِ فعلی **Genius** است. طبقِ `GENIUS_POLICY=manual_only`، متنِ
+    Genius از زنجیرهٔ خودکار بیرون است: شرایطِ استفاده‌اش صریحاً
+    scraping/automated را ممنوع می‌کند و کاربر باید خودش تصمیم بگیرد. پس در
+    فهرستِ sumberها با برچسبِ هشدار دیده می‌شود ولی خودبه‌خود اجرا نمی‌شود.
+
+    با `MUSICBAZI_LYRICS_GENIUS_POLICY=keep_auto` می‌شود به رفتارِ قبلی برگشت.
+    """
+    if name == "genius":
+        return _env("LYRICS_GENIUS_POLICY", "manual_only").strip().lower() != "manual_only"
+    return True
+
+
 def lyrics_provider_enabled(name: str, default: bool = True) -> bool:
     """
     آیا این Provider روشن است؟ صریحاً ست‌نشده یعنی `default`.
@@ -244,6 +264,25 @@ BINILYRICS_API = _env("BINILYRICS_API", "https://lyrics-api.binimum.org")
 # Provider هم نتیجه‌ای نمی‌دهد تا مدل/امضا عوض شود. توضیح کامل در
 # `providers/simpmusic.py`.
 SIMPMUSIC_API = _env("SIMPMUSIC_API", "https://api-lyrics.simpmusic.org")
+
+# PaxSenix / Lyrically — آگهی‌گرِ متن با شناسهٔ ترک (نه عنوان). قراردادش
+# OpenAPIِ رسمیِ خودش است؛ شرایط استفاده ندارد (NO-TERMS-FOUND).
+PAXSENIX_API = _env("PAXSENIX_API", "https://lyrics.paxsenix.org")
+
+# آدرس‌های سرویس‌هایی که **پیاده نشدند**، فقط برای اینکه ردپای پژوهش گم نشود:
+#
+# - KuGou: امضای رسمی دارد ولی کلاینتِ عمومی با *جعلِ هویتِ اپِ اندروید*
+#   (`encryptType: 'android'`) حرف می‌زند. طبقِ قاعدهٔ ممنوعیتِ مسیرِ غیررسمیِ
+#   پنهان پیاده نشد. میزبان: `lyrics.kugou.com` (دانلود)،
+#   `complexsearch.kugou.com` (جستجو).
+# - Megalobiz: فقط scrapingِ HTML. `robots.txt` سایت صریحاً برای
+#   `User-Agent: BitChord` کلِ سایت را `Disallow: /` کرده — یعنی خودِ سایت
+#   دقیقاً همین کاربرد را بسته است. میزبان: `www.megalobiz.com`.
+# - Musixmatch: فقط APIِ رسمی مجاز است و آن هم `matcher.subtitle.get`
+#   («متنِ همگام») طبقِ مستنداتِ ثالث نیازمندِ **پلنِ تجاری** است. بدونِ
+#   کلیدِ کاربر Provider در وضعیتِ «نیازمندِ راه‌اندازی» می‌ماند.
+MUSIXMATCH_API = _env("MUSIXMATCH_API", "https://api.musixmatch.com/ws/1.1")
+MUSIXMATCH_API_KEY = _env("MUSIXMATCH_API_KEY") or None
 
 # lrc.red — سورسِ رسمی ندارد؛ قرارداد از سه کلاینتِ ثالث بازسازی شده.
 LRC_RED_API = _env("LRC_RED_API", "https://lrc.red")

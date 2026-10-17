@@ -764,87 +764,145 @@ class TestSimpMusicVideoId:
         assert simpmusic.video_id_of("") is None
 
 
-class TestSimpMusicIsUnreachableFromTheMainFlow:
+class TestSimpMusicIsNowReachable:
     """
-    SimpMusic کلیدش `videoId` است، ولی **هیچ مسیری در جریانِ اصلی این شناسه
-    را به Provider نمی‌رساند**. نه `Track` فیلدِ آن را دارد، نه `Manager` و
-    نه endpointها آن را عبور می‌دهند — تنها جایی که استخراج می‌شود
-    (`stream/playback.py:98` → `:301`) مخصوصِ resolveِ استریم است و به متن
-    کاری ندارد.
+    SimpMusic کلیدش `videoId` است. پیش‌تر **هیچ مسیری** این شناسه را به
+    Provider نمی‌رساند و Provider در عمل بی‌اثر بود. حالا `Track.videoId`
+    و مسیرِ عبورِ Manager آن را می‌رسانند.
+
+    جریان: `Track.videoId` → `LyricsManager.fetch` → `entry.strict(..., video_id=…)`.
     """
 
-    def test_the_track_model_has_no_video_id_field(self):
+    def test_the_track_model_carries_the_optional_hints(self):
         from app.models import Track
 
-        assert "videoId" not in Track.model_fields
-        assert "video_id" not in Track.model_fields
+        assert "videoId" in Track.model_fields
+        assert "isrc" in Track.model_fields
+        # اختیاری‌اند — نبودشان Track را invalid نمی‌کند
+        assert Track.model_fields["videoId"].default is None
+        assert Track.model_fields["isrc"].default is None
 
-    def test_the_public_fetch_signature_cannot_carry_a_video_id(self):
+    def test_a_track_without_the_hints_still_validates(self):
+        from app.models import Track
+
+        track = Track(
+            id="x",
+            title="Song",
+            artist="Artist",
+            album=None,
+            durationMs=1_000,
+            source="spotify",
+            sourceUrl="https://e.invalid/x",
+        )
+        assert track.videoId is None and track.isrc is None
+
+    def test_the_manager_passes_the_video_id_from_the_track(self, monkeypatch):
+        """شاهدِ رفعِ UNREACHABLE: شناسه واقعاً به Provider می‌رسد."""
+        from app.lyrics.manager import LyricsManager
+        from app.lyrics.registry import ProviderEntry, ProviderRegistry
+        from app.models import Track
+
+        seen: list[dict] = []
+
+        def capturing(title, artist, album, duration_ms, *, video_id=None, isrc=None):
+            seen.append({"video_id": video_id, "isrc": isrc})
+            return None
+
+        registry = ProviderRegistry(
+            [ProviderEntry("simpmusic", lambda *a, **k: None, None, capturing)],
+            ("simpmusic",),
+        )
+        manager = LyricsManager(registry=registry, miss_ttl_s=0)
+        track = Track(
+            id="ytm:track:dQw4w9WgXcQ",
+            title="Song",
+            artist="Artist",
+            album=None,
+            durationMs=1_000,
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+            videoId="dQw4w9WgXcQ",
+            isrc="US1234567890",
+        )
+
+        manager.fetch(track)
+
+        assert seen == [{"video_id": "dQw4w9WgXcQ", "isrc": "US1234567890"}]
+
+    def test_a_provider_that_takes_no_hints_still_works(self, monkeypatch):
+        """
+        سازگاریِ عقب‌رو: Providerی که فقط چهار آرگومانِ موقعیتی می‌گیرد
+        نباید با پاس‌شدنِ کلیدواژه‌ها بشکند.
+        """
+        from app.lyrics.manager import LyricsManager
+        from app.lyrics.models import Lyrics
+        from app.lyrics.registry import ProviderEntry, ProviderRegistry
+        from app.models import Track
+
+        def four_arg(title, artist, album, duration_ms):
+            return Lyrics(plain="ok")
+
+        registry = ProviderRegistry(
+            [ProviderEntry("plain", four_arg, None, four_arg)], ("plain",)
+        )
+        manager = LyricsManager(registry=registry, miss_ttl_s=0)
+        track = Track(
+            id="x",
+            title="Song",
+            artist="Artist",
+            album=None,
+            durationMs=1_000,
+            source="spotify",
+            sourceUrl="https://e.invalid/x",
+            videoId="dQw4w9WgXcQ",
+        )
+
+        found = manager.fetch(track)
+
+        assert found is not None and found.plain == "ok"
+
+    def test_every_registered_provider_accepts_the_hint_keywords(self):
+        """امضای یکدست: همه‌ی Providerها `video_id`/`isrc` اختیاری دارند."""
         import inspect
 
-        from app.providers import simpmusic
-
-        params = inspect.signature(simpmusic.fetch).parameters
-        assert "video_id" not in params
-
-    def test_the_registry_entry_calls_the_four_argument_form(self, monkeypatch):
-        """
-        ثبتِ Provider در Registry، `fetch` چهار-آرگومانی را ثبت می‌کند که
-        هیچ‌وقت `video_id` نمی‌گیرد — پس در زنجیره همیشه `None` می‌دهد.
-        """
         from app.lyrics.manager import _PROVIDERS
 
-        import inspect
-
-        entry = next(e for e in _PROVIDERS if e.name == "simpmusic")
-        assert entry.fetch is simpmusic.fetch
-
-        # `fetch` چهار-آرگومانی است و `video_id` ندارد — همان چیزی که Registry
-        # ثبت می‌کند و در زنجیره صدا زده می‌شود.
-        assert list(inspect.signature(entry.fetch).parameters) == [
-            "title",
-            "artist",
-            "album",
-            "duration_ms",
-        ]
-
-        # `fetch_strict` کلیدواژه‌ی اختیاریِ `video_id` دارد، ولی Registry آن را
-        # با چهار آرگومانِ موقعیتی صدا می‌زند (`manager.py` → `entry.strict()(...)`)،
-        # پس مقدارش همیشه `None` می‌ماند.
-        strict = inspect.signature(entry.strict())
-        video = strict.parameters["video_id"]
-        assert video.kind is inspect.Parameter.KEYWORD_ONLY
-        assert video.default is None
-
-    def test_it_is_never_reached_by_the_available_chain_by_default(self, monkeypatch):
-        from app.lyrics.manager import LyricsManager
-
-        monkeypatch.delenv("MUSICBAZI_LYRICS_PROVIDER_SIMPMUSIC_ENABLED", raising=False)
-        monkeypatch.delenv("MUSICBAZI_LYRICS_PROVIDERS_ORDER", raising=False)
-
-        manager = LyricsManager()
-
-        assert "simpmusic" not in [e.name for e in manager.registry.available()]
+        for entry in _PROVIDERS:
+            params = inspect.signature(entry.strict()).parameters
+            assert "video_id" in params, entry.name
+            assert "isrc" in params, entry.name
+            assert params["video_id"].kind is inspect.Parameter.KEYWORD_ONLY
+            assert params["isrc"].kind is inspect.Parameter.KEYWORD_ONLY
 
     def test_the_real_extractor_still_exists_but_only_for_streams(self):
         """
-        تنها استخراج‌کنندهٔ واقعیِ videoId (`stream/playback.py:98`) روی ترکِ
-        غیرِ یوتیوب `None` می‌دهد و فقط یک مصرف‌کننده دارد: resolveِ استریم
-        (`:301`). هیچ‌کدام از این دو به متن وصل نیست.
+        استخراج‌کنندهٔ واقعیِ videoId (`stream/playback.py:98`) روی ترکِ
+        غیرِ یوتیوب `None` می‌دهد؛ برای ترکِ یوتیوب شناسه را می‌دهد.
         """
         from app.models import Track
         from app.stream.playback import extract_youtube_video_id
 
-        track = Track(
+        spotify = Track(
             id="spotify:track:x",
             title="Song",
             artist="Artist",
             album=None,
-            durationMs=180_000,
+            durationMs=1_000,
             source="spotify",
             sourceUrl="https://open.spotify.com/track/x",
         )
-        assert extract_youtube_video_id(track) is None
+        assert extract_youtube_video_id(spotify) is None
+
+        yt = Track(
+            id="ytm:track:dQw4w9WgXcQ",
+            title="Song",
+            artist="Artist",
+            album=None,
+            durationMs=1_000,
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+        assert extract_youtube_video_id(yt) == "dQw4w9WgXcQ"
 
 
 class TestSimpMusic:

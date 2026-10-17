@@ -513,7 +513,7 @@ class TestManagerCachesOnlyRealEmptiness:
             "_PROVIDERS",
             (
                 ProviderEntry("lrclib", lrclib.fetch, None, lrclib.fetch_strict),
-                ProviderEntry("genius", genius.fetch, None, lambda *_: Lyrics(plain="g")),
+                ProviderEntry("other", genius.fetch, None, lambda *_: Lyrics(plain="g")),
             ),
         )
 

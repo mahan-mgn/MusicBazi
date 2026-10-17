@@ -62,8 +62,10 @@ from .config import (
     PROXY,
 )
 from .downloader import safe_name
+from .lyrics.sources import lyrics_sources
+from .lyrics.manager import lyrics_manager
 from .stream.feature_flags import is_stream_v2_enabled
-from .stream.playback import get_live_playback
+from .stream.playback import extract_youtube_video_id, get_live_playback
 from .jobs import TERMINAL, manager
 
 log = logging.getLogger(__name__)
@@ -1119,16 +1121,21 @@ async def hls_segment(session_id: str, index: int, request: Request = None):  # 
     return response
 
 
-@app.get("/api/stream/lyrics")
-async def stream_lyrics(
+def _lyrics_track(
     track_id: str,
     title: str,
     artist: str,
-    album: str | None = None,
-    duration_ms: int = 0,
-) -> Response:
-    """متن ترانه همگام برای ترک استریم‌شده."""
-    track = Track(
+    album: str | None,
+    duration_ms: int,
+    videoId: str | None = None,
+    isrc: str | None = None,
+) -> Track:
+    """
+    Trackِ مسیرِ متن — یک‌جا ساخته می‌شود تا هر سه endpoint یک هویت ببینند.
+
+    اگر `videoId` نیامده باشد از `track_id` استخراج می‌شود (بدونِ حدس).
+    """
+    return Track(
         id=track_id,
         title=title,
         artist=artist,
@@ -1136,11 +1143,152 @@ async def stream_lyrics(
         durationMs=duration_ms,
         source="spotify",
         sourceUrl=f"https://musicbazi.local/track/{track_id}",
+        videoId=videoId or _video_id_from_track_id(track_id),
+        isrc=isrc,
     )
+
+
+@app.get("/api/lyrics/sources")
+async def lyrics_sources_endpoint(
+    track_id: str,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_ms: int = 0,
+    videoId: str | None = None,
+    isrc: str | None = None,
+) -> dict:
+    """
+    فهرستِ منابعِ متن برای یک آهنگ — **بدونِ هیچ درخواستی به Providerها**.
+
+    فرانت هنگام باز کردنِ منوی «منبعِ متن» این را صدا می‌زند؛ اگر اینجا
+    درخواستی زده می‌شد، باز کردنِ منو به ازای هر Provider یک رفت‌وبرگشت
+    می‌شد.
+    """
+    track = _lyrics_track(track_id, title, artist, album, duration_ms, videoId, isrc)
+    return {
+        "trackId": track_id,
+        "preferred": db.get_lyrics_preference(track_id),
+        "sources": lyrics_sources.list_sources(track),
+    }
+
+
+@app.get("/api/lyrics/preference")
+async def get_lyrics_preference(track_id: str) -> dict:
+    """منبعِ ذخیره‌شدهٔ یک آهنگ؛ `provider=None` یعنی «خودکار»."""
+    return {"trackId": track_id, "provider": db.get_lyrics_preference(track_id)}
+
+
+@app.put("/api/lyrics/preference")
+async def put_lyrics_preference(track_id: str, provider: str) -> dict:
+    """
+    ذخیرهٔ منبعِ انتخابیِ یک آهنگ. `provider=""` انتخاب را پاک می‌کند
+    (بازگشت به «خودکار»).
+
+    نامِ ناشناخته ۴۰۰ می‌گیرد تا فهرستِ ذخیره‌شده با واقعیتِ رجیستری نخواند.
+    """
+    if not provider:
+        db.clear_lyrics_preference(track_id)
+        return {"trackId": track_id, "provider": None}
+    entry = lyrics_manager.registry.get(provider)
+    if entry is None:
+        raise HTTPException(400, "منبعِ متنِ ناشناخته")
+    db.put_lyrics_preference(track_id, provider, time.time())
+    return {"trackId": track_id, "provider": provider}
+
+
+@app.delete("/api/lyrics/preference")
+async def clear_lyrics_preference(track_id: str) -> dict:
+    """بازگشتِ یک آهنگ به «خودکار»."""
+    db.clear_lyrics_preference(track_id)
+    return {"trackId": track_id, "provider": None}
+
+
+def _video_id_from_track_id(track_id: str) -> str | None:
+    """
+    videoId از قالبِ شناسهٔ ترک — بدونِ حدس.
+
+    قالب‌های پروژه `source:type:key` هستند (`ytm:track:<id>`)، پس منبع از خودِ
+    شناسه خوانده می‌شود و همان استخراج‌کنندهٔ قطعیِ مسیرِ پخش صدا زده می‌شود.
+    اگر قالب یوتیوب نبود، `None` — هیچ حدسی زده نمی‌شود.
+    """
+    lowered = (track_id or "").lower()
+    if not lowered.startswith(("yt:", "ytm:")):
+        return None
+    source = "youtube_music" if lowered.startswith("ytm:") else "youtube"
+    return extract_youtube_video_id(
+        Track(
+            id=track_id,
+            title="",
+            artist="",
+            durationMs=0,
+            source=source,  # type: ignore[arg-type]
+            sourceUrl="",
+        )
+    )
+
+
+@app.get("/api/stream/lyrics")
+async def stream_lyrics(
+    track_id: str,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_ms: int = 0,
+    videoId: str | None = None,
+    isrc: str | None = None,
+    provider: str | None = None,
+) -> Response:
+    """
+    متن ترانه همگام برای ترک استریم‌شده.
+
+    `videoId`/`isrc` اختیاری‌اند و رفتارِ قبلی را عوض نمی‌کنند: نبودشان یعنی
+    «نمی‌دانیم». بعضی منابع (SimpMusic با `videoId`) بدونشان کار نمی‌کنند و
+    بقیه نادیده‌شان می‌گیرند.
+
+    اگر فرانت `videoId` نفرستد، سرور خودش از `track_id` استخراجش می‌کند —
+    همان استخراج‌کننده‌ی قطعیِ مسیرِ پخش (`stream/playback.py`). این کار از
+    نگه‌داشتنِ یک regex دوم در فرانت جلوگیری می‌کند.
+
+    `provider` اختیاری است: نبودش **دقیقاً** رفتارِ قبلی (زنجیرهٔ خودکار +
+    کشِ روی دیسک) است. بودنش یعنی «فقط همین منبع» و نتیجه از کشِ حافظهٔ
+    سرویسِ منابع می‌آید، نه از `.lrc`ِ پیش‌فرض — تا انتخابِ دستی کشِ
+    زنجیرهٔ خودکار را آلوده نکند.
+    """
+    track = _lyrics_track(track_id, title, artist, album, duration_ms, videoId, isrc)
+
+    if provider:
+        result = await lyrics_sources.fetch_from(provider, track)
+        if result.error == "unknown-provider":
+            raise HTTPException(404, "منبعِ متنِ ناشناخته")
+        if result.error == "needs-setup":
+            raise HTTPException(409, "این منبع پیکربندی نشده است")
+        if result.error is not None:
+            # ۵۰۲: منبع در دسترس نبود. جزئیاتِ خطا هرگز به کلاینت نمی‌رود.
+            raise HTTPException(502, "منبعِ متن پاسخ نداد")
+        if result.lyrics is None:
+            raise HTTPException(404, "متنی برای این آهنگ یافت نشد")
+        return Response(
+            content=_render_lyrics(result.lyrics),
+            media_type="text/plain; charset=utf-8",
+            headers={"x-lyrics-source": provider},
+        )
+
     content = await stream_cache.get_or_fetch_lyrics(track)
     if not content:
         raise HTTPException(404, "متنی برای این آهنگ یافت نشد")
     return Response(content=content, media_type="text/plain; charset=utf-8")
+
+
+def _render_lyrics(found) -> str:
+    """
+    همان قاعده‌ی رندرِ کشِ استریم، برای مسیرِ منبعِ دستی.
+
+    `synced` دست‌نخورده می‌رود؛ در نبودش `lines` به LRC تبدیل می‌شود (خطی،
+    یا تقویت‌شده اگر فلگ روشن باشد) — همان `_rendered_lrc` که یک‌جا این
+    تصمیم را می‌گیرد.
+    """
+    return stream_cache._rendered_lrc(found) or ""
 
 
 @app.post("/api/stream/prefetch")

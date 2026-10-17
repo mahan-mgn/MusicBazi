@@ -21,6 +21,7 @@ from typing import Callable, Protocol, runtime_checkable
 from ..config import (
     LYRICS_BREAKER_COOLDOWN_S,
     LYRICS_BREAKER_THRESHOLD,
+    lyrics_auto_enabled,
     lyrics_breaker_enabled,
     lyrics_provider_enabled,
 )
@@ -106,6 +107,20 @@ class ProviderEntry:
     enabled: EnabledFn | None = None
     fetch_strict: StrictFetchFn | None = None
     default_enabled: bool = True
+    # ---- متادیتای نمایشی (S2) ----
+    # `label` نامِ خوانا برای UI است؛ `name` شناسهٔ پایدارِ ماشینی می‌ماند.
+    label: str | None = None
+    # قابلیت‌های فرمت — UI با اینها نشان می‌دهد هر منبع چه می‌دهد.
+    # زیرمجموعه‌ی {"plain", "line", "word", "ttml", "rich"}
+    capabilities: frozenset[str] = frozenset()
+    # یادداشتِ شرایطِ استفاده؛ در UI به‌عنوان هشدار نشان داده می‌شود.
+    terms_note: str | None = None
+    # اگر Provider برای کار کردن به راه‌اندازیِ کاربر نیاز دارد (توکن)، این
+    # متنِ راهنما نشان داده می‌شود. متنِ خودِ کلید هرگز اینجا نمی‌آید.
+    setup_hint: str | None = None
+
+    def display_label(self) -> str:
+        return self.label or self.name
 
     def strict(self) -> StrictFetchFn:
         """نسخه‌ی strict، یا `fetch` عمومی اگر Provider نسخه‌ی strict ندارد."""
@@ -227,7 +242,14 @@ class ProviderRegistry:
 
     def available(self) -> list[ProviderEntry]:
         """
-        Providerهایی که همین حالا قابلِ صدا زدن‌اند، به‌ترتیب اولویت.
+        Providerهایی که همین حالا در **زنجیرهٔ خودکار** صدا زده می‌شوند.
+
+        سه شرط: روشن باشد، در زنجیرهٔ خودکار باشد (`lyrics_auto_enabled`)، و
+        قطع‌کننده اخراجش نکرده باشد.
+
+        Providerی که از زنجیرهٔ خودکار بیرون است (Genius زیر
+        `manual_only`) همچنان از `get()` قابلِ‌دسترسی است تا فراخوانِ دستی
+        کار کند — فقط خودبه‌خود اجرا نمی‌شود.
 
         Providerِ کنارگذاشته‌شده اینجا نیست، پس `LyricsManager` هم نمی‌بیندش
         و خودبه‌خود از چرخه بیرون می‌ماند — بدونِ اینکه لازم باشد مدیر از
@@ -237,8 +259,29 @@ class ProviderRegistry:
         return [
             self._by_name[name]
             for name in self._order
-            if self._by_name[name].is_available() and not self.is_evicted(name)
+            if self._by_name[name].is_available()
+            and lyrics_auto_enabled(name)
+            and not self.is_evicted(name)
         ]
 
     def get(self, name: str) -> ProviderEntry | None:
         return self._by_name.get(name)
+
+    def is_selectable(self, name: str) -> bool:
+        """
+        آیا این Provider برای انتخابِ دستی در دسترس است؟
+
+        عمداً `is_available()` نیست: آن تابع `default_enabled` را هم لحاظ
+        می‌کند، پس Providerی که فقط *پیش‌فرض خاموش* است (نه پیکربندی‌نشده)
+        با «نیازمندِ راه‌اندازی» اشتباه گرفته می‌شد. اینجا فقط چیزی سنجیده
+        می‌شود که کاربر نمی‌تواند با یک سوئیچ عوضش کند: **آماده‌بودنِ خودِ
+        Provider** (مثلِ وجودِ توکن) و کلیدِ خاموش‌کردنِ صریح.
+
+        یعنی Providerی که با env روشن شود، فوراً قابلِ‌انتخاب است.
+        """
+        entry = self._by_name.get(name)
+        if entry is None:
+            return False
+        if not lyrics_provider_enabled(name, default=entry.default_enabled):
+            return False
+        return entry.enabled() if entry.enabled is not None else True

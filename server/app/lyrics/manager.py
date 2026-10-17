@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from dataclasses import replace
@@ -16,6 +17,8 @@ from ..providers import (
     lrclib,
     lrc_red,
     lyricsplus,
+    musixmatch,
+    paxsenix,
     simpmusic,
     unison,
 )
@@ -41,14 +44,34 @@ ProviderEnabled = Callable[[], bool]
 # دلیلِ خاموشیِ همه: سرویسِ ثالث با مجوزِ بررسی‌نشده، و بیرون از دسترسِ
 # اینترانتِ ایران.
 _PROVIDERS: tuple[ProviderEntry, ...] = (
-    ProviderEntry("lrclib", lrclib.fetch, None, lrclib.fetch_strict),
-    ProviderEntry("genius", genius.fetch, genius.enabled, genius.fetch_strict),
+    ProviderEntry(
+        "lrclib",
+        lrclib.fetch,
+        None,
+        lrclib.fetch_strict,
+        label="LRCLIB",
+        capabilities=frozenset({"plain", "line"}),
+        terms_note="General public API, MIT-licensed project.",
+    ),
+    ProviderEntry(
+        "genius",
+        genius.fetch,
+        genius.enabled,
+        genius.fetch_strict,
+        label="Genius",
+        capabilities=frozenset({"plain"}),
+        terms_note="Terms prohibit scraping/automated use. Manual selection only.",
+        setup_hint="Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment.",
+    ),
     ProviderEntry(
         "lyricsplus",
         lyricsplus.fetch,
         lyricsplus.enabled,
         lyricsplus.fetch_strict,
         default_enabled=False,
+        label='lyricsplus',
+        capabilities=frozenset({"line", "word", "rich"}),
+        terms_note='Aggregator; free public API, no formal terms page.',
     ),
     ProviderEntry(
         "unison",
@@ -56,6 +79,9 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         unison.enabled,
         unison.fetch_strict,
         default_enabled=False,
+        label='unison',
+        capabilities=frozenset({"line", "word", "ttml"}),
+        terms_note='Free public API. Commercial reuse of the corpus needs a licence.',
     ),
     ProviderEntry(
         "betterlyrics",
@@ -63,6 +89,9 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         betterlyrics.enabled,
         betterlyrics.fetch_strict,
         default_enabled=False,
+        label='betterlyrics',
+        capabilities=frozenset({"line", "word", "ttml"}),
+        terms_note='GPL-3.0 client; endpoint contract partially inferred.',
     ),
     ProviderEntry(
         "binilyrics",
@@ -70,6 +99,9 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         binilyrics.enabled,
         binilyrics.fetch_strict,
         default_enabled=False,
+        label='binilyrics',
+        capabilities=frozenset({"line", "word", "ttml"}),
+        terms_note='No public licence or terms found.',
     ),
     ProviderEntry(
         "lrc_red",
@@ -77,6 +109,9 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         lrc_red.enabled,
         lrc_red.fetch_strict,
         default_enabled=False,
+        label='lrc_red',
+        capabilities=frozenset({"line", "word", "ttml"}),
+        terms_note='Docs say the API is free for public use. Contract partly inferred.',
     ),
     ProviderEntry(
         "simpmusic",
@@ -84,12 +119,66 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         simpmusic.enabled,
         simpmusic.fetch_strict,
         default_enabled=False,
+        label='simpmusic',
+        capabilities=frozenset({"line", "word", "rich"}),
+        terms_note='Public API keyed by YouTube videoId.',
+    ),
+    ProviderEntry(
+        "paxsenix",
+        paxsenix.fetch,
+        paxsenix.enabled,
+        paxsenix.fetch_strict,
+        default_enabled=False,
+        label='paxsenix',
+        capabilities=frozenset({"line", "word", "ttml"}),
+        terms_note='No terms published. Keyed by track id.',
+    ),
+    ProviderEntry(
+        "musixmatch",
+        musixmatch.fetch,
+        musixmatch.enabled,
+        musixmatch.fetch_strict,
+        default_enabled=False,
+        label='musixmatch',
+        capabilities=frozenset({"line"}),
+        terms_note='Official API only; synchronised text needs a commercial plan.',
+        setup_hint='Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment.',
     ),
 )
 
 
 def _make_registry() -> ProviderRegistry:
     return ProviderRegistry(list(_PROVIDERS), LYRICS_PROVIDERS_ORDER)
+
+
+def _accepts_hints(fn) -> bool:
+    """آیا این تابع پارامترهای راهنمای اختیاری (`video_id`/`isrc`) می‌پذیرد؟"""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "video_id" in params and "isrc" in params
+
+
+def _invoke(fn, track: Track) -> Lyrics | None:
+    """
+    Provider را با راهنماهای در دسترس صدا بزن — ولی فقط اگر بپذیرد.
+
+    `video_id`/`isrc` روی بعضی Providerها هست و روی بعضی نه؛ پاس‌کردنِ
+    بی‌قیدِ کلیدواژه به تابعی که آن را نمی‌شناسد `TypeError` می‌دهد که
+    Manager آن را «خطای غیرمنتظره» می‌شمرد و Provider را بیهوده اخراج
+    می‌کرد. پس یک بار امضا خوانده می‌شود.
+    """
+    if _accepts_hints(fn):
+        return fn(
+            track.title,
+            track.artist,
+            track.album,
+            track.durationMs,
+            video_id=getattr(track, "videoId", None),
+            isrc=getattr(track, "isrc", None),
+        )
+    return fn(track.title, track.artist, track.album, track.durationMs)
 
 
 class LyricsManager:
@@ -164,9 +253,7 @@ class LyricsManager:
         )
         for entry in self._registry.available():
             try:
-                result = entry.strict()(
-                    track.title, track.artist, track.album, track.durationMs
-                )
+                result = _invoke(entry.strict(), track)
             except ProviderError as exc:
                 # قابلِ‌عیب‌یابی، ولی بدون توکن و بدون URL حاوی کلید.
                 log.warning(

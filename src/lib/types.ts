@@ -78,6 +78,13 @@ export interface Track {
   valence?: number
   energy?: number
   views?: string | null
+  /**
+   * شناسه‌هایی که فقط بعضی منابعِ متن لازم دارند، نه کلِ اپ. `videoId` کلیدِ
+   * SimpMusic است و `isrc` کلیدِ تطبیقِ دقیق در چند منبعِ دیگر. هیچ‌کدام هویتِ
+   * ترک نیستند؛ اختیاری‌اند و آینهٔ `Track` در سرور (`app/models.py`).
+   */
+  videoId?: string | null
+  isrc?: string | null
 }
 
 export interface Artist {

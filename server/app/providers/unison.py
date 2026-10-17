@@ -70,8 +70,20 @@ def _parse_payload(payload: str, fmt: str) -> Lyrics | None:
     return parse_ttml(payload) or parse_enhanced_lrc(payload) or parse_lrc(payload)
 
 
-def fetch_strict(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
+def fetch_strict(
+    title: str,
+    artist: str,
+    album: str | None,
+    duration_ms: int,
+    *,
+    video_id: str | None = None,
+    isrc: str | None = None,
+) -> Lyrics | None:
     """
+    `video_id` و `isrc` پذیرفته می‌شوند ولی **استفاده نمی‌شوند**: این منبع
+    کلیدش عنوان/هنرمند است. پارامترها فقط برای یکدستیِ امضای Providerها
+    هستند تا `Manager` همه را با یک شکل صدا بزند.
+
     مثل `fetch`، ولی خطای گذرا را با `ProviderError` اعلام می‌کند.
 
     این سرویس شناسه‌ی ویدیو (`v=`) را ترجیح می‌دهد ولی ما آن را نداریم و

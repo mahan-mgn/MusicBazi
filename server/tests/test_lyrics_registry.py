@@ -70,14 +70,14 @@ class TestAvailability:
         assert [e.name for e in registry.available()] == ["lrclib"]
 
     def test_a_gate_reporting_false_removes_it(self):
-        entries = [ProviderEntry("genius", lambda *_: None, lambda: False)]
-        registry = ProviderRegistry(entries, ("genius",))
+        entries = [ProviderEntry("other", lambda *_: None, lambda: False)]
+        registry = ProviderRegistry(entries, ("other",))
         assert registry.available() == []
 
     def test_a_gate_reporting_true_keeps_it(self):
-        entries = [ProviderEntry("genius", lambda *_: None, lambda: True)]
-        registry = ProviderRegistry(entries, ("genius",))
-        assert [e.name for e in registry.available()] == ["genius"]
+        entries = [ProviderEntry("other", lambda *_: None, lambda: True)]
+        registry = ProviderRegistry(entries, ("other",))
+        assert [e.name for e in registry.available()] == ["other"]
 
     def test_get_returns_the_entry_or_none(self):
         registry = ProviderRegistry([_entry("lrclib", "l")], ("lrclib",))
@@ -206,7 +206,10 @@ class TestDefaultEnabledFlag:
 
         manager = LyricsManager()
 
-        assert [e.name for e in manager.registry.available()] == ["lrclib", "genius"]
+        # زنجیرهٔ خودکار فقط `lrclib` است: Genius زیر `GENIUS_POLICY=manual_only`
+        # بیرون از زنجیره است (شرایطِ استفاده‌اش scraping را ممنوع می‌کند) و
+        # بقیه پیش‌فرض خاموش‌اند.
+        assert [e.name for e in manager.registry.available()] == ["lrclib"]
         # ولی همه ثبت‌شده‌اند و آخرِ صف‌اند، نه حذف‌شده
         assert manager.registry.order == (
             "lrclib",
@@ -217,6 +220,8 @@ class TestDefaultEnabledFlag:
             "binilyrics",
             "lrc_red",
             "simpmusic",
+            "paxsenix",
+            "musixmatch",
         )
 
     def test_an_unlisted_default_off_provider_is_still_off(self, monkeypatch):

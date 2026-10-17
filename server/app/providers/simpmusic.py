@@ -88,6 +88,7 @@ def fetch_strict(
     duration_ms: int,
     *,
     video_id: str | None = None,
+    isrc: str | None = None,
 ) -> Lyrics | None:
     """
     مثل `fetch`، ولی خطای گذرا را با `ProviderError` اعلام می‌کند.
@@ -95,6 +96,10 @@ def fetch_strict(
     بدونِ `video_id` قطعی، `None` می‌دهد. این «رد شدن» است نه «خطا» — پس
     کشِ منفی را هم مسدود نمی‌کند (مدیر آن را «خالیِ معتبر» نمی‌شمارد چون
     همان‌جا نتیجه‌ای نداشته). رفتارِ درست این است که Provider بعدی برود.
+
+    `isrc` پذیرفته می‌شود ولی **استفاده نمی‌شود**: این API فقط `videoId`
+    می‌شناسد و مسیرِ جستجوی ISRC ندارد. پارامتر فقط برای یکدستیِ امضای
+    Providerها هست تا `Manager` یک شکل صدا بزند.
     """
     if not title:
         return None

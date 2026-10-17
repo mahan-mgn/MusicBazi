@@ -50,7 +50,7 @@ class TestOrdering:
             calls.append("second")
             return Lyrics(plain="fallback")
 
-        manager = _manager([_entry("lrclib", first), _entry("genius", second)])
+        manager = _manager([_entry("lrclib", first), _entry("other", second)])
 
         result = manager.fetch(_track())
 
@@ -68,16 +68,16 @@ class TestOrdering:
             return None
 
         def second(*_):
-            calls.append("genius")
+            calls.append("other")
             return Lyrics(plain="fallback")
 
-        manager = _manager([_entry("lrclib", empty), _entry("genius", second)])
+        manager = _manager([_entry("lrclib", empty), _entry("other", second)])
 
         result = manager.fetch(_track())
 
         assert result.plain == "fallback"
-        assert result.source == "genius"
-        assert calls == ["lrclib", "genius"]
+        assert result.source == "other"
+        assert calls == ["lrclib", "other"]
 
     def test_a_provider_exception_does_not_stop_the_rest(self):
         calls = []
@@ -87,15 +87,15 @@ class TestOrdering:
             raise RuntimeError("provider unavailable")
 
         def second(*_):
-            calls.append("genius")
+            calls.append("other")
             return Lyrics(plain="fallback")
 
-        manager = _manager([_entry("lrclib", broken), _entry("genius", second)])
+        manager = _manager([_entry("lrclib", broken), _entry("other", second)])
 
         result = manager.fetch(_track())
 
         assert result is not None and result.plain == "fallback"
-        assert calls == ["lrclib", "genius"]
+        assert calls == ["lrclib", "other"]
 
     def test_order_from_the_registry_decides_the_winner(self):
         def a(*_):
@@ -104,10 +104,10 @@ class TestOrdering:
         def b(*_):
             return Lyrics(plain="b")
 
-        entries = [_entry("lrclib", a), _entry("genius", b)]
+        entries = [_entry("lrclib", a), _entry("other", b)]
 
         # ترتیبِ معکوس: جنسیوس باید اول بیاید
-        manager = _manager(entries, order=("genius", "lrclib"))
+        manager = _manager(entries, order=("other", "lrclib"))
 
         assert manager.fetch(_track()).plain == "b"
 
@@ -128,9 +128,9 @@ class TestAvailability:
         def b(*_):
             return Lyrics(plain="b")
 
-        manager = _manager([_entry("lrclib", a), _entry("genius", b)], order=("genius",))
+        manager = _manager([_entry("lrclib", a), _entry("other", b)], order=("other",))
 
-        assert manager.registry.order == ("genius", "lrclib")
+        assert manager.registry.order == ("other", "lrclib")
 
     def test_a_provider_reporting_itself_unavailable_is_skipped(self):
         calls = []
@@ -144,7 +144,7 @@ class TestAvailability:
             return Lyrics(plain="fallback")
 
         manager = _manager(
-            [_entry("genius", disabled, lambda: False), _entry("lrclib", enabled)]
+            [_entry("other", disabled, lambda: False), _entry("lrclib", enabled)]
         )
 
         assert manager.fetch(_track()).plain == "fallback"
@@ -167,7 +167,7 @@ class TestAvailability:
             return None
 
         def genius_should_not_run(*_):
-            calls.append("genius")
+            calls.append("other")
             return Lyrics(plain="unexpected")
 
         monkeypatch.setattr(
@@ -218,7 +218,7 @@ class TestGlobalGates:
         def broken(*_):
             raise RuntimeError("down")
 
-        manager = _manager([_entry("lrclib", broken), _entry("genius", broken)])
+        manager = _manager([_entry("lrclib", broken), _entry("other", broken)])
 
         assert manager.fetch(_track()) is None
 
@@ -367,7 +367,7 @@ class TestNegativeCache:
             return Lyrics(plain="text")
 
         manager = _manager(
-            [_entry("lrclib", broken), _entry("genius", found)],
+            [_entry("lrclib", broken), _entry("other", found)],
             miss_ttl_s=300,
             clock=lambda: now[0],
         )

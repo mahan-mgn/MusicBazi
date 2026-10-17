@@ -188,6 +188,15 @@ CREATE TABLE IF NOT EXISTS resolved_candidates (
     resolved_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_resolved_cand_at ON resolved_candidates(resolved_at DESC);
+
+-- منبعِ متنِ انتخابیِ کاربر برای هر آهنگ. نبودِ ردیف یعنی «خودکار».
+-- کلید همان `track_id` است که مسیرِ استریم/کش استفاده می‌کند، پس یک آهنگ
+-- یک انتخاب دارد و انتخاب با پاک‌شدنِ کش از دست نمی‌رود.
+CREATE TABLE IF NOT EXISTS lyrics_preferences (
+    track_id    TEXT PRIMARY KEY,
+    provider    TEXT NOT NULL,
+    updated_at  REAL NOT NULL
+);
 """
 
 # ستون‌هایی که بعد از اولین نسخه اضافه شدند. CREATE TABLE IF NOT EXISTS روی
@@ -1256,6 +1265,32 @@ def catalog_stats() -> tuple[int, int]:
     entities = int(_query("SELECT COUNT(*) c FROM catalog_entity")[0]["c"])
     searches = int(_query("SELECT COUNT(*) c FROM catalog_search")[0]["c"])
     return entities, searches
+
+# ---------- منبعِ متنِ انتخابی ----------
+
+def put_lyrics_preference(track_id: str, provider: str, now: float) -> None:
+    """ذخیرهٔ منبعِ انتخابیِ یک آهنگ. دوباره‌نویسی، ردیفِ قبلی را جایگزین می‌کند."""
+    conn = connect()
+    conn.execute(
+        """INSERT INTO lyrics_preferences (track_id, provider, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(track_id) DO UPDATE SET
+               provider = excluded.provider,
+               updated_at = excluded.updated_at""",
+        (track_id, provider, now),
+    )
+    conn.commit()
+
+def get_lyrics_preference(track_id: str) -> str | None:
+    """منبعِ انتخابی، یا `None` یعنی «خودکار»."""
+    rows = _query("SELECT provider FROM lyrics_preferences WHERE track_id = ?", (track_id,))
+    return rows[0]["provider"] if rows else None
+
+def clear_lyrics_preference(track_id: str) -> None:
+    """پاک‌کردنِ انتخاب → بازگشت به «خودکار»."""
+    conn = connect()
+    conn.execute("DELETE FROM lyrics_preferences WHERE track_id = ?", (track_id,))
+    conn.commit()
 
 
 # ---------- کمکی ----------

@@ -73,6 +73,10 @@ export function streamLyricsUrlFor(track: Track): string {
   })
   if (track.album) p.set('album', track.album)
   if (track.durationMs) p.set('duration_ms', String(track.durationMs))
+  // راهنماهای اختیاری — فقط وقتی مقدار دارند فرستاده می‌شوند تا URLِ
+  // درخواست‌های معمولی مثل قبل بماند
+  if (track.videoId) p.set('videoId', track.videoId)
+  if (track.isrc) p.set('isrc', track.isrc)
   return apiUrl(`/api/stream/lyrics?${p.toString()}`)
 }
 

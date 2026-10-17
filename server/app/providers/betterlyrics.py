@@ -88,8 +88,20 @@ def _reconcile_sync(claimed: object, actual: str | None) -> str | None:
     return expected
 
 
-def fetch_strict(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
-    """مثل `fetch`، ولی خطای گذرا را با `ProviderError` اعلام می‌کند."""
+def fetch_strict(
+    title: str,
+    artist: str,
+    album: str | None,
+    duration_ms: int,
+    *,
+    video_id: str | None = None,
+    isrc: str | None = None,
+) -> Lyrics | None:
+    """
+    `video_id` و `isrc` پذیرفته می‌شوند ولی **استفاده نمی‌شوند**: این منبع
+    کلیدش عنوان/هنرمند است. پارامترها فقط برای یکدستیِ امضای Providerها
+    هستند تا `Manager` همه را با یک شکل صدا بزند.
+مثل `fetch`، ولی خطای گذرا را با `ProviderError` اعلام می‌کند."""
     if not title or not artist:
         return None
 
