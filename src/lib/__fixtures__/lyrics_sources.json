@@ -1,0 +1,185 @@
+{
+  "trackId": "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+  "preferred": null,
+  "sources": [
+    {
+      "id": "lrclib",
+      "label": "LRCLIB",
+      "capabilities": [
+        "line",
+        "plain"
+      ],
+      "in_auto_chain": true,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "General public API, MIT-licensed project.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": null
+    },
+    {
+      "id": "genius",
+      "label": "Genius",
+      "capabilities": [
+        "plain"
+      ],
+      "in_auto_chain": false,
+      "selectable": false,
+      "status": "needs_setup",
+      "terms_note": "Terms prohibit scraping/automated use. Manual selection only.",
+      "setup_hint": "Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment.",
+      "experimental": false,
+      "unavailable_reason": "Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment."
+    },
+    {
+      "id": "lyricsplus",
+      "label": "lyricsplus",
+      "capabilities": [
+        "line",
+        "rich",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "Aggregator; free public API, no formal terms page.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": null
+    },
+    {
+      "id": "unison",
+      "label": "unison",
+      "capabilities": [
+        "line",
+        "ttml",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "Free public API. Commercial reuse of the corpus needs a licence.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": null
+    },
+    {
+      "id": "betterlyrics",
+      "label": "betterlyrics",
+      "capabilities": [
+        "line",
+        "ttml",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "GPL-3.0 client; endpoint contract partially inferred.",
+      "setup_hint": null,
+      "experimental": true,
+      "unavailable_reason": null
+    },
+    {
+      "id": "binilyrics",
+      "label": "binilyrics",
+      "capabilities": [
+        "line",
+        "ttml",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "No public licence or terms found.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": null
+    },
+    {
+      "id": "lrc_red",
+      "label": "lrc_red",
+      "capabilities": [
+        "line",
+        "ttml",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "Docs say the API is free for public use. Contract partly inferred.",
+      "setup_hint": null,
+      "experimental": true,
+      "unavailable_reason": null
+    },
+    {
+      "id": "simpmusic",
+      "label": "simpmusic",
+      "capabilities": [
+        "line",
+        "rich",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "Public API keyed by YouTube videoId.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": null
+    },
+    {
+      "id": "paxsenix",
+      "label": "paxsenix",
+      "capabilities": [
+        "line",
+        "ttml",
+        "word"
+      ],
+      "in_auto_chain": false,
+      "selectable": true,
+      "status": "available",
+      "terms_note": "No terms published. Keyed by track id.",
+      "setup_hint": null,
+      "experimental": true,
+      "unavailable_reason": null
+    },
+    {
+      "id": "musixmatch",
+      "label": "musixmatch",
+      "capabilities": [
+        "line"
+      ],
+      "in_auto_chain": false,
+      "selectable": false,
+      "status": "needs_setup",
+      "terms_note": "Official API only; synchronised text needs a commercial plan.",
+      "setup_hint": "Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment.",
+      "experimental": false,
+      "unavailable_reason": "Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment."
+    },
+    {
+      "id": "kugou",
+      "label": "KuGou",
+      "capabilities": [],
+      "in_auto_chain": false,
+      "selectable": false,
+      "status": "blocked",
+      "terms_note": "Not implemented: requires impersonating the mobile app.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": "Requires bypassing the provider's app authentication."
+    },
+    {
+      "id": "megalobiz",
+      "label": "Megalobiz",
+      "capabilities": [],
+      "in_auto_chain": false,
+      "selectable": false,
+      "status": "blocked",
+      "terms_note": "Not implemented: robots.txt blocks this kind of client sitewide.",
+      "setup_hint": null,
+      "experimental": false,
+      "unavailable_reason": "The site's robots.txt disallows this client entirely."
+    }
+  ]
+}

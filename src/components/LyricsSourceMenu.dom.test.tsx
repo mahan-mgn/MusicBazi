@@ -159,7 +159,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const text = host.textContent ?? ''
+    const text = document.body.textContent ?? ''
     expect(text).toContain('LRCLIB')
     expect(text).toContain('PaxSenix')
   })
@@ -173,7 +173,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    expect(host.textContent).toContain('آزمایشی')
+    expect(document.body.textContent).toContain('آزمایشی')
   })
 
   it('shows unusable sources with a reason instead of hiding them', async () => {
@@ -185,7 +185,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const text = host.textContent ?? ''
+    const text = document.body.textContent ?? ''
     expect(text).toContain('Genius')
     expect(text).toContain('KuGou')
     expect(text).toContain('غیرقابل استفاده')
@@ -200,7 +200,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    expect(host.textContent).toContain('خودکار')
+    expect(document.body.textContent).toContain('خودکار')
   })
 
   it('calls onSelect with the provider id', async () => {
@@ -213,7 +213,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const item = [...host.querySelectorAll('button')].find((b) =>
+    const item = [...document.querySelectorAll('button')].find((b) =>
       b.textContent?.includes('LRCLIB'),
     )
     act(() => {
@@ -233,7 +233,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const item = [...host.querySelectorAll('button')].find((b) =>
+    const item = [...document.querySelectorAll('button')].find((b) =>
       b.textContent?.includes('خودکار'),
     )
     act(() => {
@@ -269,7 +269,7 @@ describe('LyricsSourceMenu', () => {
     await tick()
 
     // منو باز است ولی فهرست خالی — بدونِ استثنا
-    expect(host.textContent).toContain('خودکار')
+    expect(document.body.textContent).toContain('خودکار')
   })
 
   it('survives a network error', async () => {
@@ -281,7 +281,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    expect(host.textContent).toContain('خودکار')
+    expect(document.body.textContent).toContain('خودکار')
   })
 
   it('has an accessible trigger with the right ARIA state', () => {
@@ -309,7 +309,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    expect(host.querySelector('[role="menu"]')).not.toBeNull()
+    expect(document.querySelector('[role="menu"]')).not.toBeNull()
   })
 
   it('marks the selected source with aria-checked', async () => {
@@ -321,7 +321,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const item = [...host.querySelectorAll('[role="menuitemradio"]')].find((b) =>
+    const item = [...document.querySelectorAll('[role="menuitemradio"]')].find((b) =>
       b.textContent?.includes('LRCLIB'),
     )
     expect(item!.getAttribute('aria-checked')).toBe('true')
@@ -335,7 +335,7 @@ describe('LyricsSourceMenu', () => {
       host.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     await tick()
-    expect(host.textContent).not.toContain('تلاش دوباره')
+    expect(document.body.textContent).not.toContain('تلاش دوباره')
   })
 
   it('calls onRetry when retry is pressed', async () => {
@@ -348,7 +348,7 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const item = [...host.querySelectorAll('button')].find((b) =>
+    const item = [...document.querySelectorAll('button')].find((b) =>
       b.textContent?.includes('تلاش دوباره'),
     )
     act(() => {
@@ -367,8 +367,85 @@ describe('LyricsSourceMenu', () => {
     })
     await tick()
 
-    const text = host.textContent ?? ''
+    const text = document.body.textContent ?? ''
     expect(text.split('LRCLIB').length - 1).toBe(1)
     expect(text.split('Genius').length - 1).toBe(1)
+  })
+})
+
+describe('LyricsSourceMenu portal rendering', () => {
+  it('renders the menu outside the clipping container', async () => {
+    stubFetch(sourcesBody)
+    // یک والدِ بریده‌شونده دورِ کامپوننت می‌گذاریم — دقیقاً مثلِ ریشهٔ
+    // NowPlaying که `overflow-hidden` است. اگر منو داخلِ درخت بماند،
+    // بریده می‌شود.
+    const clip = document.createElement('div')
+    clip.style.overflow = 'hidden'
+    clip.style.height = '40px'
+    document.body.appendChild(clip)
+    const inner = document.createElement('div')
+    clip.appendChild(inner)
+    host.remove()
+    host = inner
+    root = createRoot(host)
+
+    render()
+    await act(async () => {
+      host.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await tick()
+
+    const menu = document.querySelector('[role="menu"]')
+    expect(menu).not.toBeNull()
+    // منو باید فرزندِ document.body باشد، نه داخلِ کانتینرِ بریده‌شونده
+    expect(clip.contains(menu)).toBe(false)
+    clip.remove()
+  })
+
+  it('keeps the menu open across a re-render', async () => {
+    stubFetch(sourcesBody)
+    render()
+    await act(async () => {
+      host.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await tick()
+
+    // رندر مجدد با همان props — منو باید باز بماند
+    render()
+    await tick()
+
+    expect(document.querySelector('[role="menu"]')).not.toBeNull()
+  })
+
+  it('closes on Escape without losing the selection', async () => {
+    stubFetch(sourcesBody)
+    const onSelect = vi.fn()
+    render({ onSelect })
+    await act(async () => {
+      host.querySelector('button')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await tick()
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+
+    expect(document.querySelector('[role="menu"]')).toBeNull()
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('returns focus to the trigger when closed', async () => {
+    stubFetch(sourcesBody)
+    render()
+    const trigger = host.querySelector('button')!
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await tick()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+
+    expect(document.activeElement).toBe(host.querySelector('button'))
   })
 })

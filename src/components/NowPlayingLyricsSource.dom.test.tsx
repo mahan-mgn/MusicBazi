@@ -254,7 +254,7 @@ describe('NowPlaying lyrics source integration', () => {
     })
     await settle()
 
-    const option = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((b) =>
+    const option = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((b) =>
       b.textContent?.includes('LRCLIB'),
     )
     await act(async () => {
@@ -300,7 +300,7 @@ describe('NowPlaying lyrics source integration', () => {
     })
     await settle()
 
-    const auto = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((b) =>
+    const auto = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((b) =>
       b.textContent?.includes('خودکار'),
     )
     await act(async () => {
