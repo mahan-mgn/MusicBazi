@@ -118,11 +118,3 @@ export function streamLyricsUrlForProvider(track: Track, provider: string): stri
   params.set('provider', provider)
   return apiUrl(`/api/stream/lyrics?${params.toString()}`)
 }
-
-/** برچسبِ خوانای قابلیت‌ها برای نمایش در منو. */
-export function capabilityLabel(capabilities: string[]): string {
-  if (capabilities.includes('word')) return 'word'
-  if (capabilities.includes('ttml')) return 'ttml'
-  if (capabilities.includes('line')) return 'line'
-  return 'plain'
-}

@@ -407,3 +407,82 @@ class TestGeniusManualOnlyPolicy:
 
         assert found.plain == "other"
         assert calls == ["other"]
+
+
+class TestNoSecretReachesLogs:
+    """
+    P5 — هیچ کلید/توکنی نباید به لاگ برسد.
+
+    مسیرِ خطر: `log.warning(..., exc_info=True)` روی استثنای غیرمنتظره. اگر
+    یک استثنای خامِ httpx با URLِ حاویِ کلید از Provider بیرون بزند،
+    traceback می‌تواند کلید را چاپ کند. Providerها همهٔ استثناها را به
+    `ProviderError` (که فقط نامِ کلاس را دارد) تبدیل می‌کنند، پس این تست
+    ثابت می‌کند آن مسیر بسته است.
+    """
+
+    def test_a_failing_musixmatch_request_logs_no_key(self, monkeypatch, caplog):
+        import logging
+
+        from app.lyrics.manager import LyricsManager
+        from app.lyrics.registry import ProviderEntry, ProviderRegistry
+
+        monkeypatch.setattr(musixmatch, "MUSIXMATCH_API_KEY", "SUPER-SECRET-KEY-XYZ")
+
+        def handler(url, params, headers):
+            raise httpx.ConnectTimeout("https://api.musixmatch.com/?apikey=SUPER-SECRET-KEY-XYZ")
+
+        _patch(monkeypatch, musixmatch, handler)
+        registry = ProviderRegistry(
+            [ProviderEntry("musixmatch", musixmatch.fetch, None, musixmatch.fetch_strict)],
+            ("musixmatch",),
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            LyricsManager(registry=registry, miss_ttl_s=0).fetch(_track())
+
+        assert "SUPER-SECRET-KEY-XYZ" not in caplog.text
+
+    def test_a_failing_paxsenix_request_logs_no_key(self, monkeypatch, caplog):
+        import logging
+
+        from app.lyrics.manager import LyricsManager
+        from app.lyrics.registry import ProviderEntry, ProviderRegistry
+
+        def handler(url, params, headers):
+            raise httpx.ConnectError("https://lyrics.paxsenix.org/x?secret=SUPER-SECRET-KEY-XYZ")
+
+        _patch(monkeypatch, paxsenix, handler)
+        registry = ProviderRegistry(
+            [ProviderEntry("paxsenix", paxsenix.fetch, None, paxsenix.fetch_strict)],
+            ("paxsenix",),
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            LyricsManager(registry=registry, miss_ttl_s=0).fetch(
+                _track(videoId="dQw4w9WgXcQ")
+            )
+
+        assert "SUPER-SECRET-KEY-XYZ" not in caplog.text
+
+    def test_the_sources_service_logs_no_key(self, monkeypatch, caplog):
+        import asyncio
+        import logging
+
+        from app.lyrics.sources import LyricsSources
+
+        monkeypatch.setattr(musixmatch, "MUSIXMATCH_API_KEY", "SUPER-SECRET-KEY-XYZ")
+
+        def handler(url, params, headers):
+            raise httpx.ReadTimeout("x?apikey=SUPER-SECRET-KEY-XYZ")
+
+        _patch(monkeypatch, musixmatch, handler)
+        registry = ProviderRegistry(
+            [ProviderEntry("musixmatch", musixmatch.fetch, None, musixmatch.fetch_strict)],
+            ("musixmatch",),
+        )
+        sources = LyricsSources(manager=LyricsManager(registry=registry))
+
+        with caplog.at_level(logging.DEBUG):
+            asyncio.run(sources.fetch_from("musixmatch", _track()))
+
+        assert "SUPER-SECRET-KEY-XYZ" not in caplog.text

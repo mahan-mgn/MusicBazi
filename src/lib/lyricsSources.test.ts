@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  capabilityLabel,
   clearLyricsPreference,
   fetchLyricsPreference,
   fetchLyricsSources,
@@ -157,20 +156,5 @@ describe('streamLyricsUrlForProvider', () => {
     expect(url).toContain('title=Song')
     expect(url).toContain('artist=Artist')
     expect(url).toContain('duration_ms=180000')
-  })
-})
-
-describe('capabilityLabel', () => {
-  it('prefers the richest capability', () => {
-    expect(capabilityLabel(['line', 'word'])).toBe('word')
-  })
-
-  it('falls back through the list', () => {
-    expect(capabilityLabel(['line'])).toBe('line')
-    expect(capabilityLabel(['ttml'])).toBe('ttml')
-  })
-
-  it('defaults to plain', () => {
-    expect(capabilityLabel([])).toBe('plain')
   })
 })
