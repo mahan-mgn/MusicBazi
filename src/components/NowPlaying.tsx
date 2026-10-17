@@ -12,8 +12,10 @@ import { useI18n } from '../lib/i18n'
 import { parseLrc, type LyricLine } from '../lib/lrc'
 import {
   clearLyricsPreference,
+  fetchLyricsFromSource,
   fetchLyricsPreference,
   saveLyricsPreference,
+  sourceErrorLabel,
   streamLyricsUrlForProvider,
 } from '../lib/lyricsSources'
 import { haptic, share } from '../lib/native'
@@ -270,7 +272,10 @@ export default function NowPlaying({
   // ذخیره‌ی ترجیح در جریان است — از زدنِ دکمه‌ی دوم قبل از تمام‌شدن جلوگیری می‌کند
   const [sourceBusy, setSourceBusy] = useState(false)
   // منبعِ انتخابی جواب نداد و به خودکار برگشتیم
-  const [sourceFailed, setSourceFailed] = useState(false)
+  // چرا منبعِ انتخابی کار نکرد — نام + کد، تا پیام بتواند دقیق باشد.
+  const [sourceNote, setSourceNote] = useState<{ provider: string; code: string } | null>(null)
+  // منبعی که واقعاً متن را داده (از هدرِ `x-lyrics-source`)، برای نمایش در دکمه
+  const [usedSource, setUsedSource] = useState<string | null>(null)
   const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
 
@@ -463,7 +468,7 @@ export default function NowPlaying({
   // ترجیحِ ذخیره‌شده‌ی همین آهنگ را بخوان (یک بار به ازای هر آهنگ)
   useEffect(() => {
     const trackId = item?.track.id
-    setSourceFailed(false)
+    setSourceNote(null)
     if (!trackId) {
       setLyricsSource(null)
       return
@@ -485,39 +490,53 @@ export default function NowPlaying({
       setLyrics({ kind: 'none' })
       return
     }
-    // با منبعِ انتخابی، آدرسِ همان منبع ساخته می‌شود؛ بدونش آدرسِ پیش‌فرض
-    // سرور عیناً همان چیزی است که تا امروز بود.
-    const url = lyricsSource
-      ? streamLyricsUrlForProvider(track, lyricsSource)
-      : item.lyricsUrl
-    if (!url) {
-      setLyrics({ kind: 'none' })
-      return
-    }
     setLyrics({ kind: 'loading' })
     const wantedTrack = track.id
     let cancelled = false
-    fetch(url)
-      .then((r) => (r.ok ? r.text() : Promise.reject()))
-      .then((raw) => {
-        // رقابتِ تغییرِ آهنگ: نتیجهٔ دیررس نباید به آهنگِ بعدی نشت کند
+
+    const applyText = (raw: string) => {
+      // رقابتِ تغییرِ آهنگ: نتیجهٔ دیررس نباید به آهنگِ بعدی نشت کند
+      if (item?.track.id !== wantedTrack) return
+      const lines = parseLrc(raw)
+      if (lines.length > 0) setLyrics({ kind: 'synced', lines })
+      else if (raw.trim()) setLyrics({ kind: 'plain', text: raw.trim() })
+      else setLyrics({ kind: 'none' })
+    }
+
+    const loadAutomatic = async () => {
+      if (!item?.lyricsUrl) {
+        if (!cancelled && item?.track.id === wantedTrack) setLyrics({ kind: 'none' })
+        return
+      }
+      try {
+        const response = await fetch(item.lyricsUrl)
         if (cancelled || item?.track.id !== wantedTrack) return
-        const lines = parseLrc(raw)
-        if (lines.length > 0) setLyrics({ kind: 'synced', lines })
-        else if (raw.trim()) setLyrics({ kind: 'plain', text: raw.trim() })
-        else setLyrics({ kind: 'none' })
-      })
-      .catch(async () => {
-        if (cancelled || item?.track.id !== wantedTrack) return
-        if (!lyricsSource) {
-          setLyrics({ kind: 'none' })
-          return
-        }
-        // منبعِ انتخابی جواب نداد ⇒ به خودکار برگرد، ولی انتخاب را پاک نکن:
-        // ممکن است سرویس لحظه‌ای خراب باشد و کاربر نخواهد انتخابش برود.
-        setSourceFailed(true)
-        setLyricsSource(null)
-      })
+        applyText(response.ok ? await response.text() : '')
+      } catch {
+        if (!cancelled && item?.track.id === wantedTrack) setLyrics({ kind: 'none' })
+      }
+    }
+
+    const load = async () => {
+      if (!lyricsSource) {
+        await loadAutomatic()
+        return
+      }
+      const result = await fetchLyricsFromSource(track, lyricsSource)
+      if (cancelled || item?.track.id !== wantedTrack) return
+      if ('text' in result) {
+        setSourceNote(null)
+        setUsedSource(lyricsSource)
+        applyText(result.text)
+        return
+      }
+      // خطای منبع: علت را نگه دار و به خودکار برگرد. انتخاب را پاک نکن —
+      // یک قطعیِ گذرا نباید انتخابِ کاربر را از دست بدهد.
+      setSourceNote({ provider: lyricsSource, code: result.error.code })
+      setLyricsSource(null)
+    }
+
+    void load()
     return () => {
       cancelled = true
     }
@@ -930,7 +949,7 @@ export default function NowPlaying({
   const selectLyricsSource = (provider: string) => {
     const trackId = item?.track.id
     if (!trackId || sourceBusy) return
-    setSourceFailed(false)
+    setSourceNote(null)
     setLyricsSource(provider || null)
     setSourceBusy(true)
     const save = provider
@@ -1228,17 +1247,20 @@ export default function NowPlaying({
                 ) : (
                   <div className="flex flex-col h-full overflow-hidden w-full">
                     {panel === 'lyrics' && item && (
-                      <div className="shrink-0 flex items-center justify-center gap-2 pb-1">
-                        <LyricsSourceMenu
-                          track={item.track}
-                          current={lyricsSource}
-                          onSelect={selectLyricsSource}
-                          onRetry={lyricsSource ? retryLyricsSource : undefined}
-                          disabled={sourceBusy}
-                        />
-                        {sourceFailed && (
-                          <span className="text-[10px] text-amber-300/80">
-                            {t.lyricsSourceFailed}
+                      <div className="shrink-0 flex flex-col items-center gap-1 pb-1">
+                        <div className="flex items-center gap-2">
+                          <LyricsSourceMenu
+                            track={item.track}
+                            current={lyricsSource}
+                            usedSource={usedSource}
+                            onSelect={selectLyricsSource}
+                            onRetry={lyricsSource ? retryLyricsSource : undefined}
+                            disabled={sourceBusy}
+                          />
+                        </div>
+                        {sourceNote && (
+                          <span className="text-[10px] text-amber-300/80 text-center px-2">
+                            {sourceErrorLabel(t, sourceNote.provider, sourceNote.code)}
                           </span>
                         )}
                       </div>
@@ -1280,16 +1302,19 @@ export default function NowPlaying({
               /* در نمای لیریکس یا صف: تمام‌صفحه و فراگیر با فوتر در پایین (Images 4 & 5) */
               <>
                 {panel === 'lyrics' && item && (
-                  <div className="shrink-0 flex items-center justify-center gap-2 pb-1 max-w-2xl mx-auto w-full">
+                  <div className="shrink-0 flex flex-col items-center gap-1 pb-1 max-w-2xl mx-auto w-full">
                     <LyricsSourceMenu
                       track={item.track}
                       current={lyricsSource}
+                      usedSource={usedSource}
                       onSelect={selectLyricsSource}
                       onRetry={lyricsSource ? retryLyricsSource : undefined}
                       disabled={sourceBusy}
                     />
-                    {sourceFailed && (
-                      <span className="text-[10px] text-amber-300/80">{t.lyricsSourceFailed}</span>
+                    {sourceNote && (
+                      <span className="text-[10px] text-amber-300/80 text-center px-2">
+                        {sourceErrorLabel(t, sourceNote.provider, sourceNote.code)}
+                      </span>
                     )}
                   </div>
                 )}

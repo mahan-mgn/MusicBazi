@@ -125,13 +125,20 @@ describe('the menu renders the real payload', () => {
     expect(document.body.textContent).toContain('خودکار')
   })
 
-  it('puts the unusable sources in a separate section with reasons', async () => {
+  it('puts the unusable sources in a separate, collapsible section', async () => {
     await openMenu()
 
-    const text = document.body.textContent ?? ''
-    expect(text).toContain('غیرقابل استفاده')
-    expect(text).toContain('KuGou')
-    expect(text).toContain('Genius')
+    // سرصفحهٔ بخش وجود دارد، ولی محتوایش تا باز نشدن پنهان است
+    const header = [...document.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('غیرقابل استفاده'),
+    )
+    expect(header).toBeDefined()
+    expect(document.body.textContent).not.toContain('KuGou')
+
+    act(() => {
+      header!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(document.body.textContent).toContain('KuGou')
   })
 
   it('does not fetch the lyric text when the menu opens', async () => {
@@ -229,5 +236,74 @@ describe('failure and empty states are always visible', () => {
 
     // منو باید باز بماند و پیام نشان بدهد، نه اینکه محو شود
     expect(document.querySelector('[role="menu"]')).not.toBeNull()
+  })
+})
+
+describe('error codes drive distinct messages', () => {
+  // ماتریسِ رفتارِ G3: هر کدِ خطا پیامِ خودش را می‌گیرد.
+  it('maps a not_found code to a neutral message naming the source', async () => {
+    const { sourceErrorLabel } = await import('../lib/lyricsSources')
+
+    // پیامِ not_found باید نامِ منبع را داشته باشد و «خطا» نباشد
+    const text = sourceErrorLabel({ srcNotFound: (n: string) => `در ${n} متنی پیدا نشد` }, 'lrclib', 'not_found')
+    expect(text).toContain('lrclib')
+  })
+
+  it('gives rate limiting its own message', async () => {
+    const { sourceErrorLabel } = await import('../lib/lyricsSources')
+
+    const text = sourceErrorLabel({}, 'lrclib', 'rate_limited')
+    expect(text).not.toBe(sourceErrorLabel({}, 'lrclib', 'provider_error'))
+  })
+
+  it('distinguishes needs_setup, blocked, and disabled', async () => {
+    const { sourceErrorLabel } = await import('../lib/lyricsSources')
+
+    const a = sourceErrorLabel({}, 'x', 'needs_setup')
+    const b = sourceErrorLabel({}, 'x', 'blocked')
+    const c = sourceErrorLabel({}, 'x', 'disabled')
+    expect(new Set([a, b, c]).size).toBe(3)
+  })
+
+  it('reads the machine code from the backend error body', async () => {
+    const { readSourceError } = await import('../lib/lyricsSources')
+
+    const e = readSourceError({ code: 'rate_limited', provider: 'lrclib', http_status: 429 }, 'x')
+    expect(e.code).toBe('rate_limited')
+    expect(e.provider).toBe('lrclib')
+    expect(e.httpStatus).toBe(429)
+  })
+
+  it('falls back safely when the body has no code', async () => {
+    const { readSourceError } = await import('../lib/lyricsSources')
+
+    const e = readSourceError(null, 'lrclib')
+    expect(e.code).toBe('provider_error')
+    expect(e.provider).toBe('lrclib')
+    expect(e.httpStatus).toBeNull()
+  })
+
+  it('the menu shows the source in use when one is selected', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve(nowPlayingFixture), text: () => Promise.resolve('') }),
+    )
+    act(() =>
+      root.render(<LyricsSourceMenu track={track} current="lrclib" onSelect={() => {}} />),
+    )
+
+    expect(host.textContent).toContain('lrclib')
+  })
+
+  it('the trigger shows which source supplied the automatic lyrics', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve(nowPlayingFixture), text: () => Promise.resolve('') }),
+    )
+    act(() =>
+      root.render(
+        <LyricsSourceMenu track={track} current={null} usedSource="LRCLIB" onSelect={() => {}} />,
+      ),
+    )
+
+    expect(host.textContent).toContain('LRCLIB')
   })
 })

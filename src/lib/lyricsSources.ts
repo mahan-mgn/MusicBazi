@@ -24,6 +24,12 @@ export interface LyricsSource {
   setup_hint?: string | null
   experimental: boolean
   unavailable_reason?: string | null
+  /** آخرین نتیجهٔ همین آهنگ: cached / not_found / error / never_tried */
+  last_outcome?: string
+  /** نوعِ خطا: network / http / body / rate_limited */
+  last_error_kind?: string | null
+  /** کدِ HTTPِ آخرین خطا (فقط عدد) */
+  http_status?: number | null
 }
 
 export interface LyricsSourcesResponse {
@@ -31,6 +37,104 @@ export interface LyricsSourcesResponse {
   /** منبعِ ذخیره‌شده، یا `null` یعنی «خودکار». */
   preferred: string | null
   sources: LyricsSource[]
+}
+
+/**
+ * خطای ساخت‌یافتهٔ مسیرِ منبع‌محور.
+ *
+ * `code` همان چیزی است که تصمیمِ UI را می‌سازد؛ `detail` برای سازگاریِ
+ * عقب‌رو نگه داشته می‌شود و هرگز نمایش داده نمی‌شود (ممکن است فارسی و
+ * غیرِقابلِ‌ترجمه باشد).
+ */
+export interface LyricsSourceError {
+  code: string
+  provider: string
+  httpStatus: number | null
+}
+
+/** نامِ نمایشیِ یک منبع از پاسخِ فهرست؛ اگر نبود، خودِ شناسه. */
+export function sourceLabel(sources: LyricsSource[] | null, id: string | null): string {
+  if (!id) return ''
+  return sources?.find((s) => s.id === id)?.label ?? id
+}
+
+/**
+ * پیامِ خطای منبع — دقیق، بر پایهٔ کدِ ماشین‌خوان.
+ *
+ * این تابع قلبِ رفعِ مشکلِ «پیامِ مبهم» است: قبلاً هر خطا یک متنِ ثابت
+ * می‌گرفت. حالا «این آهنگ متن ندارد» با «سرویس خراب است» و «راه‌اندازی
+ * نشده» پیامِ متفاوت می‌گیرند.
+ */
+export function sourceErrorLabel(
+  t: Record<string, unknown>,
+  provider: string,
+  code: string,
+  label?: string,
+): string {
+  const name = label || provider
+  const call = (key: string, fallback: string): string => {
+    const fn = t[key]
+    return typeof fn === 'function' ? (fn as (s: string) => string)(name) : fallback
+  }
+  switch (code) {
+    case 'not_found':
+      return call('srcNotFound', `No lyrics found in ${name}`)
+    case 'rate_limited':
+      return call('srcRateLimited', `${name} is rate limiting`)
+    case 'needs_setup':
+      return call('srcNeedsSetupMsg', `${name} needs setup`)
+    case 'blocked':
+      return call('srcBlockedMsg', `${name} is unavailable`)
+    case 'disabled':
+      return call('srcDisabledMsg', `${name} is off`)
+    case 'unknown_provider':
+      return typeof t.srcUnknownMsg === 'string' ? t.srcUnknownMsg : 'Unknown source'
+    default:
+      return call('srcUnavailable', `${name} is not responding`)
+  }
+}
+
+/** بدنهٔ خطای بک‌اند را از پاسخ بیرون بکش، با پیش‌فرضِ امن. */
+export function readSourceError(body: unknown, provider: string): LyricsSourceError {
+  const b = (body ?? {}) as Record<string, unknown>
+  return {
+    code: typeof b.code === 'string' ? b.code : 'provider_error',
+    provider: typeof b.provider === 'string' ? b.provider : provider,
+    httpStatus: typeof b.http_status === 'number' ? b.http_status : null,
+  }
+}
+
+/**
+ * دریافتِ متن از یک منبعِ مشخص.
+ *
+ * برخلافِ `fetch`ِ خام، اینجا کدِ خطای بک‌اند خوانده می‌شود تا «این آهنگ
+ * متن ندارد» از «سرویس خراب است» جدا شود — تمایزی که قبلاً وجود نداشت و
+ * باعثِ پیامِ مبهم می‌شد.
+ */
+export async function fetchLyricsFromSource(
+  track: Track,
+  provider: string,
+  { force = false }: { force?: boolean } = {},
+): Promise<{ text: string } | { error: LyricsSourceError }> {
+  const params = trackParams(track)
+  params.set('provider', provider)
+  if (force) params.set('force', 'true')
+  try {
+    const response = await fetch(apiUrl(`/api/stream/lyrics?${params.toString()}`))
+    if (response.ok) {
+      return { text: await response.text() }
+    }
+    let body: unknown = null
+    try {
+      body = await response.json()
+    } catch {
+      body = null
+    }
+    return { error: readSourceError(body, provider) }
+  } catch {
+    // خطای شبکه: هیچ بدنه‌ای نیست، پس کد را خودمان می‌سازیم
+    return { error: { code: 'provider_error', provider, httpStatus: null } }
+  }
 }
 
 function trackParams(track: Track): URLSearchParams {

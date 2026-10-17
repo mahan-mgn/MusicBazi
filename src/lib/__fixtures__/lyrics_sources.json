@@ -15,6 +15,9 @@
       "terms_note": "General public API, MIT-licensed project.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -29,6 +32,9 @@
       "terms_note": "Terms prohibit scraping/automated use. Manual selection only.",
       "setup_hint": "Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment.",
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": "Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment."
     },
     {
@@ -45,6 +51,9 @@
       "terms_note": "Aggregator; free public API, no formal terms page.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -61,6 +70,9 @@
       "terms_note": "Free public API. Commercial reuse of the corpus needs a licence.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -77,6 +89,9 @@
       "terms_note": "GPL-3.0 client; endpoint contract partially inferred.",
       "setup_hint": null,
       "experimental": true,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -93,6 +108,9 @@
       "terms_note": "No public licence or terms found.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -109,6 +127,9 @@
       "terms_note": "Docs say the API is free for public use. Contract partly inferred.",
       "setup_hint": null,
       "experimental": true,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -125,6 +146,9 @@
       "terms_note": "Public API keyed by YouTube videoId.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -141,6 +165,9 @@
       "terms_note": "No terms published. Keyed by track id.",
       "setup_hint": null,
       "experimental": true,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": null
     },
     {
@@ -155,6 +182,9 @@
       "terms_note": "Official API only; synchronised text needs a commercial plan.",
       "setup_hint": "Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment.",
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": "Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment."
     },
     {
@@ -167,6 +197,9 @@
       "terms_note": "Not implemented: requires impersonating the mobile app.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": "Requires bypassing the provider's app authentication."
     },
     {
@@ -179,6 +212,9 @@
       "terms_note": "Not implemented: robots.txt blocks this kind of client sitewide.",
       "setup_hint": null,
       "experimental": false,
+      "last_outcome": "never_tried",
+      "last_error_kind": null,
+      "http_status": null,
       "unavailable_reason": "The site's robots.txt disallows this client entirely."
     }
   ]
