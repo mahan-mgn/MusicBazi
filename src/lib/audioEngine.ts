@@ -1,27 +1,43 @@
 /**
- * موتور پخش — دو «دک» صوتی زیر یک گرافِ Web Audio.
+ * موتور پخش — دو «دک» صوتی زیر یک گرافِ Web Audio، رانده‌شده با state machine.
  *
- * قبلاً یک `<audio>` تنها بود و سه چیز از آن درنمی‌آمد:
+ * این نسخه معماری اپ اندروید (`MusicBaziAudioEngine.kt` + `CrossfadeController.kt`)
+ * را روی وب پیاده می‌کند:
  *
- *  ۱. **هم‌ترازیِ بلندی.** هر ترک با بلندیِ متفاوتی مسترینگ شده و منابعِ ما هم
- *     یکسان نیستند؛ بدون یک GainNode که سرور عددش را داده، هر چند ترک یک‌بار
- *     باید دستی صدا را کم و زیاد کرد.
- *  ۲. **اکولایزر.** فیلترهای Biquad فقط روی گرافِ Web Audio معنی دارند.
- *  ۳. **کراس‌فید.** با یک المنت اصلاً ممکن نیست — دو ترک باید هم‌زمان صدا
- *     بدهند، پس دو المنت لازم است.
+ *  ۱. **دو دکِ همتا** که همیشه زنده‌اند؛ دکِ غیرفعال از قبل ترکِ بعدی را
+ *     بافر می‌کند (`setNext` — پربافرِ شبیه Spotify).
+ *  ۲. **CrossfadeController** (پورت CrossfadeController.kt) با فازهای
+ *     IDLE/ARMING/FADING/BAILING — به‌جای چکِ ادهاک روی timeupdate. تعویض
+ *     نقش دک‌ها در *میانه* فید انجام می‌شود (t ≥ 0.5) نه در پایانش، تا آنچه
+ *     UI نشان می‌دهد همان ترکی باشد که دارد بلند می‌شود.
+ *  ۳. **هدررومِ ترکیب** حین فید (۱/√(out+in)) که بعداً به پردازندهٔ لودنس
+ *     می‌رسد و جلوی کلیپِ جمع دو ترک را می‌گیرد.
+ *  ۴. **وضعیت رسمی** (AudioState.kt) — یک منبع حقیقت برای IDLE/BUFFERING/
+ *     READY/ENDED/ERROR به‌جای پرچم‌های پراکنده.
  *
- * زنجیره‌ی هر دک: `<audio>` → norm (هم‌ترازی) → fade (کراس‌فید) → EQ → مستر.
+ * زنجیرهٔ هر دک: `<audio>` → norm (هم‌ترازی) → fade (کراس‌فید) → EQ → مستر.
  * دو گِینِ جدا لازم است چون رمپِ کراس‌فید مقدارِ گِین را بازنویسی می‌کند و
  * اگر هم‌ترازی روی همان نود می‌نشست، هر فید تنظیمش را پاک می‌کرد.
  *
- * اگر Web Audio نبود (یا مرورگر اجازه نداد)، همه‌چیز بی‌صدا به پخشِ ساده‌ی
- * همان `<audio>` برمی‌گردد: بدون هم‌ترازی، بدون EQ، بدون کراس‌فید — ولی صدا
- * قطع نمی‌شود.
+ * قراردادهای رفتاری که حفظ شده‌اند (هر کدام یک باگِ واقعی را بسته‌اند):
+ *  - «هیچ‌چیز تا resolve شدنِ play() تثبیت نمی‌شود»: شکستِ play دکِ ورودی
+ *    یعنی فید هرگز شروع نشده — ترک فعلی دست‌نخورده تا ENDED می‌رود.
+ *  - اگر Web Audio نبود (یا مرورگر اجازه نداد)، همه‌چیز بی‌صدا به پخشِ سادهٔ
+ *    همان `<audio>` برمی‌گردد: بدون هم‌ترازی، بدون EQ، بدون کراس‌فید — ولی
+ *    صدا قطع نمی‌شود.
  */
 
 export type EqPreset = 'off' | 'bass' | 'vocal' | 'treble' | 'loud'
 
 import { detachHls, maybeHlsFallback } from './hlsPlayback'
+import { EngineStatePublisher } from './audio/AudioState'
+import {
+  CrossfadeController,
+  MIN_CROSSFADE_SECONDS,
+  TransitionLock,
+  type CrossfadeActiveInfo,
+  type CrossfadeHooks,
+} from './audio/CrossfadeController'
 
 /** فرکانس مرکزیِ باندها — پنج‌تایی استانداردِ اکولایزرهای مصرفی */
 export const EQ_BANDS = [60, 230, 910, 3600, 14000]
@@ -45,6 +61,8 @@ export const MAX_BOOST_DB = 12
 
 export interface EngineHandlers {
   onPlay: () => void
+  onPlaying?: () => void
+  onBuffering?: (buffering: boolean) => void
   onPause: () => void
   onTime: (seconds: number) => void
   onDuration: (seconds: number) => void
@@ -53,6 +71,7 @@ export interface EngineHandlers {
   /**
    * کراس‌فید شروع شد و ترکِ بعدی روی دکِ دیگر افتاد.
    *
+   * از این نسخه در *میانه* فید صدا زده می‌شود (handoff اندروید)، نه در شروعش.
    * صف باید همان‌جا جلو برود ولی *نباید* دوباره `load` صدا بزند — ترک از قبل
    * در حالِ پخش است. این تنها جایی است که موتور به صف دستور می‌دهد، نه برعکس.
    */
@@ -85,9 +104,6 @@ interface LoadOptions {
   autoplay?: boolean
 }
 
-// زیر این مقدار کراس‌فید عملاً شنیده نمی‌شود و فقط ریسکِ پرش دارد
-const MIN_CROSSFADE = 0.5
-
 let handlers: EngineHandlers | null = null
 let ctx: AudioContext | null = null
 let eqNodes: BiquadFilterNode[] = []
@@ -104,9 +120,11 @@ let analyser: AnalyserNode | null = null
 let spectrum: Uint8Array<ArrayBuffer> | null = null
 let decks: [Deck, Deck] | null = null
 let activeIndex = 0
+let statePublisher: EngineStatePublisher | null = null
 
 let crossfadeSeconds = 0
 let eqPreset: EqPreset = 'off'
+let eqEnabled = false
 let normalizeOn = true
 /**
  * تقویتِ سراسریِ گراف، به دسی‌بل.
@@ -122,9 +140,12 @@ let muted = false
 
 /** آدرس و هم‌ترازیِ ترکِ بعدی — بدون آن کراس‌فید چیزی برای رفتن ندارد */
 let nextSource: { src: string; gainDb: number } | null = null
-/** هم‌ترازیِ دکِ فعال، تا روشن/خاموش کردن نرمال‌سازی وسطِ ترک هم اثر کند */
-let activeGainDb = 0
-let fading = false
+
+/**
+ * هدررومِ جاریِ ترکیب (۱ بین ترنزیشن‌ها، کمی پایین‌تر حین فید).
+ * پردازندهٔ لودنسِ فاز ۲ این را به‌عنوان trim هدف می‌گیرد.
+ */
+let blendHeadroomValue = 1
 
 function active(): Deck | null {
   return decks ? decks[activeIndex] : null
@@ -133,6 +154,130 @@ function active(): Deck | null {
 function idle(): Deck | null {
   return decks ? decks[1 - activeIndex] : null
 }
+
+function deckByRef(ref: string): Deck | null {
+  if (!decks) return null
+  return ref === 'A' ? decks[0] : decks[1]
+}
+
+function refOfDeck(deck: Deck): string {
+  return decks && deck === decks[0] ? 'A' : 'B'
+}
+
+/** مقایسهٔ منبع با نرمال‌سازی نسبی/مطلق — el.src همیشه مطلق است */
+function sameSource(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (!a || !b) return false
+  try {
+    const base = globalThis.location?.href ?? 'http://localhost'
+    return new URL(a, base).href === new URL(b, base).href
+  } catch {
+    return a === b
+  }
+}
+
+/** آیا ترنزیشنی (ارم/فید) در جریان است — جایگزین پرچم `fading` قدیمی */
+function isTransitioning(): boolean {
+  return controller.getPhase() !== 'IDLE'
+}
+
+// ---------------------------------------------------------------------------
+// کراس‌فید — قلاب‌های CrossfadeController
+// ---------------------------------------------------------------------------
+
+const crossfadeHooks: CrossfadeHooks<string> = {
+  active(): CrossfadeActiveInfo<string> | null {
+    const deck = active()
+    if (!deck || !deck.el.src) return null
+    const duration = deck.el.duration
+    return {
+      ref: refOfDeck(deck),
+      positionMs: deck.el.currentTime * 1000,
+      durationMs: Number.isFinite(duration) ? duration * 1000 : 0,
+      isPlaying: !deck.el.paused,
+    }
+  },
+
+  standby(): string | null {
+    // بدونِ ترکِ بعدیِ نشسته روی دکِ ذخیره، فید چیزی برای بالا آوردن ندارد
+    return nextSource !== null ? (decks ? (activeIndex === 0 ? 'B' : 'A') : null) : null
+  },
+
+  crossfadeSeconds(): number {
+    return crossfadeSeconds
+  },
+
+  async startIncoming(incoming: string): Promise<void> {
+    const deck = deckByRef(incoming)
+    if (!deck || !nextSource) throw new Error('crossfade target vanished')
+    const { src, gainDb } = nextSource
+    nextSource = null
+
+    cancelPendingSeek(deck)
+    detachHls(deck.el)
+    if (!sameSource(deck.el.src, src)) {
+      // پربافرِ setNext معمولاً همین‌جا از قبل نشسته؛ فقط وقتی منبع فرق دارد می‌نشینیم
+      deck.el.src = src
+    }
+    applyNormalize(deck, gainDb)
+    if (deck.fade) deck.fade.gain.value = 0
+
+    /*
+     * هیچ‌چیز تا وقتی دکِ تازه واقعاً صدا ندهد تثبیت نمی‌شود. reject این
+     * promise (autoplay policy، فایل رفته) یعنی هیچ اتفاقی نیفتاده: کنترلر
+     * bail می‌کند، ترکِ فعلی دست‌نخورده تا آخر می‌رود و مسیرِ همیشگیِ `ended`
+     * ترک بعدی را بالا می‌آورد — بدون کراس‌فید، ولی بدون سکوت.
+     */
+    await deck.el.play()
+  },
+
+  beginFadeCurve(seconds: number): void {
+    const outgoing = active()
+    const incoming = idle()
+    if (!outgoing || !incoming) return
+    rampEqualPower(outgoing.fade, 'out', seconds)
+    rampEqualPower(incoming.fade, 'in', seconds)
+  },
+
+  onHandoff(_outgoing: string, incoming: string): void {
+    // تعویض نقش در میانهٔ فید — همان لحظه UI باید ترک تازه را نشان دهد
+    const deck = deckByRef(incoming)
+    activeIndex = 1 - activeIndex
+    handlers?.onAdvance()
+    if (deck && Number.isFinite(deck.el.duration)) handlers?.onDuration(deck.el.duration)
+    statePublisher?.patch({
+      currentTrackId: null,
+      positionMs: 0,
+      status: 'READY',
+      isPlaying: true,
+      isBuffering: false,
+    })
+  },
+
+  onBlendHeadroom(headroom: number): void {
+    blendHeadroomValue = headroom
+  },
+
+  onBail(outgoing: string | null, incoming: string | null): void {
+    // پاک‌سازی دک‌هایی که *فعال نیستند*:
+    //  - پایان موفق فید: دک خروجی idle شده → متوقف و آزاد
+    //  - bail وسط فید: دک ورودی هنوز شروع‌نشده/نیمه‌کاره → متوقف و آزاد؛
+    //    دک فعال (ترک جاری) دست‌نخورده می‌ماند
+    for (const ref of [outgoing, incoming]) {
+      if (ref === null) continue
+      const deck = deckByRef(ref)
+      if (!deck || deck === active()) continue
+      deck.el.pause()
+      detachHls(deck.el)
+      deck.el.removeAttribute('src')
+      deck.el.preload = 'metadata'
+      if (deck.fade) deck.fade.gain.value = 1
+      deck.el.volume = volume
+      deck.el.muted = muted
+    }
+  },
+}
+
+const controller = new CrossfadeController(crossfadeHooks)
 
 /**
  * گرافِ Web Audio. یک بار ساخته می‌شود و اگر مرورگر نداشته باشدش، null
@@ -232,36 +377,111 @@ function buildDeck(): Deck {
 function attach(deck: Deck): void {
   const { el } = deck
   el.addEventListener('play', () => {
-    if (el === active()?.el) handlers?.onPlay()
+    if (el === active()?.el) {
+      statePublisher?.patch({ status: 'READY', isPlaying: true })
+      handlers?.onPlay()
+    }
+  })
+  el.addEventListener('playing', () => {
+    if (el === active()?.el) {
+      statePublisher?.patch({ status: 'READY', isPlaying: true, isBuffering: false })
+      handlers?.onBuffering?.(false)
+      handlers?.onPlaying?.()
+    }
+  })
+  el.addEventListener('waiting', () => {
+    if (el === active()?.el) {
+      statePublisher?.patch({ status: 'BUFFERING', isBuffering: true })
+      handlers?.onBuffering?.(true)
+    }
+  })
+  el.addEventListener('stalled', () => {
+    if (el === active()?.el) {
+      statePublisher?.patch({ status: 'BUFFERING', isBuffering: true })
+      handlers?.onBuffering?.(true)
+    }
+  })
+  el.addEventListener('canplay', () => {
+    if (el === active()?.el) {
+      statePublisher?.patch({ isBuffering: false, status: 'READY' })
+      handlers?.onBuffering?.(false)
+    }
   })
   el.addEventListener('pause', () => {
     // مکثِ دکِ در حالِ محو شدن، «مکث» نیست — کاربر چیزی را متوقف نکرده
-    if (el === active()?.el && !fading) {
-      console.log(`[audioEngine] pause event on active deck (currentTime: ${el.currentTime}, duration: ${el.duration})`)
+    if (el === active()?.el && !isTransitioning()) {
+      statePublisher?.patch({ isPlaying: false })
+      handlers?.onBuffering?.(false)
       handlers?.onPause()
     }
   })
   el.addEventListener('timeupdate', () => {
     if (el !== active()?.el) return
     handlers?.onTime(el.currentTime)
-    maybeCrossfade()
+    // ارم می‌تواند از همین رویداد هم جلو بیفتد، نه فقط تیک ۲۵۰ms کنترلر
+    controller.poll()
   })
   el.addEventListener('durationchange', () => {
     if (el === active()?.el && Number.isFinite(el.duration)) handlers?.onDuration(el.duration)
   })
   el.addEventListener('ended', () => {
     // پایانِ دکی که کراس‌فید جایش را گرفته بی‌معنی است — صف از قبل جلو رفته
-    if (el === active()?.el) {
-      console.log(`[audioEngine] ended event on active deck (currentTime: ${el.currentTime}, duration: ${el.duration})`)
-      handlers?.onEnded()
+    if (el !== active()?.el) return
+
+    statePublisher?.patch({ status: 'ENDED', isPlaying: false })
+
+    // اگر کراس‌فید فعال نیست و دکِ غیرفعال از قبل با منبع بعدی پرلود شده است، سوییچ بدون‌وقفه انجام می‌دهیم
+    if (
+      controller.getPhase() === 'IDLE' &&
+      crossfadeSeconds < MIN_CROSSFADE_SECONDS &&
+      nextSource
+    ) {
+      const incoming = idle()
+      if (incoming && sameSource(incoming.el.src, nextSource.src)) {
+        const outgoing = active()
+        nextSource = null
+
+        void incoming.el
+          .play()
+          .then(() => {
+            activeIndex = 1 - activeIndex
+            if (outgoing) {
+              outgoing.el.pause()
+              detachHls(outgoing.el)
+              outgoing.el.removeAttribute('src')
+              outgoing.el.preload = 'metadata'
+              if (outgoing.fade) outgoing.fade.gain.value = 1
+            }
+            handlers?.onAdvance()
+            statePublisher?.patch({ status: 'READY', isPlaying: true, positionMs: 0 })
+            if (Number.isFinite(incoming.el.duration)) handlers?.onDuration(incoming.el.duration)
+          })
+          .catch((err) => {
+            console.warn('[audioEngine] gapless swap play rejected, falling back to onEnded:', err)
+            incoming.el.pause()
+            detachHls(incoming.el)
+            incoming.el.removeAttribute('src')
+            incoming.el.preload = 'metadata'
+            handlers?.onEnded()
+          })
+        return
+      }
     }
+
+    handlers?.onEnded()
   })
   el.addEventListener('error', () => {
     if (el === active()?.el) {
       const err = el.error
       console.warn(`[audioEngine] playback error (code: ${err?.code}, msg: ${err?.message}) for src: ${el.src}`)
+      statePublisher?.patch({
+        status: 'ERROR',
+        isPlaying: false,
+        errorMessage: err?.message ?? 'media error',
+      })
       // فاز ۱۵: اگر منبع HLS باشد (native پخش نمی‌کند)، یک‌بار fallback به hls.js
-      // امتحان می‌شود؛ ناموفق بودن آن خطای عادی playback را به بالا می‌دهد
+      // امتحان می‌شود؛ ناموفق بودن آن خطای عادی playback را به بالا می‌دهد.
+      // (فاز ۳: این hook جایش را به خط لولهٔ StreamRecovery می‌دهد)
       void maybeHlsFallback(el, () => handlers?.onError())
     }
   })
@@ -273,6 +493,14 @@ function ensure(): Deck {
     decks = [buildDeck(), buildDeck()]
     decks.forEach(attach)
     applyEq()
+    statePublisher = new EngineStatePublisher(
+      () => Math.round((active()?.el.currentTime ?? 0) * 1000),
+      () => {
+        const value = active()?.el.duration ?? 0
+        return Number.isFinite(value) ? Math.round(value * 1000) : 0
+      },
+    )
+    controller.start()
 
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
@@ -287,24 +515,34 @@ function ensure(): Deck {
 }
 
 function applyEq(): void {
-  const values = EQ_PRESETS[eqPreset] ?? EQ_PRESETS.off
+  const values = eqEnabled ? (EQ_PRESETS[eqPreset] ?? EQ_PRESETS.off) : EQ_PRESETS.off
   eqNodes.forEach((node, i) => {
     node.gain.value = values[i] ?? 0
   })
 }
 
-function applyNormalize(deck: Deck | null, gainDb: number): void {
+function applyNormalize(deck: Deck | null, gainDb: number, smooth = true): void {
   if (!deck?.norm) {
     if (deck) deck.gainDb = gainDb
     return
   }
   deck.gainDb = gainDb
   const norm = normalizeOn ? gainFromDb(gainDb) : 1
-  // تقویت روی همان نود می‌نشیند: هر دو اثرِ دسی‌بلی‌اند و حاصل‌ضربشان همان
-  // چیزی است که گوش می‌شنود. اوجی که از ۰ دسی‌بل بالاتر برود در مقصد کلیپ
-  // می‌شود — دقیقاً مثلِ پریستِ «پرحجم»ِ اکولایزر، که این تقویت هم همان
-  // معامله را با کاربر می‌کند: بلندتر، در ازای ریسکِ کلیپ روی مسترهای داغ.
-  deck.norm.gain.value = norm * gainFromDb(boostDb)
+  const target = norm * gainFromDb(boostDb)
+
+  if (smooth && ctx && ctx.state === 'running') {
+    // رمپ نرم ۴۰ میلی‌ثانیه‌ای برای جلوگیری از صدای تقه (click/pop) حین تغییر گِین
+    try {
+      const now = ctx.currentTime
+      deck.norm.gain.cancelScheduledValues(now)
+      deck.norm.gain.setValueAtTime(deck.norm.gain.value, now)
+      deck.norm.gain.linearRampToValueAtTime(target, now + 0.04)
+      return
+    } catch {
+      // فالبک در صورت عدم پشتیبانی مرورگر
+    }
+  }
+  deck.norm.gain.value = target
 }
 
 /** پرشِ معلقِ یک دک را باطل می‌کند — قبل از هر بارگذاریِ تازه روی همان دک */
@@ -314,90 +552,51 @@ function cancelPendingSeek(deck: Deck): void {
   deck.pendingSeek = null
 }
 
-/** رمپِ خطی روی یک گِین — با فالبک برای مرورگری که setValueAtTime ندارد */
-function ramp(node: GainNode | null, to: number, seconds: number): void {
-  if (!node || !ctx) return
-  const now = ctx.currentTime
-  node.gain.cancelScheduledValues(now)
-  node.gain.setValueAtTime(node.gain.value, now)
-  node.gain.linearRampToValueAtTime(to, now + seconds)
+const EQUAL_POWER_STEPS = 64
+
+/**
+ * منحنی تضعیف لگاریتمی توان-برابر (Equal-Power Fade Out).
+ * رابطه: cos(pi/2 * t)
+ */
+export function makeEqualPowerFadeOutCurve(steps = EQUAL_POWER_STEPS): Float32Array {
+  const curve = new Float32Array(steps)
+  for (let i = 0; i < steps; i++) {
+    const t = i / (steps - 1)
+    curve[i] = Math.cos(t * 0.5 * Math.PI)
+  }
+  return curve
 }
 
 /**
- * نزدیکِ پایانِ ترک، ترکِ بعدی را زیرش بالا می‌آورد.
- *
- * دکِ فعال بلافاصله عوض می‌شود (نه در پایانِ رمپ) تا زمان و عنوانی که UI
- * نشان می‌دهد همان ترکی باشد که دارد بلند می‌شود؛ دکِ قبلی فقط صدایش را
- * پایین می‌آورد و بعد متوقف می‌شود.
+ * منحنی تقویت لگاریتمی توان-برابر (Equal-Power Fade In).
+ * رابطه: sin(pi/2 * t)
  */
-function maybeCrossfade(): void {
-  if (fading || crossfadeSeconds < MIN_CROSSFADE || !nextSource) return
-  const current = active()
-  if (!current || !current.fade) return
+export function makeEqualPowerFadeInCurve(steps = EQUAL_POWER_STEPS): Float32Array {
+  const curve = new Float32Array(steps)
+  for (let i = 0; i < steps; i++) {
+    const t = i / (steps - 1)
+    curve[i] = Math.sin(t * 0.5 * Math.PI)
+  }
+  return curve
+}
 
-  const remaining = current.el.duration - current.el.currentTime
-  if (
-    !Number.isFinite(remaining) ||
-    remaining <= 0 ||
-    remaining > crossfadeSeconds ||
-    current.el.duration <= crossfadeSeconds ||
-    current.el.currentTime < 2
-  )
-    return
+const EQUAL_POWER_FADE_OUT = makeEqualPowerFadeOutCurve()
+const EQUAL_POWER_FADE_IN = makeEqualPowerFadeInCurve()
 
-  const incoming = idle()
-  if (!incoming) return
-
-  const seconds = Math.min(crossfadeSeconds, Math.max(remaining, MIN_CROSSFADE))
-  fading = true
-
-  const outgoing = current
-  const pendingGainDb = nextSource.gainDb
-  cancelPendingSeek(incoming)
-  detachHls(incoming.el)
-  incoming.el.src = nextSource.src
-  applyNormalize(incoming, pendingGainDb)
-  if (incoming.fade) incoming.fade.gain.value = 0
-  nextSource = null
-
-  /*
-   * هیچ‌چیز تا وقتی دکِ تازه واقعاً صدا ندهد تثبیت نمی‌شود.
-   *
-   * قبلاً برعکس بود: دکِ فعال بلافاصله عوض می‌شد، `onAdvance` صف را جلو می‌برد
-   * و تایمر دکِ قدیمی را متوقف می‌کرد — و اگر `play()` رد می‌شد (فایل رفته،
-   * منعِ خودکارپخشِ مرورگر) فقط `fading` پایین می‌آمد. نتیجه: هر دو دک ساکت،
-   * صف یک ردیف جلوتر، بدون هیچ خطایی. پخش بی‌صدا می‌مُرد.
-   *
-   * حالا شکستِ `play()` یعنی هیچ اتفاقی نیفتاده: ترکِ فعلی دست‌نخورده تا آخر
-   * می‌رود و مسیرِ همیشگیِ `ended` ترکِ بعدی را بالا می‌آورد — بدون کراس‌فید،
-   * ولی بدون سکوت.
-   */
-  void incoming.el
-    .play()
-    .then(() => {
-      activeGainDb = pendingGainDb
-      ramp(outgoing.fade, 0, seconds)
-      ramp(incoming.fade, 1, seconds)
-      activeIndex = 1 - activeIndex
-
-      window.setTimeout(() => {
-        outgoing.el.pause()
-        detachHls(outgoing.el)
-        outgoing.el.removeAttribute('src')
-        if (outgoing.fade) outgoing.fade.gain.value = 1
-        fading = false
-      }, seconds * 1000)
-
-      handlers?.onAdvance()
-      if (Number.isFinite(incoming.el.duration)) handlers?.onDuration(incoming.el.duration)
-    })
-    .catch(() => {
-      incoming.el.pause()
-      detachHls(incoming.el)
-      incoming.el.removeAttribute('src')
-      if (incoming.fade) incoming.fade.gain.value = 1
-      fading = false
-    })
+/** رمپِ توان-برابر برای کراس‌فید بدون افت بلندی در نقطه تقاطع */
+function rampEqualPower(node: GainNode | null, type: 'in' | 'out', seconds: number): void {
+  if (!node || !ctx) return
+  const now = ctx.currentTime
+  const curve = type === 'out' ? EQUAL_POWER_FADE_OUT : EQUAL_POWER_FADE_IN
+  try {
+    node.gain.cancelScheduledValues(now)
+    node.gain.setValueCurveAtTime(curve, now, seconds)
+  } catch {
+    // فالبک به رمپ خطی در صورت عدم پشتیبانی کامل
+    node.gain.cancelScheduledValues(now)
+    node.gain.setValueAtTime(node.gain.value, now)
+    node.gain.linearRampToValueAtTime(type === 'out' ? 0 : 1, now + seconds)
+  }
 }
 
 export const engine = {
@@ -427,23 +626,46 @@ export const engine = {
     return active()?.el.paused ?? true
   },
 
+  /** اسنپ‌شات رسمی وضعیت موتور — پورت AudioState.kt */
+  audioState(): ReturnType<EngineStatePublisher['snapshot']> | null {
+    return statePublisher?.snapshot() ?? null
+  },
+
+  /**
+   * هدررومِ جاریِ ترکیب — ۱ بین ترنزیشن‌ها، کمتر حین فید.
+   * پردازندهٔ لودنس (فاز ۲) این را به‌عنوان trim هدف می‌گیرد.
+   */
+  blendHeadroom(): number {
+    return blendHeadroomValue
+  },
+
   load(src: string, { gainDb = 0, at = 0, autoplay = true }: LoadOptions = {}): void {
     const deck = ensure()
 
-    // یک بارگذاریِ صریح، هر کراس‌فیدِ در جریان را باطل می‌کند
-    if (fading) {
-      const other = idle()
-      other?.el.pause()
-      if (other?.fade) other.fade.gain.value = 1
-      fading = false
-    }
+    // یک بارگذاریِ صریح، هر ترنزیشن در جریان را bail می‌کند؛ onBail دک‌های
+    // غیرفعال را تمیز می‌کند و دک فعال (همین که می‌خواهیم لود کنیم) دست‌نخورده می‌ماند
+    controller.notifyInterruption()
     if (deck.fade) deck.fade.gain.value = 1
 
-    activeGainDb = gainDb
+    // اگر دکِ غیرفعال قبلاً با همین منبع پرلود شده بود، پاک شود تا تکرار/اکو نشود
+    const other = idle()
+    if (other && (sameSource(other.el.src, src) || !sameSource(nextSource?.src, other.el.src))) {
+      other.el.pause()
+      detachHls(other.el)
+      other.el.removeAttribute('src')
+      other.el.preload = 'metadata'
+    }
+
     applyNormalize(deck, gainDb)
     cancelPendingSeek(deck)
     detachHls(deck.el) // منبع تازه native-first شروع می‌شود (فاز ۱۵)
     deck.el.src = src
+    statePublisher?.patch({
+      status: 'BUFFERING',
+      isBuffering: autoplay,
+      isPlaying: false,
+      errorMessage: null,
+    })
     if (at > 0) {
       // قبل از رسیدن متادیتا، currentTime بی‌اثر است
       const seek = () => {
@@ -475,6 +697,8 @@ export const engine = {
   },
 
   seek(seconds: number): void {
+    // seek هر ترنزیشن در جریان را bail می‌کند — همان DISCONTINUITY_REASON_SEEK اندروید
+    controller.notifyInterruption()
     const deck = active()
     if (deck?.el.src) deck.el.currentTime = seconds
   },
@@ -489,13 +713,42 @@ export const engine = {
     decks?.forEach((deck) => (deck.el.muted = value))
   },
 
-  /** ترکی که کراس‌فید باید به آن برود؛ null یعنی کراس‌فیدی در کار نیست */
+  /** ترکی که کراس‌فید یا سوییچ بدون‌وقفه باید به آن برود؛ null یعنی ترکی نیست */
   setNext(src: string | null, gainDb = 0): void {
     nextSource = src ? { src, gainDb } : null
+    if (!decks) return
+    if (!src) {
+      // صف عوض شده: هر ارم/فید منتظری دیگر مقصد ندارد
+      controller.notifyInterruption()
+      const other = idle()
+      if (other) {
+        other.el.pause()
+        detachHls(other.el)
+        other.el.removeAttribute('src')
+        other.el.preload = 'metadata'
+      }
+      return
+    }
+    if (isTransitioning()) return
+
+    const other = idle()
+    if (!other) return
+
+    // اگر منبع با دکِ فعال و دکِ غیرفعال متفاوت است، دکِ آماده را از قبل بافر می‌کنیم (Spotify-like pre-buffering)
+    if (!sameSource(other.el.src, src) && !sameSource(active()?.el.src, src)) {
+      cancelPendingSeek(other)
+      detachHls(other.el)
+      other.el.preload = 'auto'
+      other.el.src = src
+      applyNormalize(other, gainDb)
+      if (other.fade) other.fade.gain.value = 1
+    }
   },
 
   setCrossfade(seconds: number): void {
     crossfadeSeconds = Math.max(0, seconds)
+    // کوتاه‌شدنِ فید زیر حداقل، ترنزیشن منتظری را بی‌معنا می‌کند
+    if (crossfadeSeconds < MIN_CROSSFADE_SECONDS) controller.notifyInterruption()
   },
 
   setEq(preset: EqPreset): void {
@@ -503,9 +756,14 @@ export const engine = {
     applyEq()
   },
 
+  setEqEnabled(on: boolean): void {
+    eqEnabled = on
+    applyEq()
+  },
+
   setNormalize(on: boolean): void {
     normalizeOn = on
-    applyNormalize(active(), activeGainDb)
+    decks?.forEach((deck) => applyNormalize(deck, deck.gainDb))
   },
 
   /**
@@ -555,8 +813,10 @@ export const engine = {
   },
 
   stop(): void {
-    fading = false
+    controller.notifyInterruption()
     nextSource = null
+    blendHeadroomValue = 1
+    TransitionLock.isCrossfadeActive = false
     decks?.forEach((deck) => {
       cancelPendingSeek(deck)
       deck.el.pause()
@@ -564,5 +824,6 @@ export const engine = {
       deck.el.removeAttribute('src')
       if (deck.fade) deck.fade.gain.value = 1
     })
+    statePublisher?.patch({ status: 'IDLE', isPlaying: false, isBuffering: false, errorMessage: null })
   },
 }
