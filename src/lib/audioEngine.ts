@@ -29,7 +29,7 @@
 
 export type EqPreset = 'off' | 'bass' | 'vocal' | 'treble' | 'loud'
 
-import { detachHls, maybeHlsFallback } from './hlsPlayback'
+import { detachHls, attachHls } from './hlsPlayback'
 import { EngineStatePublisher } from './audio/AudioState'
 import {
   CrossfadeController,
@@ -39,6 +39,7 @@ import {
   type CrossfadeHooks,
 } from './audio/CrossfadeController'
 import { combineCurves, flatCurve, manualCurve, toneCurve, EQ_SLOTS, type EqCurve } from './audio/dsp/EqCurve'
+import { classifyMediaError, StreamRecovery, type StreamErrorKind } from './audio/StreamRecovery'
 
 /** فرکانس مرکزیِ باندها — پنج‌تایی استانداردِ اکولایزرهای مصرفی */
 export const EQ_BANDS = [60, 230, 910, 3600, 14000]
@@ -69,6 +70,16 @@ export interface EngineHandlers {
   onDuration: (seconds: number) => void
   onEnded: () => void
   onError: () => void
+  /**
+   * بازیابی جریان: آدرس تازه برای ترکِ جاری بخواهد — استور از
+   * `streamUrlFor` + media token تازه می‌سازد. null یعنی «نمی‌توانم».
+   */
+  onRecoveryResolve?: () => Promise<string | null>
+  /**
+   * بازیابی ناکام ماند — استور شمارش خطاهای متوالی را نگه می‌دارد و بعد
+   * از ۲ بار خودش به ترک بعدی می‌رود.
+   */
+  onRecoveryGiveUp?: () => void
   /**
    * کراس‌فید شروع شد و ترکِ بعدی روی دکِ دیگر افتاد.
    *
@@ -307,6 +318,152 @@ const crossfadeHooks: CrossfadeHooks<string> = {
 
 const controller = new CrossfadeController(crossfadeHooks)
 
+// ---------------------------------------------------------------------------
+// بازیابی جریان (Stream Recovery) — تصمیم با StreamRecovery، اجرا این‌جا
+// ---------------------------------------------------------------------------
+
+const streamRecovery = new StreamRecovery()
+let recoveryBusy = false
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** از `loadedmetadata` رد شدن و برگشتن به جایگاه — برای ادامهٔ پس از ریکاوری */
+function resumeAt(el: HTMLAudioElement, seconds: number): void {
+  if (!Number.isFinite(seconds) || seconds <= 0.5) return
+  const seek = () => {
+    try {
+      el.currentTime = seconds
+    } catch {
+      // متادیتا هنوز آماده نیست یا seek نامعتبر — از ابتدا می‌شروع می‌شود
+    }
+  }
+  if (el.readyState >= 1) seek()
+  else el.addEventListener('loadedmetadata', seek, { once: true })
+}
+
+async function giveUp(): Promise<void> {
+  handlers?.onError()
+  handlers?.onRecoveryGiveUp?.()
+}
+
+/**
+ * اجرای اقدامِ تصمیم‌گرفته‌شدهٔ بازیابی. همیشه روی دکِ *فعالِ لحظه* کار می‌کند
+ * — اگر بین تصمیم و اجرا ترک عوض شود، کار رها می‌شود (خطای ترکِ قبلی به
+ * ترکِ تازه نمی‌چسبد).
+ */
+async function runRecovery(kind: StreamErrorKind, el: HTMLAudioElement): Promise<void> {
+  const src = el.currentSrc || el.src
+  if (!src) return
+  // خطای ناشناخته (غالباً abort ناشی از load تازه) و decode خراب را تلاش
+  // دوباره نمی‌کنیم — هر دو یا بی‌ضررند یا بی‌فایده
+  const action =
+    kind === 'UNKNOWN' || kind === 'FATAL_DECODE'
+      ? ({ kind: 'give-up' } as const)
+      : streamRecovery.nextAction(kind, src)
+
+  if (recoveryBusy) return
+  recoveryBusy = true
+  try {
+    switch (action.kind) {
+      case 'retry-same': {
+        await delay(action.delayMs)
+        if (el !== active()?.el) return
+        const position = el.currentTime
+        // ستِ مجددِ src، بارگذاری از نو را تضمین می‌کند (ست همان مقدار همیشه
+        // reload نمی‌کند)
+        el.removeAttribute('src')
+        el.load()
+        el.src = src
+        resumeAt(el, position)
+        await el.play().catch(() => {})
+        return
+      }
+      case 'resolve-fresh': {
+        const fresh = (await handlers?.onRecoveryResolve?.()) ?? null
+        if (el !== active()?.el) return
+        if (!fresh) {
+          await giveUp()
+          return
+        }
+        const position = el.currentTime
+        detachHls(el)
+        el.removeAttribute('src')
+        el.load()
+        el.src = fresh
+        resumeAt(el, position)
+        await el.play().catch(() => {})
+        return
+      }
+      case 'hls-fallback': {
+        if (el !== active()?.el) return
+        const position = el.currentTime
+        const ok = await attachHls(el, src, () => {
+          // خطای fatal خودِ hls — دیگر تلاشی نمانده
+          void giveUp()
+        })
+        if (!ok) {
+          await giveUp()
+          return
+        }
+        resumeAt(el, position)
+        await el.play().catch(() => {})
+        return
+      }
+      case 'give-up':
+        await giveUp()
+        return
+    }
+  } finally {
+    recoveryBusy = false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Watchdog گیرِ بی‌خطا — پخش «زنده» است ولی currentTime جلو نمی‌رود
+// ---------------------------------------------------------------------------
+
+const WATCHDOG_STEP_MS = 1000
+/** ۴ ثانیه بدون پیشرفت → BUFFERING (چرخان UI) */
+const STALL_REPORT_MS = 4000
+/** ۱۰ ثانیه بدون پیشرفت → خط لولهٔ بازیابی با فرضِ مشکل شبکه */
+const STALL_RECOVER_MS = 10_000
+
+let watchdogTimer: ReturnType<typeof setInterval> | null = null
+let lastWatchPosition = -1
+let stallSince: number | null = null
+
+function startWatchdog(): void {
+  if (watchdogTimer !== null || typeof window === 'undefined') return
+  watchdogTimer = setInterval(() => {
+    const deck = active()
+    if (!deck || !deck.el.src || deck.el.paused || isTransitioning()) {
+      stallSince = null
+      return
+    }
+    const position = deck.el.currentTime
+    if (position !== lastWatchPosition) {
+      lastWatchPosition = position
+      stallSince = null
+      return
+    }
+    if (stallSince === null) {
+      stallSince = Date.now()
+      return
+    }
+    const stalledFor = Date.now() - stallSince
+    if (stalledFor > STALL_RECOVER_MS && !recoveryBusy) {
+      stallSince = null
+      console.warn(`[audioEngine] stalled ${Math.round(STALL_RECOVER_MS / 1000)}s on active deck — recovery`)
+      statePublisher?.patch({ status: 'BUFFERING', isBuffering: true })
+      void runRecovery('NETWORK', deck.el)
+    } else if (stalledFor > STALL_REPORT_MS) {
+      statePublisher?.patch({ status: 'BUFFERING', isBuffering: true })
+    }
+  }, WATCHDOG_STEP_MS)
+}
+
 /**
  * گرافِ Web Audio. یک بار ساخته می‌شود و اگر مرورگر نداشته باشدش، null
  * می‌ماند و بقیه‌ی کد بدون آن کار می‌کند.
@@ -529,6 +686,8 @@ function attach(deck: Deck): void {
   })
   el.addEventListener('playing', () => {
     if (el === active()?.el) {
+      // پخش واقعاً وصل شد — بودجه‌های بازیابی از نو
+      streamRecovery.markRecovered()
       statePublisher?.patch({ status: 'READY', isPlaying: true, isBuffering: false })
       handlers?.onBuffering?.(false)
       handlers?.onPlaying?.()
@@ -624,10 +783,9 @@ function attach(deck: Deck): void {
         isPlaying: false,
         errorMessage: err?.message ?? 'media error',
       })
-      // فاز ۱۵: اگر منبع HLS باشد (native پخش نمی‌کند)، یک‌بار fallback به hls.js
-      // امتحان می‌شود؛ ناموفق بودن آن خطای عادی playback را به بالا می‌دهد.
-      // (فاز ۳: این hook جایش را به خط لولهٔ StreamRecovery می‌دهد)
-      void maybeHlsFallback(el, () => handlers?.onError())
+      // خط لولهٔ بازیابی: retry → resolve تازه از استور → hls.js → تسلیم.
+      // hls.js دیگر hook جداگانه نیست؛ یکی از پله‌های همین خط لوله است.
+      void runRecovery(classifyMediaError(err), el)
     }
   })
 }
@@ -644,6 +802,7 @@ function ensure(): Deck {
       },
     )
     controller.start()
+    startWatchdog()
 
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
@@ -850,6 +1009,7 @@ export const engine = {
     // یک بارگذاریِ صریح، هر ترنزیشن در جریان را bail می‌کند؛ onBail دک‌های
     // غیرفعال را تمیز می‌کند و دک فعال (همین که می‌خواهیم لود کنیم) دست‌نخورده می‌ماند
     controller.notifyInterruption()
+    streamRecovery.reset()
     if (deck.fade) deck.fade.gain.value = 1
 
     // اگر دکِ غیرفعال قبلاً با همین منبع پرلود شده بود، پاک شود تا تکرار/اکو نشود

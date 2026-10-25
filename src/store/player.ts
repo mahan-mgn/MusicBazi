@@ -18,6 +18,7 @@ import {
   onNativePositionChanged,
 } from '../lib/native'
 import { isNativeApp } from '../lib/server'
+import { streamUrlFor } from '../lib/stream'
 import { useI18n } from '../lib/i18n'
 import { downloadRadioTrack, findRadioTrack, radioKey } from '../lib/radio'
 import { pickShuffleIndex } from '../lib/shuffle'
@@ -56,6 +57,11 @@ export function jobIdOf(item: PlayItem): string | null {
 }
 
 export type Repeat = 'off' | 'all' | 'one'
+
+export interface ArtistShuffleSession {
+  artistId: string
+  completed?: boolean
+}
 
 const VOLUME_KEY = 'player:volume'
 const RESUME_KEY = 'player:resume'
@@ -110,6 +116,26 @@ export function nextMuteState(
   return { muted: false, volume: remembered > 0 ? remembered : 1 }
 }
 
+/** Remove duplicate tracks by catalog ID, then shuffle the resulting set once. */
+export function shuffleUniquePlayItems(
+  items: PlayItem[],
+  random: () => number = Math.random,
+): PlayItem[] {
+  const seen = new Set<string>()
+  const result = items.filter((item) => {
+    const trackId = item.track?.id?.trim()
+    if (!trackId || seen.has(trackId)) return false
+    seen.add(trackId)
+    return true
+  })
+
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1))
+    ;[result[i], result[j]] = [result[j], result[i]]
+  }
+  return result
+}
+
 interface PlayerState {
   queue: PlayItem[]
   index: number
@@ -121,10 +147,14 @@ interface PlayerState {
   muted: boolean
   repeat: Repeat
   shuffle: boolean
+  /** A finite, pre-shuffled artist queue. Generic repeat, shuffle and radio rules are suspended until it is replaced. */
+  artistShuffleSession: ArtistShuffleSession | null
   /** فقط وقتی shuffle روشن است اثر دارد — ترکِ بعدی را به‌جای تصادفِ محض، با وزنِ نزدیکیِ حس‌وحال انتخاب می‌کند */
   smartShuffle: boolean
   /** فایل قابل پخش نبود — ردیف باید خطا را نشان بدهد، نه سکوت */
   failed: boolean
+  /** صوت در حال دریافت بایت‌های اولیه یا بافرینگ است (Spotify-like loading state) */
+  buffering: boolean
   /** وقتی صف تمام شود، به‌جای توقف از همان هنرمند ادامه بده */
   radio: boolean
   /** رادیو در حال جستجو/دانلودِ ترکِ بعدی است */
@@ -133,6 +163,8 @@ interface PlayerState {
   sleepAt: number | 'track_end' | null
 
   play: (items: PlayItem[], startIndex?: number) => void
+  /** Starts one finite artist shuffle session from unique track IDs. */
+  playArtistShuffle: (items: PlayItem[], artistId: string) => void
   /** به عنوان ترک‌های بعدی صف درج می‌کند تا بلافاصله پس از ترک جاری پخش شوند */
   playNext: (items: PlayItem[]) => void
   /** به صفِ فعلی اضافه می‌کند بدون قطعِ پخش — برای پرشدنِ تدریجیِ پلی‌لیستِ چت‌بات وایب */
@@ -176,6 +208,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
   // کلیدهای (عنوان، هنرمند) که این جلسه‌ی رادیو قبلاً پیشنهاد داده — جلوی
   // تکرار زودهنگام همان چند ترک محبوب هنرمند را می‌گیرد.
   let radioSeen = new Set<string>()
+
+  /*
+   * خطاهای متوالیِ بازیابی‌ناپذیر جریان. موتور هر خطا را خودش تا ته خط لولهٔ
+   * retry/resolve تازه/hls می‌رود؛ وقتی تسلیم شد، اینجا شمرده می‌شود و بعد
+   * از ۲ تسلیمِ پشت‌سرهم، ترکِ بعدی به‌خودی‌خود بالا می‌آید — پخش نمی‌ماند
+   * روی ترکی که منبعش مرده.
+   */
+  let consecutiveRecoveryGiveUps = 0
   const queuePrefetcher = new QueuePrefetcher(async (track, quality) => {
     const ready = await api.prefetchStream?.(track, quality)
     if (ready === false) throw new Error('stream prefetch failed')
@@ -228,8 +268,16 @@ export const usePlayer = create<PlayerState>((set, get) => {
         set({ playing: true, failed: false })
         syncNative(true)
       },
+      onPlaying: () => {
+        set({ playing: true, buffering: false, failed: false })
+        syncNative(true)
+        queuePrefetcher.trigger()
+      },
+      onBuffering: (buffering) => {
+        set({ buffering })
+      },
       onPause: () => {
-        set({ playing: false })
+        set({ playing: false, buffering: false })
         save(true)
         syncNative(true)
       },
@@ -249,7 +297,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
           set({ sleepAt: null })
           return
         }
-        if (get().repeat === 'one') {
+        if (!get().artistShuffleSession && get().repeat === 'one') {
           engine.seek(0)
           engine.play()
           return
@@ -257,12 +305,27 @@ export const usePlayer = create<PlayerState>((set, get) => {
         get().next()
       },
       // فایل ممکن است بین پخش و کلیک پاک شده باشد (پاک‌سازی دیسک یا حذف دستی)
-      onError: () => set({ playing: false, failed: true }),
+      onError: () => set({ playing: false, buffering: false, failed: true }),
+      // بازیابی جریان: آدرس تازه برای همان ترک — با media token تازه
+      onRecoveryResolve: async () => {
+        const item = current()
+        if (!item?.track) return null
+        return streamUrlFor(item.track)
+      },
+      onRecoveryGiveUp: () => {
+        consecutiveRecoveryGiveUps += 1
+        if (consecutiveRecoveryGiveUps >= 2) {
+          consecutiveRecoveryGiveUps = 0
+          useToasts.getState().push(useI18n.getState().t.streamSkipped, 'error')
+          get().next()
+        }
+      },
       onAdvance: () => advanceFromCrossfade(),
     })
 
     const settings = useSettings.getState()
     engine.setCrossfade(settings.crossfade)
+    engine.setEqEnabled(settings.eqEnabled)
     engine.setEq(settings.eq)
     engine.setNormalize(settings.normalize)
     engine.setBoost(settings.boost)
@@ -279,27 +342,32 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (isNativeApp()) {
       onNativePlaybackStateChanged((state) => {
         if (state.status === 'ENDED') {
+          const activeItem = current()
+          if (state.currentTrackId && state.currentTrackId !== activeItem?.id) return
           if (get().sleepAt === 'track_end') {
             get().pause()
             set({ sleepAt: null })
             return
           }
-          if (get().repeat === 'one') {
+          if (!get().artistShuffleSession && get().repeat === 'one') {
             get().seek(0)
             void nativeResume()
             return
           }
           get().next()
         } else if (state.status === 'ERROR') {
-          set({ playing: false, failed: true })
+          set({ playing: false, buffering: false, failed: true })
         } else {
+          const isBuffering = state.status === 'BUFFERING'
           set({
             playing: state.isPlaying,
+            buffering: isBuffering,
             failed: false,
             duration: state.duration > 0 ? state.duration : get().duration,
           })
           if (state.isPlaying) {
             save(true)
+            queuePrefetcher.trigger()
           }
         }
       })
@@ -340,13 +408,14 @@ export const usePlayer = create<PlayerState>((set, get) => {
    */
   function scheduleNext() {
     const state = get()
+    const artistShuffle = Boolean(state.artistShuffleSession)
     if (get().sleepAt === 'track_end') {
       queuePrefetcher.sync([], 0)
       pendingNext = null
       engine.setNext(null)
       return
     }
-    const next = get().repeat === 'one' ? null : nextIndex()
+    const next = !artistShuffle && get().repeat === 'one' ? null : nextIndex()
     // «بعدی» که خودِ ترکِ فعلی است هم همان حالت است: صفِ یک‌تایی با تکرارِ
     // همه، `nextIndex` را به ایندکسِ خودش می‌رساند و کراس‌فید ترک را روی
     // خودش محو می‌کرد — همان پژواکی که تکرارِ تک‌ترک از آن پرهیز می‌کند.
@@ -354,11 +423,12 @@ export const usePlayer = create<PlayerState>((set, get) => {
     pendingNext = target
     const item = target === null ? undefined : get().queue[target]
     queuePrefetcher.sync(
-      state.repeat === 'one' ? [] : state.queue,
+      !artistShuffle && state.repeat === 'one' ? [] : state.queue,
       state.index,
-      state.repeat === 'all',
-      state.shuffle,
+      !artistShuffle && state.repeat === 'all',
+      !artistShuffle && state.shuffle,
       target,
+      state.playing,
     )
     engine.setNext(item?.streamUrl ?? null, item?.gainDb ?? 0)
   }
@@ -415,17 +485,29 @@ export const usePlayer = create<PlayerState>((set, get) => {
   /** ترک فعلی را روی موتور می‌نشاند. `at` برای «ادامه از جایی که بودی» است. */
   function load(item: PlayItem, { autoplay = true, at = 0 } = {}) {
     setup()
+    // ترک تازه — شمارش تسلیم‌های متوالی بازیابی از نو
+    consecutiveRecoveryGiveUps = 0
 
     // بدون این، آدرسِ نبوده به رشته‌ی «undefined» تبدیل می‌شود، مرورگر آن را
     // یک مسیر نسبی می‌فهمد و ۴۰۴ می‌گیرد — و خطا شبیه «فایل پاک شده» درمی‌آید
     // درحالی‌که فایل سر جایش است و فقط بک‌اند این فیلد را نفرستاده.
     if (!item.streamUrl) {
-      set({ playing: false, failed: true })
+      set({ playing: false, buffering: false, failed: true })
       scheduleNext()
       return
     }
 
-    set({ position: at, duration: item.track.durationMs / 1000, failed: false })
+    // در شروع اتصال و لود، موقتاً prefetch را متوقف می‌کنیم تا پهنای‌باند
+    // فقط صرف شروع سریع همین آهنگ شود
+    queuePrefetcher.disarm()
+
+    set({
+      position: at,
+      duration: item.track.durationMs / 1000,
+      failed: false,
+      buffering: autoplay,
+      ...(autoplay ? { playing: false } : {}),
+    })
     mediaSession(item)
 
     // autoplay خاموش یعنی ترک فقط جایگزینِ ردیفِ حذف‌شده شده و کسی پخشش
@@ -454,7 +536,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     if (useNative) {
       void nativePlay({
         url: item.streamUrl,
-        gainDb: item.gainDb,
+        gainDb: useSettings.getState().normalize ? item.gainDb : 0,
         sourceId: item.id,
         title: item.track.title,
         artist: item.track.artist,
@@ -532,7 +614,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
   /** ایندکس بعدی با درنظرگرفتن شافل و تکرار، یا null اگر صف تمام شده */
   function nextIndex(): number | null {
-    const { queue, index, shuffle, smartShuffle, repeat } = get()
+    const { queue, index, shuffle, smartShuffle, repeat, artistShuffleSession } = get()
+    // Artist shuffle has already randomized its finite queue. Advancing linearly
+    // prevents revisits, and deliberately ignores global repeat and radio rules.
+    if (artistShuffleSession) return index + 1 < queue.length ? index + 1 : null
     if (queue.length <= 1) return repeat === 'all' ? index : null
     if (shuffle) {
       if (smartShuffle) return pickShuffleIndex(queue, index)
@@ -545,9 +630,24 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
   /** رفتار پایانِ صفِ معمولی — همان چیزی که قبل از رادیو در انتهای صف اتفاق می‌افتاد */
   function stopAtEnd() {
-    engine.pause()
-    engine.seek(0)
-    set({ position: 0, radioLoading: false })
+    const useNative = isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off'
+    if (useNative) {
+      void nativePause()
+        .then(() => nativeSeek(0))
+        .catch(() => {})
+    } else {
+      engine.pause()
+      engine.seek(0)
+    }
+    const session = get().artistShuffleSession
+    set({
+      playing: false,
+      buffering: false,
+      position: 0,
+      radioLoading: false,
+      ...(session ? { artistShuffleSession: { ...session, completed: true } } : {}),
+    })
+    syncNative(true)
   }
 
   /**
@@ -605,8 +705,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
     muted: false,
     repeat: 'off',
     shuffle: false,
+    artistShuffleSession: null,
     smartShuffle: false,
     failed: false,
+    buffering: false,
     radio: false,
     radioLoading: false,
     sleepAt: null,
@@ -621,7 +723,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       historyStack = []
       radioToken++
       radioSeen = new Set(items.map((i) => radioKey(i.track)))
-      set({ queue: items, index, radioLoading: false })
+      set({ queue: items, index, radioLoading: false, artistShuffleSession: null })
       // کلیک دوباره روی همان ترکی که در حال پخش است یعنی «مکث»، نه «از اول»
       if (same && get().playing) {
         engine.pause()
@@ -630,6 +732,26 @@ export const usePlayer = create<PlayerState>((set, get) => {
       }
       // بعد از رفرش، همان ترک از همان‌جا ادامه می‌دهد
       load(item, { at: same ? get().position : 0 })
+    },
+
+    playArtistShuffle: (items, artistId) => {
+      const queue = shuffleUniquePlayItems(items)
+      if (!queue.length) return
+
+      historyStack = []
+      pendingNext = null
+      radioToken++
+      radioSeen = new Set(queue.map((item) => radioKey(item.track)))
+      set({
+        queue,
+        index: 0,
+        playing: false,
+        position: 0,
+        radioLoading: false,
+        shuffle: true,
+        artistShuffleSession: { artistId },
+      })
+      load(queue[0])
     },
 
     playNext: (items) => {
@@ -650,7 +772,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
         ...unique,
         ...queue.slice(insertIndex),
       ]
-      set({ queue: nextQueue })
+      set({ queue: nextQueue, artistShuffleSession: null })
       scheduleNext()
     },
 
@@ -661,7 +783,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       const unique = items.filter((i) => !existingIds.has(i.id))
       if (!unique.length) return
 
-      set({ queue: [...queue, ...unique] })
+      set({ queue: [...queue, ...unique], artistShuffleSession: null })
       // صفِ بلندتر یعنی «بعدی»ِ تازه — بدون این، کراس‌فیدِ انتهای ترکِ فعلی
       // هنوز فکر می‌کند چیزی بعدش نیست
       scheduleNext()
@@ -680,7 +802,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       historyStack = []
       radioToken++
       radioSeen = new Set(nextItems.map((item) => radioKey(item.track)))
-      set({ queue: nextItems, index, radioLoading: false })
+      set({ queue: nextItems, index, radioLoading: false, artistShuffleSession: null })
       scheduleNext()
       save(true)
     },
@@ -716,7 +838,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     pause: () => {
       if (isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off') {
         void nativePause()
-        set({ playing: false })
+        set({ playing: false, buffering: false })
       } else {
         engine.pause()
       }
@@ -725,7 +847,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
     next: () => {
       const target = nextIndex()
       if (target === null) {
-        if (get().radio) {
+        if (!get().artistShuffleSession && get().radio) {
           void extendRadio()
           return
         }
@@ -918,11 +1040,13 @@ export const usePlayer = create<PlayerState>((set, get) => {
         queue: [],
         index: 0,
         playing: false,
+        buffering: false,
         position: 0,
         duration: 0,
         failed: false,
         radioLoading: false,
         sleepAt: null,
+        artistShuffleSession: null,
       })
     },
   }
