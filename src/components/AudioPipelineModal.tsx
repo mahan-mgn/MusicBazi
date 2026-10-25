@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { getNativeAudioDiagnostics, type AudioDiagnostics } from '../lib/native'
 import { isNativeApp } from '../lib/server'
 import { useI18n } from '../lib/i18n'
+import { matchingPreset } from '../lib/audio/dsp/EqPresets'
 import { useSettings } from '../store/settings'
 
 interface Props {
@@ -17,7 +18,7 @@ interface Props {
 
 export default function AudioPipelineModal({ open, onClose }: Props) {
   const { lang } = useI18n()
-  const { spatialAudio, eq, normalize, setSpatialAudio } = useSettings()
+  const { spatialAudio, eqBands, eqEnabled, normalize, setSpatialAudio, setEqEnabled } = useSettings()
   const [diag, setDiag] = useState<AudioDiagnostics | null>(null)
 
   useEffect(() => {
@@ -40,7 +41,7 @@ export default function AudioPipelineModal({ open, onClose }: Props) {
   if (!open) return null
 
   const isFa = lang === 'fa'
-  const isBitPerfect = diag?.outputExact && eq === 'off' && !spatialAudio
+  const isBitPerfect = diag?.outputExact && (!eqEnabled || matchingPreset(eqBands) === 'FLAT') && !spatialAudio
 
   return (
     <div
@@ -118,11 +119,18 @@ export default function AudioPipelineModal({ open, onClose }: Props) {
               {isFa ? 'زنجیره پردازش (Float32 DSP Chain)' : 'DSP Chain'}
             </span>
             <div className="mt-1 space-y-1">
-              <div className="flex justify-between text-muted-2">
+              <div className="flex items-center justify-between text-muted-2">
                 <span>{isFa ? 'اکولایزر (Parametric SVF)' : 'Equalizer'}</span>
-                <span className={`font-mono ${eq !== 'off' ? 'text-accent font-medium' : 'text-zinc-500'}`}>
-                  {eq !== 'off' ? `ON (${eq})` : 'BYPASS'}
-                </span>
+                <button
+                  onClick={() => setEqEnabled(!eqEnabled)}
+                  className={`text-[11px] font-mono px-2 py-0.5 rounded border transition ${
+                    eqEnabled
+                      ? 'border-accent bg-accent/20 text-accent'
+                      : 'border-line text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {eqEnabled ? `ON (${matchingPreset(eqBands)})` : 'BYPASS'}
+                </button>
               </div>
               <div className="flex items-center justify-between text-muted-2">
                 <span>{isFa ? 'صدای فراگیر (Spatial Audio)' : 'Spatial Audio'}</span>

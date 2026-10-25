@@ -325,8 +325,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     const settings = useSettings.getState()
     engine.setCrossfade(settings.crossfade)
-    engine.setEqEnabled(settings.eqEnabled)
-    engine.setEq(settings.eq)
+    engine.setEq7(
+      { bandsDb: settings.eqBands, tone: settings.tone, balance: settings.balance },
+      settings.eqEnabled,
+    )
     engine.setNormalize(settings.normalize)
     engine.setBoost(settings.boost)
     engine.setVolume(get().volume)
@@ -430,7 +432,7 @@ export const usePlayer = create<PlayerState>((set, get) => {
       target,
       state.playing,
     )
-    engine.setNext(item?.streamUrl ?? null, item?.gainDb ?? 0)
+    engine.setNext(item?.streamUrl ?? null, item?.gainDb ?? 0, item?.id)
   }
 
   /**
@@ -545,10 +547,10 @@ export const usePlayer = create<PlayerState>((set, get) => {
         duration: item.track.durationMs / 1000,
       }).catch(() => {
         // Fallback to web engine if native playback encounters startup failure
-        engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, at, autoplay })
+        engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, trackId: item.id, at, autoplay })
       })
     } else {
-      engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, at, autoplay })
+      engine.load(item.streamUrl, { gainDb: item.gainDb ?? 0, trackId: item.id, at, autoplay })
     }
 
     scheduleNext()
