@@ -38,6 +38,7 @@ import {
   type CrossfadeActiveInfo,
   type CrossfadeHooks,
 } from './audio/CrossfadeController'
+import { combineCurves, flatCurve, manualCurve, toneCurve, EQ_SLOTS, type EqCurve } from './audio/dsp/EqCurve'
 
 /** فرکانس مرکزیِ باندها — پنج‌تایی استانداردِ اکولایزرهای مصرفی */
 export const EQ_BANDS = [60, 230, 910, 3600, 14000]
@@ -78,16 +79,27 @@ export interface EngineHandlers {
   onAdvance: () => void
 }
 
+interface DeckDsp {
+  source: MediaElementAudioSourceNode
+  spatial: AudioWorkletNode | null
+  eq: AudioWorkletNode | null
+  loudness: AudioWorkletNode | null
+}
+
 interface Deck {
   el: HTMLAudioElement
   norm: GainNode | null
   fade: GainNode | null
+  /** نودهای ورک‌لت/منبع این دک — بعد از بوتِ async گراف پر می‌شود */
+  dsp: DeckDsp | null
   /**
    * گِینِ هم‌ترازیِ همین لحظه‌ی این دک — نه ترکِ بعدی. برای این است که اگر
    * تقویتِ سراسری وسطِ کراس‌فید عوض شد، دکی که دارد محو می‌شود هم همان‌قدر
    * تقویت را داشته باشد، نه فقط دکِ فعال.
    */
   gainDb: number
+  /** شناسهٔ ترکِ روی این دک — کلیدِ گینِ هم‌ترازی در پردازندهٔ لودنس */
+  mediaId: string | null
   /**
    * پرشِ معلق تا رسیدنِ متادیتا («ادامه از جایی که بودی»). نگه داشته می‌شود
    * تا بارگذاریِ بعدی بتواند لغوش کند — وگرنه اگر کاربر قبل از آمدنِ متادیتا
@@ -99,6 +111,8 @@ interface Deck {
 interface LoadOptions {
   /** هم‌ترازیِ بلندی برای همین فایل (دسی‌بل) */
   gainDb?: number
+  /** شناسهٔ ترک — کلیدِ گینِ لودنس؛ برای «ادامه از جایی که بودی» و کراس‌فید */
+  trackId?: string
   /** ثانیه‌ای که باید از آنجا شروع شود — «ادامه از جایی که بودی» */
   at?: number
   autoplay?: boolean
@@ -106,9 +120,12 @@ interface LoadOptions {
 
 let handlers: EngineHandlers | null = null
 let ctx: AudioContext | null = null
-let eqNodes: BiquadFilterNode[] = []
+/** فالبک Biquad — ۱۰ نود مطابق اسلات‌های چیدمان (شکل/frequency/Q هر اسلات) */
+let eqSlotNodes: BiquadFilterNode[] = []
 let master: GainNode | null = null
 let limiter: DynamicsCompressorNode | null = null
+/** فقط مسیر ورک‌لت: لیمیترِ لودنس جای DynamicsCompressor را می‌گیرد */
+let workletPath = false
 /**
  * تحلیلگرِ طیف — برای «هاله‌ی هم‌رhythm با صدا» در پخش‌کننده.
  *
@@ -123,8 +140,12 @@ let activeIndex = 0
 let statePublisher: EngineStatePublisher | null = null
 
 let crossfadeSeconds = 0
-let eqPreset: EqPreset = 'off'
 let eqEnabled = false
+/** تنظیمات اکولایزر ۷ بانده + پد تون + balance — API تازهٔ موتور */
+let eqBands7: number[] = [0, 0, 0, 0, 0, 0, 0]
+let eqTone: { x: number; y: number } = { x: 0, y: 0 }
+let eqBalance = 0
+let spatialOn = false
 let normalizeOn = true
 /**
  * تقویتِ سراسریِ گراف، به دسی‌بل.
@@ -255,6 +276,13 @@ const crossfadeHooks: CrossfadeHooks<string> = {
 
   onBlendHeadroom(headroom: number): void {
     blendHeadroomValue = headroom
+    // هدرروم به‌صورت trim به پردازندهٔ لودنسِ هر دو دک می‌رسد (گِلاید ۴۰ms
+    // سمت پردازنده است — نوشتن هر ۳۰ms اینجا فقط target را عوض می‌کند)
+    if (workletPath) {
+      for (const deck of decks ?? []) {
+        deck.dsp?.loudness?.port.postMessage({ type: 'trim', value: headroom })
+      }
+    }
   },
 
   onBail(outgoing: string | null, incoming: string | null): void {
@@ -283,63 +311,33 @@ const controller = new CrossfadeController(crossfadeHooks)
  * گرافِ Web Audio. یک بار ساخته می‌شود و اگر مرورگر نداشته باشدش، null
  * می‌ماند و بقیه‌ی کد بدون آن کار می‌کند.
  */
-function buildGraph(): void {
-  if (ctx !== null || typeof window === 'undefined') return
-  const Ctor = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (!Ctor) return
+let bootStarted = false
+let workletModuleReady: Promise<boolean> | null = null
 
-  try {
-    ctx = new Ctor()
-    master = ctx.createGain()
-    eqNodes = EQ_BANDS.map((frequency) => {
-      const filter = ctx!.createBiquadFilter()
-      filter.type = 'peaking'
-      filter.frequency.value = frequency
-      filter.Q.value = 1
-      filter.gain.value = 0
-      return filter
-    })
-    // باندها پشت‌سرهم، بعد مستر، بعد لیمیتر، بعد بلندگو
-    eqNodes.reduce((prev, node) => {
-      prev.connect(node)
-      return node
-    })
-    eqNodes[eqNodes.length - 1].connect(master)
-
-    // لیمیتر شفاف با زانوی نرم (soft knee): جلوی دیستورشن دیجیتال را می‌گیرد
-    // بدون آنکه بیس‌ها را دچار شکستگی موج (waveshaping) یا خش در هدفون بلوتوث کند
-    try {
-      limiter = ctx.createDynamicsCompressor()
-      limiter.threshold.value = -0.5
-      limiter.knee.value = 12
-      limiter.ratio.value = 3
-      limiter.attack.value = 0.01
-      limiter.release.value = 0.25
-      master.connect(limiter)
-    } catch {
-      limiter = null
+/**
+ * بارگذاری ماژول ورک‌لت — یک‌بار، و نتیجه‌اش برای همیشه کش می‌شود.
+ * شکستش (مرورگر قدیمی، CSP، offline) یعنی فالبک Biquad؛ صدا قطع نمی‌شود.
+ */
+function loadWorkletModule(context: AudioContext): Promise<boolean> {
+  if (!workletModuleReady) {
+    if (!context.audioWorklet) {
+      workletModuleReady = Promise.resolve(false)
+    } else {
+      const url = new URL('./audio/dsp/worklets/dsp-worklet.js', import.meta.url)
+      workletModuleReady = context.audioWorklet
+        .addModule(url)
+        .then(() => true)
+        .catch((err: unknown) => {
+          console.warn('[audioEngine] AudioWorklet unavailable — Biquad fallback:', err)
+          return false
+        })
     }
-
-    analyser = ctx.createAnalyser()
-    analyser.fftSize = 256
-    analyser.smoothingTimeConstant = 0.82
-    spectrum = new Uint8Array(analyser.frequencyBinCount)
-
-    const outputNode: AudioNode = limiter ?? master
-    // outputNode → analyser → destination: طیف را می‌خواند و سیگنال را رد می‌کند
-    outputNode.connect(analyser)
-    analyser.connect(ctx.destination)
-  } catch {
-    ctx = null
-    master = null
-    limiter = null
-    eqNodes = []
-    analyser = null
-    spectrum = null
   }
+  return workletModuleReady
 }
 
-function buildDeck(): Deck {
+/** دک بدون گراف — فقط المنت؛ گراف بعداً به آن سیم‌کشی می‌شود */
+function makeDeck(): Deck {
   const el = new Audio()
   /*
    * لازمه‌ی گرافِ Web Audio وقتی صدا از مبدأ دیگری می‌آید (اپ اندروید، که
@@ -354,24 +352,171 @@ function buildDeck(): Deck {
   el.volume = volume
   el.muted = muted
 
-  const deck: Deck = { el, norm: null, fade: null, gainDb: 0, pendingSeek: null }
+  return { el, norm: null, fade: null, dsp: null, gainDb: 0, mediaId: null, pendingSeek: null }
+}
 
-  if (ctx && eqNodes.length) {
+/**
+ * بوتِ گراف — async چون ابتدا باید معلوم شود AudioWorklet هست یا نه.
+ *
+ * تا وقتی بوت تمام نشده، دک‌ها مستقیم از `<audio>` صدا می‌دهند (بدون EQ و
+ * هم‌ترازی) و همهٔ تنظیماتی که تا این لحظه ست شده‌اند، بعد از اتصال دوباره
+ * اعمال می‌شوند. `createMediaElementSource` یک‌بار به‌ازای هر المنت جواب
+ * می‌دهد، پس تصمیمِ مسیر (ورک‌لت/فالبک) باید قبل از اتصال گرفته شود —
+ * برای همین بوت یک‌باره است و هرگز عقب‌گرد ندارد.
+ */
+function bootGraph(): void {
+  if (bootStarted || typeof window === 'undefined') return
+  bootStarted = true
+
+  const Ctor = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!Ctor) return
+
+  void (async () => {
     try {
-      const source = ctx.createMediaElementSource(el)
-      deck.norm = ctx.createGain()
-      deck.fade = ctx.createGain()
-      source.connect(deck.norm)
-      deck.norm.connect(deck.fade)
-      deck.fade.connect(eqNodes[0])
+      ctx = new Ctor()
     } catch {
-      // createMediaElementSource فقط یک بار به‌ازای هر المنت جواب می‌دهد؛
-      // شکستش یعنی این دک بدون گراف کار می‌کند، نه اینکه پخش نشود
-      deck.norm = null
-      deck.fade = null
+      ctx = null
+      return
     }
+
+    try {
+      const useWorklet = await loadWorkletModule(ctx)
+      workletPath = useWorklet
+
+      master = ctx.createGain()
+      // تقویت سراسری (boost) روی نود مستر — مشترک بین دو دک، مثل اپ اندروید
+      master.gain.value = gainFromDb(boostDb)
+
+      if (!useWorklet) {
+        // فالبک: ۱۰ نود Biquad با همان چیدمان اسلات‌ها (شکل/فرکانس/Q) —
+        // پاسخ بزرگی نزدیک به SVF، بدون هیچ ورک‌لتی
+        eqSlotNodes = EQ_SLOTS.map((slot) => {
+          const filter = ctx!.createBiquadFilter()
+          filter.type =
+            slot.kind === 'BELL' ? 'peaking' : slot.kind === 'LOW_SHELF' ? 'lowshelf' : 'highshelf'
+          filter.frequency.value = slot.frequencyHz
+          filter.Q.value = 0.707
+          filter.gain.value = 0
+          return filter
+        })
+        eqSlotNodes.reduce((prev, node) => {
+          prev.connect(node)
+          return node
+        })
+        eqSlotNodes[eqSlotNodes.length - 1].connect(master)
+        // لیمیتر شفاف با زانوی نرم فقط در فالبک — در مسیر ورک‌لت، لیمیترِ
+        // پردازندهٔ لودنس (سقف ۰٫۹۸۵) همین نقش را با دقت بیشتر انجام می‌دهد
+        try {
+          limiter = ctx.createDynamicsCompressor()
+          limiter.threshold.value = -0.5
+          limiter.knee.value = 12
+          limiter.ratio.value = 3
+          limiter.attack.value = 0.01
+          limiter.release.value = 0.25
+          master.connect(limiter)
+        } catch {
+          limiter = null
+        }
+      }
+
+      analyser = ctx.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.82
+      spectrum = new Uint8Array(analyser.frequencyBinCount)
+
+      const outputNode: AudioNode = limiter ?? master
+      // outputNode → analyser → destination: طیف را می‌خواند و سیگنال را رد می‌کند
+      outputNode.connect(analyser)
+      analyser.connect(ctx.destination)
+
+      for (const deck of decks ?? []) connectDeck(deck, useWorklet)
+
+      // تنظیماتی که قبل از بوت ست شده‌اند — الان به نودها می‌رسند
+      applyEq()
+      decks?.forEach((deck) => applyNormalize(deck, deck.gainDb))
+    } catch (err) {
+      console.warn('[audioEngine] graph boot failed — plain <audio> playback:', err)
+      ctx = null
+      master = null
+      limiter = null
+      eqSlotNodes = []
+      analyser = null
+      spectrum = null
+    }
+  })()
+}
+
+function connectDeck(deck: Deck, useWorklet: boolean): void {
+  if (!ctx || !master) return
+  let source: MediaElementAudioSourceNode
+  try {
+    source = ctx.createMediaElementSource(deck.el)
+  } catch {
+    // createMediaElementSource فقط یک بار به‌ازای هر المنت جواب می‌دهد؛
+    // شکستش یعنی این دک بدون گراف کار می‌کند، نه اینکه پخش نشود
+    deck.norm = null
+    deck.fade = null
+    deck.dsp = null
+    return
   }
-  return deck
+
+  const norm = ctx.createGain()
+  const fade = ctx.createGain()
+  deck.norm = norm
+  deck.fade = fade
+
+  if (!useWorklet) {
+    deck.dsp = { source, spatial: null, eq: null, loudness: null }
+    source.connect(norm)
+    norm.connect(fade)
+    fade.connect(eqSlotNodes[0])
+    return
+  }
+
+  // مسیر ورک‌لت — ترتیب زنجیره مطابق DspChain.kt اندروید:
+  //   Spatial → EQ → Transition(fade) → Loudness → master
+  const workletOptions: AudioWorkletNodeOptions = {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [2],
+    channelCount: 2,
+    channelCountMode: 'explicit',
+    channelInterpretation: 'speakers',
+  }
+  let spatial: AudioWorkletNode | null = null
+  let eq: AudioWorkletNode | null = null
+  let loudness: AudioWorkletNode | null = null
+  try {
+    spatial = new AudioWorkletNode(ctx, 'mb-spatial', workletOptions)
+  } catch {
+    spatial = null
+  }
+  try {
+    eq = new AudioWorkletNode(ctx, 'mb-equalizer', workletOptions)
+  } catch {
+    eq = null
+  }
+  try {
+    loudness = new AudioWorkletNode(ctx, 'mb-loudness', workletOptions)
+  } catch {
+    loudness = null
+  }
+
+  if (spatial && eq && loudness) {
+    deck.dsp = { source, spatial, eq, loudness }
+    source.connect(norm)
+    norm.connect(spatial)
+    spatial.connect(eq)
+    eq.connect(fade)
+    fade.connect(loudness)
+    loudness.connect(master)
+  } else {
+    // ورک‌لت ناقص ساخت — گراف ساده ولی زنده؛ صدا هرگز قطع نمی‌شود
+    deck.dsp = { source, spatial: null, eq: null, loudness: null }
+    source.connect(norm)
+    norm.connect(fade)
+    fade.connect(master)
+  }
 }
 
 function attach(deck: Deck): void {
@@ -489,10 +634,8 @@ function attach(deck: Deck): void {
 
 function ensure(): Deck {
   if (!decks) {
-    buildGraph()
-    decks = [buildDeck(), buildDeck()]
+    decks = [makeDeck(), makeDeck()]
     decks.forEach(attach)
-    applyEq()
     statePublisher = new EngineStatePublisher(
       () => Math.round((active()?.el.currentTime ?? 0) * 1000),
       () => {
@@ -511,22 +654,84 @@ function ensure(): Deck {
       })
     }
   }
+  bootGraph()
   return decks[activeIndex]
 }
 
+/** منحنی ترکیبی: ۷ باند دستی + پد تون، با preamp محاسبه‌شده */
+function combinedEqCurve(): EqCurve {
+  return combineCurves(manualCurve(eqBands7), toneCurve(eqTone.x, eqTone.y, false))
+}
+
 function applyEq(): void {
-  const values = eqEnabled ? (EQ_PRESETS[eqPreset] ?? EQ_PRESETS.off) : EQ_PRESETS.off
-  eqNodes.forEach((node, i) => {
-    node.gain.value = values[i] ?? 0
+  const curve = eqEnabled ? combinedEqCurve() : flatCurve()
+  if (workletPath) {
+    for (const deck of decks ?? []) {
+      deck.dsp?.eq?.port.postMessage({
+        type: 'eq',
+        curve: { gainsDb: Array.from(curve.gainsDb), qs: Array.from(curve.qs), preampDb: curve.preampDb },
+        balance: eqBalance,
+      })
+    }
+    return
+  }
+  // فالبک Biquad — همان منحنی روی نودهای هم‌اسلات
+  eqSlotNodes.forEach((node, i) => {
+    node.gain.value = curve.gainsDb[i] ?? 0
+    node.Q.value = curve.qs[i] ?? 0.707
   })
 }
 
+/**
+ * نگاشتِ گذرا: پری‌ست قدیمی ۵ بانده (۶۰/۲۳۰/۹۱۰/۳۶۰۰/۱۴۰۰۰) به نزدیک‌ترین
+ * باندهای چیدمان ۷تایی (۶۰/۱۵۰/۴۰۰/۱۰۰۰/۲۵۰۰/۶۰۰۰/۱۴۰۰۰). فاز ۴ این را
+ * حذف می‌کند وقتی استور مستقیم باندهای ۷تایی می‌فرستد.
+ */
+const LEGACY_BAND_TO_MANUAL = [0, 1, 3, 4, 6]
+function legacyPresetToBands7(values: readonly number[]): number[] {
+  const bands = [0, 0, 0, 0, 0, 0, 0]
+  values.forEach((value, i) => {
+    const idx = LEGACY_BAND_TO_MANUAL[i]
+    if (idx !== undefined) bands[idx] = value
+  })
+  return bands
+}
+
+/** پیام ترک جاری + گینش به پردازندهٔ لودنسِ یک دک */function pushTrackMessage(deck: Deck): void {
+  if (!workletPath) return
+  const port = deck.dsp?.loudness?.port
+  if (!port || deck.mediaId === null) return
+  const gain = normalizeOn ? gainFromDb(deck.gainDb) : 1
+  port.postMessage({ type: 'gain', mediaId: deck.mediaId, gain })
+  port.postMessage({ type: 'track', mediaId: deck.mediaId })
+}
+
+function pushNormalize(): void {
+  if (!workletPath) return
+  for (const deck of decks ?? []) {
+    deck.dsp?.loudness?.port.postMessage({ type: 'normalize', on: normalizeOn })
+  }
+}
+
+function pushSpatial(): void {
+  if (!workletPath) return
+  for (const deck of decks ?? []) {
+    deck.dsp?.spatial?.port.postMessage({ type: 'spatial', enabled: spatialOn })
+  }
+}
+
 function applyNormalize(deck: Deck | null, gainDb: number, smooth = true): void {
-  if (!deck?.norm) {
-    if (deck) deck.gainDb = gainDb
+  if (!deck) return
+  deck.gainDb = gainDb
+
+  // مسیر ورک‌لت: گین per-track به پردازندهٔ لودنس می‌رود و نودِ norm فقط
+  // شنوندهٔ گراف است (boost هم روی مستر است) — دو جای اعمال یعنی دو برابرِ گین
+  if (workletPath) {
+    pushTrackMessage(deck)
     return
   }
-  deck.gainDb = gainDb
+
+  if (!deck.norm) return
   const norm = normalizeOn ? gainFromDb(gainDb) : 1
   const target = norm * gainFromDb(boostDb)
 
@@ -639,7 +844,7 @@ export const engine = {
     return blendHeadroomValue
   },
 
-  load(src: string, { gainDb = 0, at = 0, autoplay = true }: LoadOptions = {}): void {
+  load(src: string, { gainDb = 0, trackId, at = 0, autoplay = true }: LoadOptions = {}): void {
     const deck = ensure()
 
     // یک بارگذاریِ صریح، هر ترنزیشن در جریان را bail می‌کند؛ onBail دک‌های
@@ -654,8 +859,10 @@ export const engine = {
       detachHls(other.el)
       other.el.removeAttribute('src')
       other.el.preload = 'metadata'
+      other.mediaId = null
     }
 
+    deck.mediaId = trackId ?? null
     applyNormalize(deck, gainDb)
     cancelPendingSeek(deck)
     detachHls(deck.el) // منبع تازه native-first شروع می‌شود (فاز ۱۵)
@@ -714,7 +921,7 @@ export const engine = {
   },
 
   /** ترکی که کراس‌فید یا سوییچ بدون‌وقفه باید به آن برود؛ null یعنی ترکی نیست */
-  setNext(src: string | null, gainDb = 0): void {
+  setNext(src: string | null, gainDb = 0, trackId?: string): void {
     nextSource = src ? { src, gainDb } : null
     if (!decks) return
     if (!src) {
@@ -726,6 +933,7 @@ export const engine = {
         detachHls(other.el)
         other.el.removeAttribute('src')
         other.el.preload = 'metadata'
+        other.mediaId = null
       }
       return
     }
@@ -740,6 +948,7 @@ export const engine = {
       detachHls(other.el)
       other.el.preload = 'auto'
       other.el.src = src
+      other.mediaId = trackId ?? null
       applyNormalize(other, gainDb)
       if (other.fade) other.fade.gain.value = 1
     }
@@ -751,8 +960,13 @@ export const engine = {
     if (crossfadeSeconds < MIN_CROSSFADE_SECONDS) controller.notifyInterruption()
   },
 
+  /**
+   * API قدیمی پری‌ست ۵ بانده — تا مهاجرتِ استور تنظیمات (فاز ۴) حفظ شده.
+   * باندهای قدیمی (۶۰/۲۳۰/۹۱۰/۳۶۰۰/۱۴۰۰۰) به نزدیک‌ترین باندهای چیدمان
+   * ۷تایی تخت می‌شوند؛ بعد از فاز ۴ همه‌چیز مستقیم باندهای ۷تایی می‌فرستد.
+   */
   setEq(preset: EqPreset): void {
-    eqPreset = preset
+    eqBands7 = legacyPresetToBands7(EQ_PRESETS[preset] ?? EQ_PRESETS.off)
     applyEq()
   },
 
@@ -761,18 +975,49 @@ export const engine = {
     applyEq()
   },
 
+  /**
+   * API تازه — اکولایزر دقیق اندروید: ۷ باند دستی + پد تون + balance.
+   * روی مسیر ورک‌لت همان SVF ده‌اسلاتی می‌شود؛ روی فالبک Biquad هم‌اسلات.
+   */
+  setEq7(params: { bandsDb: number[]; tone?: { x: number; y: number }; balance?: number }, enabled: boolean): void {
+    eqBands7 = params.bandsDb.slice(0, 7)
+    if (params.tone) eqTone = { ...params.tone }
+    if (params.balance !== undefined) eqBalance = Math.max(-1, Math.min(1, params.balance))
+    eqEnabled = enabled
+    applyEq()
+  },
+
+  /** فضاسازی روی وب — پورت SpatialAudioProcessor (تا حالا فقط به نیتیو می‌رفت) */
+  setSpatialAudio(on: boolean): void {
+    spatialOn = on
+    pushSpatial()
+  },
+
   setNormalize(on: boolean): void {
     normalizeOn = on
+    pushNormalize()
     decks?.forEach((deck) => applyNormalize(deck, deck.gainDb))
   },
 
   /**
-   * تقویتِ سراسریِ گراف به دسی‌بل. وسطِ پخش هم اثر می‌کند: هر دک گِینِ خودش
-   * را از نو از همین تابع می‌گیرد — دکِ فعال و دکی که وسطِ کراس‌فید دارد
-   * محو می‌شود، هر دو.
+   * تقویتِ سراسریِ گراف به دسی‌بل. وسطِ پخش هم اثر می‌کند: در مسیر ورک‌لت روی
+   * نود مستر (مشترک بین دو دک) و در فالبک روی نودِ هم‌ترازیِ هر دک.
    */
   setBoost(db: number): void {
     boostDb = Math.max(0, Math.min(MAX_BOOST_DB, db))
+    if (workletPath && ctx && master) {
+      try {
+        const now = ctx.currentTime
+        master.gain.cancelScheduledValues(now)
+        master.gain.setValueAtTime(master.gain.value, now)
+        master.gain.linearRampToValueAtTime(gainFromDb(boostDb), now + 0.04)
+        return
+      } catch {
+        // فالبک
+      }
+      master.gain.value = gainFromDb(boostDb)
+      return
+    }
     decks?.forEach((deck) => applyNormalize(deck, deck.gainDb))
   },
 
@@ -822,6 +1067,8 @@ export const engine = {
       deck.el.pause()
       detachHls(deck.el)
       deck.el.removeAttribute('src')
+      deck.mediaId = null
+      deck.dsp?.loudness?.port.postMessage({ type: 'flush' })
       if (deck.fade) deck.fade.gain.value = 1
     })
     statePublisher?.patch({ status: 'IDLE', isPlaying: false, isBuffering: false, errorMessage: null })
