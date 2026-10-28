@@ -1,6 +1,6 @@
 -r requirements.txt
 
-pytest>=8.0
+pytest>=9.1.1
 
 # ۱۵ فایل تست `@pytest.mark.asyncio` دارند. بدون این پلاگین، pytest آن‌ها را
 # «async def functions are not natively supported» می‌شمارد و شکست می‌دهد —
