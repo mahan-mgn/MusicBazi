@@ -4,7 +4,7 @@ uvicorn[standard]>=0.38
 # همان‌جا با «Using SOCKS proxy, but the socksio package is not installed» می‌افتد.
 # yt-dlp خودش socks را بومی می‌فهمد و به این نیاز ندارد.
 httpx[socks]>=0.28
-mutagen>=1.47
+mutagen>=1.48.1
 
 # آپلودِ فایل برای شناسایی صوتی (POST /api/identify) — FastAPI بدونش
 # multipart/form-data را رد می‌کند.
