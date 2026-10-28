@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { api } from '../lib/api'
 import {
   digits,
   duration as fmtDuration,
@@ -16,6 +15,7 @@ import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
 import { useToasts } from '../store/toasts'
 import { canSaveToDevice, haptic, saveToDevice } from '../lib/native'
+import { prewarmTrack } from '../lib/prewarm'
 import Artwork from './Artwork'
 import LikeHeart from './LikeHeart'
 import SendToTelegram from './SendToTelegram'
@@ -30,6 +30,14 @@ import {
   Spinner,
   WarnIcon,
 } from './icons'
+
+/**
+ * قالب ستون‌های ردیف ترک در صفحه هنرمند:
+ * گرید پایدار مشترک بین سرستون‌ها و تمام ردیف‌ها تا دانلود شدن یا تغییر دکمه‌های عملیات
+ * باعث جابه‌جایی یا خارج شدن ستون‌ها از زیر سرستون‌هایشان نشود.
+ */
+export const ARTIST_TRACK_GRID =
+  'grid items-center gap-2 sm:gap-3 grid-cols-[1.75rem_2.5rem_minmax(0,1fr)_auto] md:grid-cols-[1.75rem_2.5rem_minmax(0,1.5fr)_minmax(0,1fr)_3rem_12.5rem]'
 
 interface Props {
   track: Track
@@ -124,10 +132,8 @@ export default function ArtistTrackRow({
 
   return (
     <div
-      onMouseEnter={() => {
-        if (!job) void api.prefetchStream?.(track)
-      }}
-      className={`group relative flex items-center gap-2 overflow-hidden rounded-xl px-2.5 py-2 transition sm:gap-3 ${
+      onPointerDown={() => prewarmTrack(track, quality)}
+      className={`group relative overflow-hidden rounded-xl px-2.5 py-2 transition ${ARTIST_TRACK_GRID} ${
         isCurrent
           ? 'bg-accent/10 border border-accent/25'
           : 'border border-transparent hover:bg-panel-2/80'
@@ -214,7 +220,7 @@ export default function ArtistTrackRow({
       </button>
 
       {/* ستون عنوان ترک + نشان Explicit */}
-      <div className="relative min-w-0 flex-1 md:flex-initial md:w-[38%] lg:w-[42%]">
+      <div className="relative min-w-0">
         <div className="flex items-center gap-1.5">
           <button
             type="button"
@@ -260,7 +266,7 @@ export default function ArtistTrackRow({
       </div>
 
       {/* ستون آلبوم روی دسکتاپ — با امکان کلیک برای رفتن به آلبوم */}
-      <div className="hidden min-w-0 md:block md:w-[26%] lg:w-[28%]">
+      <div className="hidden min-w-0 md:block">
         {track.album ? (
           matchedAlbum && onOpenAlbum ? (
             <button
@@ -284,12 +290,12 @@ export default function ArtistTrackRow({
       </div>
 
       {/* زمان قطعه روی دسکتاپ */}
-      <span className="hidden w-12 shrink-0 text-center text-xs tabular-nums text-muted-2 md:inline">
+      <span className="hidden text-center text-xs tabular-nums text-muted-2 md:block">
         {fmtDuration(track.durationMs, lang)}
       </span>
 
       {/* ستون عملیات */}
-      <div className="relative ms-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <div className="relative flex w-full items-center justify-end gap-0.5 justify-self-end sm:gap-1">
         {/* وضعیت دانلود روی موبایل */}
         {statusText && (
           <span className="me-1 hidden text-[11px] text-muted sm:inline">{statusText}</span>

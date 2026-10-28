@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { peekArtworkColor } from '../lib/artColor'
 import type { AlbumDetail, Track } from '../lib/types'
 import { usePlayer } from '../store/player'
 import AlbumView from './AlbumView'
@@ -20,6 +21,17 @@ window.ResizeObserver = MockObserver as unknown as typeof ResizeObserver
 HTMLCanvasElement.prototype.getContext = vi.fn(() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext
 window.HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined)
 window.HTMLMediaElement.prototype.pause = vi.fn()
+
+/*
+ * ماکِ جزئی، نه کامل: فقط کشِ رنگ کنترل می‌شود و `dominantColor` واقعی می‌ماند.
+ * پس بقیه‌ی تست‌های این فایل همان مسیرِ «استخراج نشد» را می‌روند (بومِ این‌جا
+ * `null` برمی‌گرداند) و بلوکِ تم می‌تواند مسیرِ «رنگ از قبل معلوم است» را
+ * مستقل از canvas بسنجد.
+ */
+vi.mock('../lib/artColor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/artColor')>()
+  return { ...actual, peekArtworkColor: vi.fn(() => null) }
+})
 
 const mockTrack: Track = {
   id: 'sp:track:123',
@@ -358,5 +370,83 @@ describe('AlbumView', () => {
     })
 
     expect(container.textContent).toContain('چیزی پیدا نشد')
+  })
+
+  /*
+   * تمِ بر پایه‌ی تصویر.
+   *
+   * مالکیتِ توکن‌ها عوض شده: پس‌زمینه‌ی تمام‌صفحه در شل می‌نشیند تا ستون‌های
+   * کناریِ `max-w-5xl` و کفِ صفحه را هم بگیرد. این ویو دیگر تم نمی‌سازد؛ فقط
+   * مصرف‌کننده‌ی متغیرهایی است که با `@property … inherits: true` از شل به
+   * این‌جا می‌رسند. عددهای خودِ تم و قراردادِ کنتراستش در
+   * `lib/pageTheme.test.ts` و `App.pageTheme.dom.test.tsx` سنجیده می‌شوند.
+   */
+  describe('artwork theme', () => {
+    const TOKENS = [
+      '--tint-r', '--tint-g', '--tint-b',
+      '--page-r', '--page-g', '--page-b',
+      '--mesh1-r', '--mesh1-g', '--mesh1-b',
+      '--mesh2-r', '--mesh2-g', '--mesh2-b',
+      '--mesh3-r', '--mesh3-g', '--mesh3-b',
+    ]
+
+    const renderAlbum = (album: AlbumDetail) => {
+      act(() => {
+        root.render(
+          <AlbumView album={album} playingId={null} onTogglePlay={vi.fn()} onBack={vi.fn()} />,
+        )
+      })
+    }
+
+    beforeEach(() => {
+      vi.mocked(peekArtworkColor).mockReturnValue(null)
+    })
+
+    afterEach(() => {
+      vi.mocked(peekArtworkColor).mockReturnValue(null)
+    })
+
+    /*
+     * قفلِ «یک منبعِ حقیقت».
+     *
+     * اگر سه‌گانه‌ها هم روی ریشه‌ی ویو بنشینند و هم روی شل، کار می‌کند ولی دو
+     * گذارِ موازی روی یک رنگ می‌افتد و مقادیر می‌توانند واگرا شوند — و
+     * بدتر، تمِ این ویو روی صفحه‌ی بعدی باقی می‌ماند. این تست همان تفکیک را
+     * قفل می‌کند: ویو هیچ توکنی ندارد.
+     */
+    it('owns no theme tokens of its own; the shell does', () => {
+      renderAlbum(mockAlbum)
+
+      const viewRoot = container.querySelector<HTMLElement>('.tint-page')
+      expect(viewRoot).not.toBeNull()
+      for (const token of TOKENS) {
+        expect((viewRoot as HTMLElement).style.getPropertyValue(token)).toBe('')
+      }
+    })
+
+    it('keeps the hero reading the inherited tokens and lays the text guard over it', () => {
+      renderAlbum(mockAlbum)
+
+      /*
+       * گرادیانِ هیرو باید *خواننده‌ی* متغیرها بماند و هیچ رنگِ هاردکدِ قبلی
+       * برنگردد؛ وگرنه با انتقالِ تم به شل، هیرو رنگِ ثابتِ قدیمی می‌گرفت.
+       */
+      const hero = container.querySelector<HTMLElement>('.tint-text-guard')?.parentElement
+      expect(hero).not.toBeNull()
+      const bg = (hero as HTMLElement).style.background
+      expect(bg).toContain('var(--tint-r)')
+      expect(bg).not.toMatch(/rgb\(\d+,\s*\d+,\s*\d+/)
+
+      const guard = container.querySelector('.tint-text-guard')
+      expect(guard).not.toBeNull()
+      expect(guard?.getAttribute('aria-hidden')).toBe('true')
+      expect(guard?.classList.contains('pointer-events-none')).toBe(true)
+    })
+
+    it('leaves the full-page background layer to the shell', () => {
+      renderAlbum(mockAlbum)
+      // لایه‌ی تمام‌صفحه این‌جا نیست؛ اگر کسی دوباره اضافه‌اش کند، دوتا می‌شود
+      expect(container.querySelector('.page-tint')).toBeNull()
+    })
   })
 })

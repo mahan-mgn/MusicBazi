@@ -141,12 +141,12 @@ class TestRealRegistrySelectability:
         assert LyricsManager().registry.is_selectable("musixmatch") is False
 
     def test_genius_without_a_token_is_not_selectable(self, monkeypatch):
-        monkeypatch.setattr("app.providers.genius.GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr("app.config.GENIUS_ACCESS_TOKEN", None)
 
         assert LyricsManager().registry.is_selectable("genius") is False
 
     def test_genius_with_a_token_is_selectable_but_not_automatic(self, monkeypatch):
-        monkeypatch.setattr("app.providers.genius.GENIUS_ACCESS_TOKEN", "t")
+        monkeypatch.setattr("app.config.GENIUS_ACCESS_TOKEN", "t")
         monkeypatch.delenv("MUSICBAZI_LYRICS_GENIUS_POLICY", raising=False)
 
         manager = LyricsManager()

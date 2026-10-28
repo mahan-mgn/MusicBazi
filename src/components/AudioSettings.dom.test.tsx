@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { EQ_PRESETS_DB } from '../lib/audio/dsp/EqPresets'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AudioSettings from './AudioSettings'
 import { useSettings } from '../store/settings'
 
@@ -99,5 +99,27 @@ describe('AudioSettings popover', () => {
     const trigger = container.querySelector('button[aria-haspopup="dialog"]') as HTMLButtonElement
     expect(trigger).not.toBeNull()
     expect(trigger.textContent).toMatch(/Sound|تنظیم صدا/i)
+  })
+
+  it('stays open and does not call onClose when clicking controls inside dialog', () => {
+    useSettings.setState({ crossfade: 5, automix: true, smartDj: true })
+    const onClose = vi.fn()
+    act(() => {
+      root.render(<AudioSettings open={true} onClose={onClose} />)
+    })
+
+    const dialog = document.body.querySelector('[role="dialog"]') as HTMLDivElement
+    expect(dialog).not.toBeNull()
+
+    // تمام سوئیچ‌های داخل پنل
+    const switches = document.body.querySelectorAll('button[role="switch"]')
+    expect(switches.length).toBeGreaterThanOrEqual(2)
+
+    // کلیک روی یکی از سوئیچ‌ها نباید دیالوگ را ببندد
+    const automixSwitch = switches[1] as HTMLButtonElement
+    act(() => {
+      automixSwitch.click()
+    })
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

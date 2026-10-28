@@ -180,6 +180,26 @@ class BridgeTest {
     }
 
     @Test
+    fun testResolveWithCookie() = testApplication {
+        val mock = MockResolver()
+        application {
+            bridgeModule(mock)
+        }
+
+        val client = createClient {
+            install(ContentNegotiation) { json() }
+        }
+
+        val response = client.post("/resolve") {
+            contentType(ContentType.Application.Json)
+            setBody(ResolveRequest(request_id = "req-cookie", video_id = "vid_cookie", cookie = "SID=abc123xyz"))
+        }
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("SID=abc123xyz", mock.lastCookie)
+    }
+
+    @Test
     fun testVisitorRefreshEndpoint() = testApplication {
         application {
             bridgeModule(MockResolver())
@@ -233,14 +253,17 @@ class BridgeTest {
         private val failWith: Exception? = null
     ) : IInnerTubeResolver {
         var lastRefreshVisitor: Boolean = false
+        var lastCookie: String? = null
 
         override suspend fun resolve(
             videoId: String,
             purpose: String,
             qualityStr: String?,
             refreshVisitor: Boolean,
+            cookie: String?,
         ): BridgeResolvedStream {
             lastRefreshVisitor = refreshVisitor
+            lastCookie = cookie
             if (failWith != null) throw failWith
             return BridgeResolvedStream(
                 source = "youtube",

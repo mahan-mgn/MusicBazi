@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from app.lyrics.manager import LyricsManager
+from app import config
 from app.lyrics.registry import ProviderError
 from app.models import Track
 from app.providers import genius, lrclib
@@ -73,7 +74,7 @@ def _patch_lrclib(monkeypatch, handler, calls: list | None = None):
 
 
 def _patch_genius(monkeypatch, handler, calls: list | None = None):
-    monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+    monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
     def wrapped(url, params, headers):
         if calls is not None:
@@ -432,7 +433,7 @@ class TestManagerCachesOnlyRealEmptiness:
         """
         calls: list[str] = []
         _patch_lrclib(monkeypatch, handler, calls)
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         manager = LyricsManager(miss_ttl_s=300)
         manager.fetch(_track())
@@ -530,7 +531,7 @@ class TestManagerCachesOnlyRealEmptiness:
             return _resp(404)
 
         _patch_lrclib(monkeypatch, handler, calls)
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         manager = LyricsManager(miss_ttl_s=300)
 
@@ -560,7 +561,7 @@ class TestEndToEndIntegration:
             return _resp(200, json_body=[_row(180, synced="[00:01.00]recovered")])
 
         _patch_lrclib(monkeypatch, handler)
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         manager = LyricsManager(miss_ttl_s=300)
 
@@ -584,7 +585,7 @@ class TestEndToEndIntegration:
             return _resp(404)
 
         _patch_lrclib(monkeypatch, handler, calls)
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         manager = LyricsManager(miss_ttl_s=300, clock=lambda: now[0])
 
@@ -605,7 +606,7 @@ class TestEndToEndIntegration:
             raise httpx.ConnectTimeout("timed out")
 
         _patch_lrclib(monkeypatch, handler, calls)
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         manager = LyricsManager(miss_ttl_s=300)
 

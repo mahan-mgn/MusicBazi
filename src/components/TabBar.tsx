@@ -18,10 +18,16 @@ import { useSettings } from '../store/settings'
  * که باید هم‌زمان نگه داشته شوند.
  */
 
-export type Tab = 'home' | 'search' | 'library' | 'stats'
+export type Tab = 'home' | 'search' | 'library' | 'stats' | 'settings'
 
 interface Props {
-  active: Tab
+  /**
+   * تبِ فعال، یا `undefined` یعنی «هیچ‌کدام».
+   *
+   * صفحه‌ی تنظیمات زیرِ هیچ‌یک از این چهار مقصد نیست و روشن‌کردنِ «خانه»
+   * آن‌جا دروغ است — کاربر جای دیگری است.
+   */
+  active: Tab | undefined
   onHome: () => void
   onLibrary: () => void
   onStats: () => void
@@ -105,7 +111,9 @@ export function TabBarInner({ active, onHome, onLibrary, onStats, onSearch }: Pr
     { key: 'library' as const, label: t.library, Icon: LibraryIcon, run: onLibrary },
     { key: 'stats' as const, label: t.stats, Icon: StatsIcon, run: onStats },
   ]
-  const activeIndex = Math.max(0, tabs.findIndex((tb) => tb.key === active))
+  // ۱- یعنی هیچ تبی فعال نیست (صفحه‌ی تنظیمات) — `Math.max(0, …)` این‌جا
+  // لنز را بی‌دلیل روی «خانه» می‌نشاند
+  const activeIndex = tabs.findIndex((tb) => tb.key === active)
 
   /**
    * لنز را اندازه می‌گیرد و به خانه‌ی تبِ فعال می‌برد.
@@ -122,8 +130,14 @@ export function TabBarInner({ active, onHome, onLibrary, onStats, onSearch }: Pr
     (animate: boolean) => {
       const ul = ulRef.current
       const lens = lensRef.current
+      // تنظیمات: هیچ مقصدی فعال نیست، پس لنز پنهان می‌شود (مثل GlassNavBar)
+      if (activeIndex < 0) {
+        if (lens) lens.style.opacity = '0'
+        return
+      }
       const btn = btnRefs.current[activeIndex]
       if (!ul || !lens || !btn) return
+      lens.style.opacity = '1'
       const u = ul.getBoundingClientRect()
       const b = btn.getBoundingClientRect()
       if (!b.width) return // هنوز چیده نشده (jsdom / قبلِ layout)

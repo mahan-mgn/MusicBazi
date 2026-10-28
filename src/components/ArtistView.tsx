@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { api } from '../lib/api'
-import { dominantColor } from '../lib/artColor'
 import { digits, formatArtistSubtitle, formatViews, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { trackDedupeKey } from '../lib/radio'
-import { tracksForRelease, tracksFromSelectedDiscography } from '../lib/artistDiscography'
+import { releaseSignature, tracksForRelease, tracksFromSelectedDiscography } from '../lib/artistDiscography'
 import { findBestJob, toPlayItem } from '../lib/stream'
 import { downloadFile } from '../lib/native'
 import {
@@ -21,7 +20,7 @@ import { isActive, isDone, useDownloads } from '../store/downloads'
 import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
 import { useToasts } from '../store/toasts'
-import ArtistTrackRow from './ArtistTrackRow'
+import ArtistTrackRow, { ARTIST_TRACK_GRID } from './ArtistTrackRow'
 import Artwork, { HeroBackdrop } from './Artwork'
 import ClickSpark from './ClickSpark'
 import EmptyState from './EmptyState'
@@ -79,6 +78,32 @@ function albumKind(album: Album): 'album' | 'single' | 'ep' | 'compilation' {
   }
   if (/ep\b/i.test(album.title) || (album.trackCount >= 2 && album.trackCount <= 6)) return 'ep'
   return 'album'
+}
+
+/**
+ * سالِ انتشار، برای مرتب‌سازی.
+ *
+ * `releaseDate` بر `year` مقدم است چون `year` می‌تواند خالی یا تقریبی باشد —
+ * یوتیوب‌موزیک روی ردیف‌های جستجو اصلاً سال نمی‌دهد و بدون تاریخ، انتشارِ
+ * تازه‌منتشرشده با مقدارِ صفر ته لیست می‌افتاد درحالی‌که جدیدترین اثر است.
+ */
+function releaseYear(album: Album): number {
+  const year = album.releaseDate?.slice(0, 4)
+  if (year && /^\d{4}$/.test(year)) return Number(year)
+  return album.year || 0
+}
+
+/**
+ * کلیدِ مرتب‌سازی: سال و تاریخِ کامل.
+ *
+ * سالِ تنها برای تفکیکِ دو انتشارِ هم‌سال کافی نیست — دو سینگلِ ۲۰۲۶ با
+ * مقایسه‌ی سال برابر می‌شدند و ترتیبِ ورودی می‌ماند، یعنی تازه‌ترین اثر باز
+ * هم ته لیست می‌افتاد. `(سال، تاریخ)` باعث می‌شود درونِ یک سال تاریخ
+ * تعیین‌کننده باشد؛ ردیفِ بی‌تاریخ رشته‌ی خالی دارد و بعد از هم‌سالِ
+ * تاریخ‌دارش می‌افتد.
+ */
+function releaseKey(album: Album): [number, string] {
+  return [releaseYear(album), album.releaseDate ?? '']
 }
 
 function releaseLabel(
@@ -208,6 +233,53 @@ async function mapLimit<T, R>(
   return results
 }
 
+/** Tracks already present in the artist response, before fetching album details. */
+function immediateArtistTracks(artist: ArtistDetail): Track[] {
+  const seenIds = new Set<string>()
+  const seenKeys = new Set<string>()
+  const tracks: Track[] = []
+
+  function add(track: Track | null | undefined) {
+    if (!track?.id || seenIds.has(track.id)) return
+    const key = trackDedupeKey(track, artist.name)
+    if (seenKeys.has(key)) return
+    seenIds.add(track.id)
+    seenKeys.add(key)
+    tracks.push(track)
+  }
+
+  for (const track of artist.topTracks) add(track)
+
+  // SoundCloud singles are represented by album entries with a track ID.
+  for (const item of artist.albums) {
+    if (item.source !== 'soundcloud' || !item.id.startsWith('sc:track:') || !('artist' in item)) {
+      continue
+    }
+    const known =
+      artist.topTracks.find((track) => track.id === item.id) ??
+      artist.likedTracks?.find((track) => track.id === item.id) ??
+      artist.repostedTracks?.find((track) => track.id === item.id)
+    add({
+      id: item.id,
+      title: item.title,
+      artist: item.artist,
+      album: item.title,
+      durationMs: known?.durationMs ?? 0,
+      artworkUrl: item.artworkUrl,
+      source: 'soundcloud',
+      sourceUrl: item.sourceUrl,
+      previewUrl: null,
+      year: item.year,
+      artistId: item.artistId,
+    })
+  }
+
+  for (const track of artist.likedTracks ?? []) add(track)
+  for (const track of artist.repostedTracks ?? []) add(track)
+  for (const track of artist.radio ?? []) add(track)
+  return tracks
+}
+
 /**
  * نمای پیشرفته‌ی صفحه‌ی هنرمند (Artist View):
  *
@@ -237,7 +309,6 @@ export default function ArtistView({
   const [loadingPlayAll, setLoadingPlayAll] = useState(false)
   const [loadingReleaseId, setLoadingReleaseId] = useState<string | null>(null)
   const [zipping, setZipping] = useState(false)
-  const [tint, setTint] = useState<[number, number, number] | null>(null)
   const [isScrolledPast, setIsScrolledPast] = useState(false)
   const [showAllTopTracks, setShowAllTopTracks] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -253,6 +324,8 @@ export default function ArtistView({
   const heroRef = useRef<HTMLDivElement>(null)
   const loadingPromiseRef = useRef<Promise<Track[]> | null>(null)
   const playReleaseRequestRef = useRef(0)
+  const shufflePlayRequestRef = useRef(0)
+  const shufflePlayInFlightRef = useRef(false)
   const isMountedRef = useRef(true)
   const artistIdRef = useRef(artist.id)
   artistIdRef.current = artist.id
@@ -265,8 +338,14 @@ export default function ArtistView({
   }, [])
 
   // با عوض شدن هنرمند، استیت صفحه‌ی قبلی نباید نشت کند — دیسکوگرافی لودشده،
-  // جستجو، فیلتر و رنگ هیرو همه مالِ همان صفحه‌اند.
+  // جستجو و فیلتر همه مالِ همان صفحه‌اند.
+  //
+  // رنگِ هیرو عمداً این‌جا ریست نمی‌شود: `useArtworkTheme` خودش تضمین می‌کند که
+  // روی تغییرِ منبع، رنگِ قبلی تا رسیدنِ رنگِ تازه بماند. `setTint(null)` این‌جا
+  // یعنی یک فریم هیروی خاکستری وسطِ جابه‌جایی بین دو هنرمند.
   useEffect(() => {
+    shufflePlayRequestRef.current += 1
+    shufflePlayInFlightRef.current = false
     setAllTracks(null)
     setLoadingAll(false)
     setLoadingPlayAll(false)
@@ -281,9 +360,30 @@ export default function ArtistView({
     setYtTab('home')
     setYtVideoSort('latest')
     setShowAboutModal(false)
-    setTint(null)
     loadingPromiseRef.current = null
   }, [artist.id])
+
+  /*
+   * انتشارِ تازه ⇒ دیسکوگرافیِ لودشده بی‌اعتبار می‌شود.
+   *
+   * `App` صفحه‌ی آرتیست را سرِ هر ورود در پس‌زمینه تازه می‌کند و اگر آرتیست
+   * واقعاً چیزی منتشر کرده باشد، همین‌جا payloadِ تازه با شناسه‌ی *یکسان*
+   * می‌رسد. افکتِ بالا روی تغییرِ `artist.id` است و عمداً اجرا نمی‌شود: فیلتر و
+   * جستجوی درونِ صفحه باید سرِ جایشان بمانند. ولی `allTracks` از فهرستِ
+   * *قدیمیِ* انتشار ساخته شده — بدونِ دور ریختنش، صفحه آلبومِ تازه را در هدر
+   * نشان می‌دهد و دیسکوگرافیِ کهنه را پایین‌تر.
+   */
+  const releaseSig = useMemo(
+    () => releaseSignature(artist),
+    [artist.albums, artist.singles, artist.topTracks],
+  )
+  const releaseSigRef = useRef(releaseSig)
+  useEffect(() => {
+    if (releaseSigRef.current === releaseSig) return
+    releaseSigRef.current = releaseSig
+    setAllTracks(null)
+    loadingPromiseRef.current = null
+  }, [releaseSig])
 
   const quality = useSettings((s) => s.quality)
   const enqueueMany = useDownloads((s) => s.enqueueMany)
@@ -315,18 +415,15 @@ export default function ArtistView({
   const play = usePlayer((s) => s.play)
   const activePlayingId = playingId ?? (isPlaying ? currentTrackId ?? null : null)
 
-  // استخراج رنگ غالب عکس هنرمند برای گرادیان هیرو
-  useEffect(() => {
-    let cancelled = false
-    void dominantColor(artist.artworkUrl || artist.bannerUrl || null).then((c) => {
-      if (!cancelled) setTint(c)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [artist.artworkUrl, artist.bannerUrl])
-
-  const anyTint = tint ? tint.join(',') : '107,107,107'
+  /*
+   * تمِ صفحه دیگر این‌جا ساخته نمی‌شود.
+   *
+   * پس‌زمینه‌ی تمام‌صفحه باید ستون‌های کناریِ `max-w-5xl` را هم بپوشاند و
+   * ریشه‌ی این ویو داخلِ آن ستون است، پس لایه به شل منتقل شد
+   * (`App.tsx` → `.page-tint`). `--tint-*`/`--page-*` همچنان از `@property`
+   * با `inherits: true` به این‌جا می‌رسند و گرادیان‌های درون‌خطیِ هیرو
+   * پایین‌تر دست‌نخورده کار می‌کنند.
+   */
 
   // رصد اسکرول هیرو برای نمایش نوار چسبان
   useEffect(() => {
@@ -342,6 +439,7 @@ export default function ArtistView({
     return () => observer.disconnect()
   }, [])
 
+
   // بستن مودال با کلید Escape
   useEffect(() => {
     if (!showAboutModal) return
@@ -355,7 +453,7 @@ export default function ArtistView({
   const topTrackItems = useMemo(
     () =>
       artist.topTracks.map((track) => {
-        const job = findBestJob(readyJobs, track.id, quality)
+        const job = findBestJob(readyJobs, track.id, quality, track)
         return toPlayItem(track, job, quality)
       }),
     [artist.topTracks, readyJobs, quality],
@@ -413,27 +511,6 @@ export default function ArtistView({
       (artist.likedTracks?.length ?? 0) +
       (artist.repostedTracks?.length ?? 0) +
       (artist.radio?.length ?? 0)) > 1
-
-  // پیش‌گرم‌سازی ۳ ترک برتر در پس‌زمینه برای شروع پخش فوری
-  useEffect(() => {
-    const tracksToWarm = artist.topTracks.slice(0, 3)
-    if (!tracksToWarm.length) return
-
-    const timers: ReturnType<typeof setTimeout>[] = []
-    tracksToWarm.forEach((track, i) => {
-      const alreadyDownloaded = allReadyJobs.some((j) => j.track.id === track.id)
-      if (alreadyDownloaded) return
-
-      const timer = setTimeout(() => {
-        void api.prefetchStream?.(track)
-      }, i * 600)
-      timers.push(timer)
-    })
-
-    return () => {
-      timers.forEach((t) => clearTimeout(t))
-    }
-  }, [artist.id, artist.topTracks, allReadyJobs])
 
   const handleTopTrackToggle = useCallback(
     (track: Track) => {
@@ -503,11 +580,15 @@ export default function ArtistView({
             for (const t of backendTracks) {
               if (!t || !t.id || seenIds.has(t.id)) continue
               if (soundcloudNonDiscographyIds.has(t.id)) continue
-              const key = trackDedupeKey(t, artist.name)
+              const enriched: Track = {
+                ...t,
+                albumArtist: t.albumArtist || artist.name,
+              }
+              const key = trackDedupeKey(enriched, artist.name)
               if (seenKeys.has(key)) continue
-              seenIds.add(t.id)
+              seenIds.add(enriched.id)
               seenKeys.add(key)
-              deduped.push(t)
+              deduped.push(enriched)
             }
             if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
               setAllTracks(deduped)
@@ -573,7 +654,20 @@ export default function ArtistView({
 
         for (const detail of details) {
           if (!detail) continue
-          for (const track of detail.tracks) addTrack(track)
+          const isMulti =
+            detail.releaseType === 'album' ||
+            detail.releaseType === 'compilation' ||
+            detail.releaseType === 'ep' ||
+            detail.trackCount > 1 ||
+            detail.tracks.length > 1
+          for (const track of detail.tracks) {
+            addTrack({
+              ...track,
+              album: isMulti ? detail.title : track.album,
+              albumArtist: track.albumArtist || artist.name || detail.artist,
+              albumId: isMulti ? detail.id : track.albumId,
+            })
+          }
         }
 
         // سینگل‌های ساندکلاد بعد از آلبوم‌ها اضافه می‌شوند تا ترک‌های آلبوم حفظ شوند
@@ -588,6 +682,7 @@ export default function ArtistView({
               title: item.title,
               artist: item.artist,
               album: item.title,
+              albumArtist: artist.name || item.artist,
               durationMs: known?.durationMs ?? 0,
               artworkUrl: item.artworkUrl,
               source: 'soundcloud',
@@ -600,8 +695,18 @@ export default function ArtistView({
         }
 
         // فالبک برای آثاری که در هیچ آلبوم یا تک‌آهنگی نبودند
-        for (const track of artist.topTracks) addTrack(track)
-        for (const track of artist.radio ?? []) addTrack(track)
+        for (const track of artist.topTracks) {
+          addTrack({
+            ...track,
+            albumArtist: track.albumArtist || artist.name,
+          })
+        }
+        for (const track of artist.radio ?? []) {
+          addTrack({
+            ...track,
+            albumArtist: track.albumArtist || artist.name,
+          })
+        }
 
         // پاسخِ در پروازِ هنرمند قبلی نباید صفحه‌ی فعلی را پر کند
         if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
@@ -626,69 +731,85 @@ export default function ArtistView({
     async (shuffleMode: boolean) => {
       const currentQuality = useSettings.getState().quality
 
-      // تنظیم قطعی شافل بر اساس خواسته‌ی کاربر (Play All: خاموش، Shuffle: روشن)
-      usePlayer.getState().setShuffle(shuffleMode)
+      if (shuffleMode) {
+        const activeArtistShuffle = usePlayer.getState().artistShuffleSession
+        if (
+          shufflePlayInFlightRef.current ||
+          (activeArtistShuffle?.artistId === artist.id && !activeArtistShuffle.completed)
+        ) {
+          return
+        }
+        shufflePlayInFlightRef.current = true
+        const requestId = ++shufflePlayRequestRef.current
+        const sessionArtistId = artist.id
+        const playerAtRequest = usePlayer.getState()
+        const queueAtRequest = playerAtRequest.queue
+        const indexAtRequest = playerAtRequest.index
+        setLoadingPlayAll(true)
+        try {
+          const fullTracks = allTracks ?? (await loadDiscography())
+          if (
+            !isMountedRef.current ||
+            requestId !== shufflePlayRequestRef.current ||
+            sessionArtistId !== artistIdRef.current ||
+            usePlayer.getState().queue !== queueAtRequest ||
+            usePlayer.getState().index !== indexAtRequest
+          ) {
+            return
+          }
+
+          // Keep the sources already used by Artist View, then merge in the
+          // complete discography before making the finite session queue.
+          const seenIds = new Set<string>()
+          const seenKeys = new Set<string>()
+          const tracks: Track[] = []
+          for (const track of [...immediateArtistTracks(artist), ...fullTracks]) {
+            if (!track?.id || seenIds.has(track.id)) continue
+            const key = trackDedupeKey(track, artist.name)
+            if (seenKeys.has(key)) continue
+            seenIds.add(track.id)
+            seenKeys.add(key)
+            tracks.push(track)
+          }
+
+          const items = tracks.map((track) =>
+            toPlayItem(track, findBestJob(allReadyJobs, track.id, currentQuality, track), currentQuality),
+          )
+          usePlayer.getState().playArtistShuffle(items, sessionArtistId)
+        } catch {
+          if (requestId === shufflePlayRequestRef.current) pushToast(t.fetchError, 'error')
+        } finally {
+          if (requestId === shufflePlayRequestRef.current) {
+            shufflePlayInFlightRef.current = false
+            if (isMountedRef.current && sessionArtistId === artistIdRef.current) {
+              setLoadingPlayAll(false)
+            }
+          }
+        }
+        return
+      }
+
+      // Play All uses the existing queue order, regardless of the prior setting.
+      usePlayer.getState().setShuffle(false)
 
       // ۱. اگر کل دیسکوگرافی قبلاً لود شده: فوراً همه‌چیز را پخش کن
       if (allTracks && allTracks.length > 0) {
         const items = allTracks.map((t) =>
-          toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality), currentQuality),
+          toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality, t), currentQuality),
         )
-        const idx = shuffleMode ? Math.floor(Math.random() * items.length) : 0
-        play(items, idx)
+        play(items, 0)
         return
       }
 
       // ۲. جمع‌آوری تمام ترک‌های در دسترس فوری در همین لحظه روی صفحه
-      const seenIds = new Set<string>()
-      const seenKeys = new Set<string>()
-      const initialTracks: Track[] = []
-
-      function addImmediate(track: Track | null | undefined) {
-        if (!track || !track.id) return
-        if (seenIds.has(track.id)) return
-        const key = trackDedupeKey(track, artist.name)
-        if (seenKeys.has(key)) return
-        seenIds.add(track.id)
-        seenKeys.add(key)
-        initialTracks.push(track)
-      }
-
-      for (const t of artist.topTracks) addImmediate(t)
-
-      // سینگل‌های ساندکلاد که بدون درخواست اضافی در artist.albums حضور دارند
-      for (const item of artist.albums) {
-        if (item.source === 'soundcloud' && item.id.startsWith('sc:track:') && 'artist' in item) {
-          const known =
-            artist.topTracks.find((t) => t.id === item.id) ??
-            artist.likedTracks?.find((t) => t.id === item.id) ??
-            artist.repostedTracks?.find((t) => t.id === item.id)
-          addImmediate({
-            id: item.id,
-            title: item.title,
-            artist: item.artist,
-            album: item.title,
-            durationMs: known?.durationMs ?? 0,
-            artworkUrl: item.artworkUrl,
-            source: 'soundcloud',
-            sourceUrl: item.sourceUrl,
-            previewUrl: null,
-            year: item.year,
-            artistId: item.artistId,
-          })
-        }
-      }
-
-      for (const t of artist.likedTracks ?? []) addImmediate(t)
-      for (const t of artist.repostedTracks ?? []) addImmediate(t)
-      for (const t of artist.radio ?? []) addImmediate(t)
+      const initialTracks = immediateArtistTracks(artist)
 
       if (initialTracks.length > 0) {
         const initialItems = initialTracks.map((t) =>
-          toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality), currentQuality),
+          toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality, t), currentQuality),
         )
-        const idx = shuffleMode ? Math.floor(Math.random() * initialItems.length) : 0
-        play(initialItems, idx)
+        play(initialItems, 0)
+        const queueAfterStart = usePlayer.getState().queue
 
         // گسترش پس‌زمینه صف به سایر آلبوم‌های دیسکوگرافی
         const sessionArtistId = artist.id
@@ -701,9 +822,13 @@ export default function ArtistView({
           if (!isMountedRef.current || sessionArtistId !== artistIdRef.current) return
 
           // بررسی اینکه کاربر وسط لودینگ آهنگ آرتیست دیگری را نزده باشد
-          const currentQ = usePlayer.getState().queue
-          const activeTrack = currentQ[usePlayer.getState().index]?.track
+          const playerAfterLoad = usePlayer.getState()
+          const currentQ = playerAfterLoad.queue
+          const activeTrack = currentQ[playerAfterLoad.index]?.track
           const isStillThisArtist =
+            currentQ === queueAfterStart &&
+            !shufflePlayInFlightRef.current &&
+            !playerAfterLoad.artistShuffleSession &&
             activeTrack &&
             (initialIds.has(activeTrack.id) ||
               activeTrack.artistId === sessionArtistId ||
@@ -718,7 +843,7 @@ export default function ArtistView({
 
             if (remainingTracks.length > 0) {
               const remainingItems = remainingTracks.map((t) =>
-                toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality), currentQuality),
+                toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality, t), currentQuality),
               )
               usePlayer.getState().enqueue(remainingItems)
             }
@@ -730,15 +855,24 @@ export default function ArtistView({
       }
 
       // ۳. حالتی که هنرمند هیچ ترک اولیه‌ای ندارد و فقط آلبوم دارد
+      const playerAtRequest = usePlayer.getState()
+      const queueAtRequest = playerAtRequest.queue
+      const indexAtRequest = playerAtRequest.index
       setLoadingPlayAll(true)
       try {
         const fullTracks = await loadDiscography()
-        if (fullTracks.length > 0) {
+        const playerAfterLoad = usePlayer.getState()
+        if (
+          fullTracks.length > 0 &&
+          playerAfterLoad.queue === queueAtRequest &&
+          playerAfterLoad.index === indexAtRequest &&
+          !shufflePlayInFlightRef.current &&
+          !playerAfterLoad.artistShuffleSession
+        ) {
           const items = fullTracks.map((t) =>
-            toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality), currentQuality),
+            toPlayItem(t, findBestJob(allReadyJobs, t.id, currentQuality, t), currentQuality),
           )
-          const idx = shuffleMode ? Math.floor(Math.random() * items.length) : 0
-          play(items, idx)
+          play(items, 0)
         }
       } catch {
         pushToast(t.fetchError, 'error')
@@ -839,6 +973,45 @@ export default function ArtistView({
     (artist.appearsOn?.length ?? 0) > 0
   const topTracksTitle = artist.source === 'soundcloud' ? t.topTracks : t.popularSongs
 
+  /**
+   * خطِ جزئیاتِ زیرِ نامِ هنرمند.
+   *
+   * به‌صورتِ آرایه ساخته می‌شود و نه JSXِ شرطیِ تو‌در‌تو، چون جداکننده‌ی «·»
+   * باید فقط *بینِ* آیتم‌های موجود بیاید. با شرط‌های جداگانه، هر ترکیبی از
+   * نبودنِ فیلدها یک حالتِ تازه می‌ساخت؛ مثلاً اسپاتیفای که `subtitle` ندارد و
+   * فقط `monthlyListeners` دارد، نقطه‌ی جداکننده را چاپ نمی‌کرد و دو عدد به
+   * هم می‌چسبیدند.
+   */
+  const heroFacts = useMemo(() => {
+    const facts: string[] = []
+    if (artist.monthlyListeners) facts.push(t.monthlyAudience(artist.monthlyListeners))
+    else if (artist.subscriberCount) facts.push(t.subscribersCount(artist.subscriberCount))
+    else if (artist.subtitle) facts.push(formatArtistSubtitle(artist.subtitle, lang))
+
+    if (artist.videoCount != null) facts.push(t.videosCount(artist.videoCount))
+    else if (artist.topTracks.length > 0) {
+      facts.push(`${t.trackCount(artist.topTracks.length)} ${topTracksTitle}`)
+    }
+
+    // تعدادِ آلبوم این‌جا نیست: همان عدد در چیپِ شیشه‌ای بالای نام هست و
+    // تکرارش خط را شلوغ می‌کرد.
+    if (isUser && artist.playlists.length > 0) {
+      facts.push(t.playlistsCount(artist.playlists.length))
+    }
+    return facts
+  }, [
+    artist.monthlyListeners,
+    artist.subscriberCount,
+    artist.subtitle,
+    artist.videoCount,
+    artist.topTracks.length,
+    artist.playlists.length,
+    isUser,
+    lang,
+    t,
+    topTracksTitle,
+  ])
+
   async function downloadAll() {
     const tracks = await loadDiscography()
     const targetTracks =
@@ -899,8 +1072,8 @@ export default function ArtistView({
     if (discographySort === 'oldest') {
       const indexed = list.map((album, i) => ({ album, i }))
       indexed.sort((a, b) => {
-        const yearA = a.album.year || 0
-        const yearB = b.album.year || 0
+        const yearA = releaseYear(a.album)
+        const yearB = releaseYear(b.album)
         if (yearA !== yearB) return yearA - yearB
         return b.i - a.i
       })
@@ -915,8 +1088,8 @@ export default function ArtistView({
     if (discographySort === 'oldest') {
       const indexed = list.map((album, i) => ({ album, i }))
       indexed.sort((a, b) => {
-        const yearA = a.album.year || 0
-        const yearB = b.album.year || 0
+        const yearA = releaseYear(a.album)
+        const yearB = releaseYear(b.album)
         if (yearA !== yearB) return yearA - yearB
         return b.i - a.i
       })
@@ -926,9 +1099,19 @@ export default function ArtistView({
   }, [artist.albums, discographySort])
 
   const singlesOnly = useMemo(() => {
-    if (artist.singles && artist.singles.length > 0) return artist.singles
-    return artist.albums.filter((a) => albumKind(a) === 'single' || albumKind(a) === 'ep')
-  }, [artist.singles, artist.albums])
+    const list =
+      artist.singles && artist.singles.length > 0
+        ? [...artist.singles]
+        : artist.albums.filter((a) => albumKind(a) === 'single' || albumKind(a) === 'ep')
+    return [...list].sort((a, b) => {
+      const [yearA, dateA] = releaseKey(a)
+      const [yearB, dateB] = releaseKey(b)
+      const newestFirst = discographySort !== 'oldest'
+      if (yearA !== yearB) return newestFirst ? yearB - yearA : yearA - yearB
+      if (dateA !== dateB) return newestFirst ? dateB.localeCompare(dateA) : dateA.localeCompare(dateB)
+      return 0
+    })
+  }, [artist.singles, artist.albums, discographySort])
 
   const albumsOnly = useMemo(() => {
     return artist.albums.filter((a) => albumKind(a) === 'album' || albumKind(a) === 'compilation')
@@ -963,7 +1146,7 @@ export default function ArtistView({
       const idx = allVideos.findIndex((v) => v.id === track.id)
       if (idx < 0) return
       const items = allVideos.slice(idx).map((v) =>
-        toPlayItem(v, findBestJob(allReadyJobs, v.id, quality), quality),
+        toPlayItem(v, findBestJob(allReadyJobs, v.id, quality, v), quality),
       )
       const player = usePlayer.getState()
       player.setShuffle(false)
@@ -981,7 +1164,7 @@ export default function ArtistView({
   const handleRadioPlay = useCallback(() => {
     if (artist.radio && artist.radio.length > 0) {
       const items = artist.radio.map((t) =>
-        toPlayItem(t, findBestJob(allReadyJobs, t.id, quality), quality),
+        toPlayItem(t, findBestJob(allReadyJobs, t.id, quality, t), quality),
       )
       play(items, 0)
     } else {
@@ -1071,6 +1254,7 @@ export default function ArtistView({
               artistDiscographyContext.releases,
               startTrack.id,
               artist.source,
+              startTrack,
             )
           : []
         const fallbackTracks = queuedTracks.length ? queuedTracks : fallbackReleaseTracks
@@ -1096,7 +1280,7 @@ export default function ArtistView({
           }
         }
         const items = tracksToPlay.map((track) =>
-          toPlayItem(track, findBestJob(allReadyJobs, track.id, quality), quality),
+          toPlayItem(track, findBestJob(allReadyJobs, track.id, quality, track), quality),
         )
         if (!items.length) {
           pushToast(t.fetchError, 'error')
@@ -1221,16 +1405,32 @@ export default function ArtistView({
     ? filteredTopTracks
     : filteredTopTracks.slice(0, 5)
 
+  /*
+   * «آیا جستجو چیزی پیدا کرد؟» باید *همه‌ی* بخش‌های قابلِ رندر را ببیند.
+   *
+   * `filteredAppearsOn` جا افتاده بود و نتیجه‌اش یک صفحه‌ی متناقض بود: جستجوی
+   * «billion» روی یک هنرمند اسپاتیفای، هم پیامِ «اثری مطابق ... پیدا نشد» را
+   * نشان می‌داد و هم دو نتیجه‌ی واقعیِ «حضور در آثار دیگران» را پایین‌تر
+   * می‌چید. اگر بخشی اینجا اضافه نشود، همین اتفاق دوباره می‌افتد.
+   */
   const hasAnySearchResult =
     filteredTopTracks.length > 0 ||
     filteredAlbums.length > 0 ||
+    filteredAppearsOn.length > 0 ||
     filteredPlaylists.length > 0 ||
     filteredReposted.length > 0 ||
     filteredLiked.length > 0 ||
     filteredDownloadedJobs.length > 0
 
   return (
-    <div className="rise pb-8">
+    /*
+     * سه‌گانه‌های تم روی شل می‌نشینند (`App.tsx`) و از آن‌جا با `@property …
+     * inherits: true` به این‌جا ارث می‌رسند؛ هیرو `background` درون‌خطیِ خودش
+     * را نگه می‌دارد و همان varها را می‌خواند. `tint-page` این‌جا فقط
+     * `isolation` و `min-height` است — `isolation` نمی‌گذارد لایه‌ی بلورِ
+     * `-z-10`ِ هیرو زیرِ لایه‌ی پس‌زمینه ناپدید شود.
+     */
+    <div className="rise tint-page pb-8">
       {/* دکمه‌ی بازگشت */}
       <div className="mb-2 px-1 pt-1 sm:px-2">
         <button
@@ -1248,8 +1448,8 @@ export default function ArtistView({
         className="relative -mx-2 -mt-2 mb-6 overflow-hidden rounded-3xl p-4 sm:-mx-4 sm:p-7 md:p-8"
         style={{
           background: `
-            radial-gradient(ellipse 90% 70% at 50% -10%, rgb(${anyTint} / 0.45), transparent 75%),
-            linear-gradient(to bottom, rgb(${anyTint} / 0.18) 0%, transparent 100%)
+            radial-gradient(ellipse 90% 70% at 50% -10%, rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.45), transparent 75%),
+            linear-gradient(to bottom, rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.18) 0%, transparent 100%)
           `,
         }}
       >
@@ -1264,6 +1464,16 @@ export default function ArtistView({
         >
           <HeroBackdrop src={artist.bannerUrl || artist.artworkUrl} seed={artist.id} />
         </div>
+
+        {/*
+         * گاردِ متنی: واشِ رنگی از عکسِ هنرمند می‌آید و می‌تواند روشن باشد؛ با
+         * آلفای تختِ نیمه‌ی پایینی‌اش خواناییِ نام، متادیتا و کنترل‌ها را تضمین
+         * می‌کند. عددش با TEXT_GUARD_ALPHA در lib/pageTheme.ts گره خورده است.
+         */}
+        <div
+          aria-hidden
+          className="tint-text-guard pointer-events-none absolute inset-x-0 bottom-0 h-3/5"
+        />
 
         {/* بنر عریض بالای کانال یوتیوب */}
         {artist.bannerUrl && (
@@ -1286,7 +1496,7 @@ export default function ArtistView({
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-0 rounded-full opacity-60 blur-2xl transition-opacity duration-500 group-hover/avatar:opacity-85"
-                style={{ background: `rgb(${anyTint} / 0.75)` }}
+                style={{ background: 'rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.75)' }}
               />
 
               {/* تصویر گرد هنرمند با حاشیه‌ی شیشه‌ای */}
@@ -1361,43 +1571,16 @@ export default function ArtistView({
 
             {/* خط جزئیات و آمار آثار */}
             <div className="relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:text-sm text-muted drop-shadow-[0_1px_6px_rgb(0_0_0/0.6)] sm:justify-start">
-              {artist.monthlyListeners ? (
-                <span>{t.monthlyAudience(artist.monthlyListeners)}</span>
-              ) : artist.subscriberCount ? (
-                <span>{t.subscribersCount(artist.subscriberCount)}</span>
-              ) : artist.subtitle ? (
-                <span>{formatArtistSubtitle(artist.subtitle, lang)}</span>
-              ) : null}
-
-              {artist.videoCount != null && (
-                <>
-                  <span aria-hidden className="text-muted-2">·</span>
-                  <span>{t.videosCount(artist.videoCount)}</span>
-                </>
-              )}
-
-              {artist.topTracks.length > 0 && artist.videoCount == null && (
-                <>
-                  {(artist.subtitle || artist.subscriberCount) && <span aria-hidden className="text-muted-2">·</span>}
-                  <span>
-                    {t.trackCount(artist.topTracks.length)} {topTracksTitle}
-                  </span>
-                </>
-              )}
-
-              {artist.albums.length > 0 && (
-                <>
-                  <span aria-hidden className="text-muted-2">·</span>
-                  <span>{t.albumCount(artist.albums.length)}</span>
-                </>
-              )}
-
-              {isUser && artist.playlists.length > 0 && (
-                <>
-                  <span aria-hidden className="text-muted-2">·</span>
-                  <span>{t.playlistsCount(artist.playlists.length)}</span>
-                </>
-              )}
+              {heroFacts.map((fact, i) => (
+                <Fragment key={fact}>
+                  {i > 0 && (
+                    <span aria-hidden className="text-muted-2">
+                      ·
+                    </span>
+                  )}
+                  <span>{fact}</span>
+                </Fragment>
+              ))}
             </div>
 
             {/* اکشن‌بار منسجم در هیرو */}
@@ -1427,6 +1610,7 @@ export default function ArtistView({
               {canShuffle && (
                 <button
                   onClick={handleShufflePlay}
+                  disabled={loadingPlayAll}
                   aria-label={t.shufflePlay}
                   title={t.shufflePlay}
                   className="grid size-10 place-items-center rounded-full border border-white/15 bg-white/5 text-fg backdrop-blur-md transition hover:border-accent/40 hover:bg-white/10 hover:text-accent active:scale-95 sm:size-11"
@@ -1529,54 +1713,65 @@ export default function ArtistView({
         </div>
       </div>
 
-      {/* ─── نوار چسبان: نمایش کنترل‌ها و مینی‌پلیر هنگام اسکرول ─── */}
-      {isScrolledPast && (
-        <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-4 flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 shadow-lg sm:gap-3 sm:px-4 sm:py-2.5">
-          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-            <Artwork
-              src={artist.artworkUrl || artist.bannerUrl || null}
-              alt=""
-              seed={artist.id}
-              className="size-8 sm:size-9 shrink-0 shadow-sm"
-              rounded="rounded-full"
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <p className="bidi truncate text-xs font-bold text-fg sm:text-sm">{artist.name}</p>
-                {isVerified && <VerifiedBadgeIcon className="size-3.5 shrink-0 text-accent" />}
+      {/*
+       * ─── نوار چسبانِ هنرمند: هویت + کنترل‌ها هنگام اسکرول ───
+       *
+       * فقط بعد از رد‌شدن از هیرو ظاهر می‌شود (نه همیشه)، ولی داخلِ یک جعبه‌ی
+       * صفرارتفاع می‌نشیند. رندرِ شرطیِ ساده‌ی قبلی یک ردیفِ ~۶۲ پیکسلی به
+       * جریانِ سند تزریق می‌کرد و همان لحظه کلِ محتوای پایین می‌پرید؛ با
+       * ارتفاعِ صفر، نوار *روی* محتوا شنا می‌کند و چیزی را جابه‌جا نمی‌کند.
+       * چسبندگی هم دست‌نخورده می‌ماند، چون محدوده‌ی `sticky` همان بلوکِ
+       * والدِ بلند است، نه این جعبه‌ی بی‌ارتفاع.
+       */}
+      <div className="sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 h-0">
+        {isScrolledPast && (
+          <div className="glass-bar flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 shadow-lg sm:gap-3 sm:px-4 sm:py-2.5">
+            <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+              <Artwork
+                src={artist.artworkUrl || artist.bannerUrl || null}
+                alt=""
+                seed={artist.id}
+                className="size-8 sm:size-9 shrink-0 shadow-sm"
+                rounded="rounded-full"
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="bidi truncate text-xs font-bold text-fg sm:text-sm">{artist.name}</p>
+                  {isVerified && <VerifiedBadgeIcon className="size-3.5 shrink-0 text-accent" />}
+                </div>
+                <p className="bidi truncate text-[10px] sm:text-[11px] text-muted">
+                  {artist.albums.length
+                    ? t.albumCount(artist.albums.length)
+                    : isUser && artist.playlists.length
+                      ? t.playlistsCount(artist.playlists.length)
+                      : formatArtistSubtitle(artist.subtitle, lang)}
+                </p>
               </div>
-              <p className="bidi truncate text-[10px] sm:text-[11px] text-muted">
-                {artist.albums.length
-                  ? t.albumCount(artist.albums.length)
-                  : isUser && artist.playlists.length
-                    ? t.playlistsCount(artist.playlists.length)
-                    : formatArtistSubtitle(artist.subtitle, lang)}
-              </p>
+              {hasPlayable && (
+                <button
+                  onClick={handlePlayAll}
+                  disabled={loadingPlayAll}
+                  aria-label={isThisArtistCollectionPlaying ? t.pause : t.playAll}
+                  title={isThisArtistCollectionPlaying ? t.pause : t.playAll}
+                  className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-accent-fg shadow-sm transition hover:scale-105 active:scale-95 disabled:opacity-75"
+                >
+                  {loadingPlayAll ? (
+                    <Spinner className="size-4 text-accent-fg" />
+                  ) : isThisArtistCollectionPlaying ? (
+                    <PauseIcon className="size-4" />
+                  ) : (
+                    <PlayIcon className="size-4 ms-0.5" />
+                  )}
+                </button>
+              )}
             </div>
-            {hasPlayable && (
-              <button
-                onClick={handlePlayAll}
-                disabled={loadingPlayAll}
-                aria-label={isThisArtistCollectionPlaying ? t.pause : t.playAll}
-                title={isThisArtistCollectionPlaying ? t.pause : t.playAll}
-                className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-accent-fg shadow-sm transition hover:scale-105 active:scale-95 disabled:opacity-75"
-              >
-                {loadingPlayAll ? (
-                  <Spinner className="size-4 text-accent-fg" />
-                ) : isThisArtistCollectionPlaying ? (
-                  <PauseIcon className="size-4" />
-                ) : (
-                  <PlayIcon className="size-4 ms-0.5" />
-                )}
-              </button>
-            )}
-          </div>
 
-          <div className="hidden sm:flex items-center gap-2">
-            {!isUser && <FollowButton artist={artist} />}
+            <div className="hidden sm:flex items-center gap-2">
+              {!isUser && <FollowButton artist={artist} />}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ─── فیلد جستجوی سریع در آثار هنرمند (فاز ۵) ─── */}
       <div className="mb-5 sm:mb-6 px-1">
@@ -1947,6 +2142,17 @@ export default function ArtistView({
                   <span className="text-xs font-semibold text-muted-2">
                     ({digits(filteredTopTracks.length, lang)})
                   </span>
+                </div>
+                {/* هدر ستون‌های جدول در دسکتاپ */}
+                <div
+                  className={`hidden border-b border-line-soft px-2.5 pb-2 text-[11px] font-semibold text-muted-2 md:grid ${ARTIST_TRACK_GRID}`}
+                >
+                  <span className="text-center">{t.tableHeaderNumber}</span>
+                  <span aria-hidden />
+                  <span>{t.tableHeaderTitle}</span>
+                  <span>{t.typeAlbum}</span>
+                  <span className="text-center">{t.tableHeaderDuration}</span>
+                  <span className="pe-2 text-end">{t.tableHeaderActions}</span>
                 </div>
                 <div className="space-y-1">
                   {filteredTopTracks.map((track, idx) => (
@@ -2499,13 +2705,15 @@ export default function ArtistView({
             </div>
 
             {/* هدر ستون‌های جدول در دسکتاپ */}
-            <div className="hidden items-center gap-2 border-b border-line-soft px-2.5 pb-2 text-[11px] font-semibold text-muted-2 sm:gap-3 md:flex">
-              <span className="w-7 shrink-0 text-center">{t.tableHeaderNumber}</span>
-              <span className="w-10 shrink-0" />
-              <span className="min-w-0 flex-1 md:flex-initial md:w-[38%] lg:w-[42%]">{t.tableHeaderTitle}</span>
-              <span className="hidden min-w-0 md:block md:w-[26%] lg:w-[28%]">{t.typeAlbum}</span>
-              <span className="hidden w-12 shrink-0 text-center md:inline">{t.tableHeaderDuration}</span>
-              <span className="ms-auto w-24 pe-2 text-end">{t.tableHeaderActions}</span>
+            <div
+              className={`hidden border-b border-line-soft px-2.5 pb-2 text-[11px] font-semibold text-muted-2 md:grid ${ARTIST_TRACK_GRID}`}
+            >
+              <span className="text-center">{t.tableHeaderNumber}</span>
+              <span aria-hidden />
+              <span>{t.tableHeaderTitle}</span>
+              <span>{t.typeAlbum}</span>
+              <span className="text-center">{t.tableHeaderDuration}</span>
+              <span className="pe-2 text-end">{t.tableHeaderActions}</span>
             </div>
 
             {/* لیست قطعات برتر */}
@@ -2523,8 +2731,14 @@ export default function ArtistView({
               ))}
             </div>
 
-            {/* دکمه‌ی نمایش بیشتر در زیر لیست */}
-            {filteredTopTracks.length > 5 && !cleanQ && (
+            {/*
+             * دکمه‌ی نمایش بیشتر — عمداً در حالتِ جستجو هم می‌آید.
+             *
+             * قبلاً با `!cleanQ` پنهان می‌شد و نتیجه‌اش بن‌بست بود: جستجوی «a»
+             * روی این هنرمند ۴۴ ترک پیدا می‌کرد، سرصفحه «(۴۴)» می‌گفت، ولی
+             * فقط ۵ ردیف رندر می‌شد و هیچ راهی برای دیدن بقیه نبود.
+             */}
+            {filteredTopTracks.length > 5 && (
               <div className="pt-2 text-center">
                 <button
                   onClick={() => setShowAllTopTracks((v) => !v)}
@@ -2812,7 +3026,7 @@ export default function ArtistView({
                     } else {
                       const idx = filteredReposted.findIndex((x) => x.id === track.id)
                       const items = filteredReposted.map((x) =>
-                        toPlayItem(x, findBestJob(readyJobs, x.id, quality), quality),
+                        toPlayItem(x, findBestJob(readyJobs, x.id, quality, x), quality),
                       )
                       play(items, Math.max(0, idx))
                     }
@@ -2849,7 +3063,7 @@ export default function ArtistView({
                     } else {
                       const idx = filteredLiked.findIndex((x) => x.id === track.id)
                       const items = filteredLiked.map((x) =>
-                        toPlayItem(x, findBestJob(readyJobs, x.id, quality), quality),
+                        toPlayItem(x, findBestJob(readyJobs, x.id, quality, x), quality),
                       )
                       play(items, Math.max(0, idx))
                     }
@@ -2881,7 +3095,7 @@ export default function ArtistView({
                       usePlayer.getState().toggle()
                     } else {
                       const items = radioTracks.map((x) =>
-                        toPlayItem(x, findBestJob(readyJobs, x.id, quality), quality),
+                        toPlayItem(x, findBestJob(readyJobs, x.id, quality, x), quality),
                       )
                       play(items, idx)
                     }

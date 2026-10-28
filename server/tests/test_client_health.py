@@ -505,7 +505,7 @@ class TestOrchestratorHealthIntegration:
         mock_itx.resolve_stream.side_effect = NoStreamError("InnerTubeX found no stream")
         mock_ytdlp = AsyncMock(spec=YtDlpResolver)
         mock_ytdlp.resolve_stream.side_effect = (
-            lambda video_id, purpose="playback", quality=None: sample_ytdlp_stream_factory(video_id)
+            lambda video_id, purpose="playback", quality=None, user_id="local": sample_ytdlp_stream_factory(video_id)
         )
 
         resolver = YouTubeStreamResolver(

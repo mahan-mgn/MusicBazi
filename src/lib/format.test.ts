@@ -153,6 +153,9 @@ describe('isArtistUrl', () => {
     'https://open.spotify.com/intl-fa/user/mahan.mgn',
     'https://www.deezer.com/en/profile/2529',
     'https://soundcloud.com/accia',
+    'https://soundcloud.com/accia/tracks',
+    'https://soundcloud.com/accia/albums',
+    'https://soundcloud.com/accia/popular-tracks?si=123',
     'https://www.youtube.com/@NoCopyrightSounds/playlists',
     'https://www.youtube.com/channel/UC_aEa8K-EOJ3D6gOs7HcyNg',
   ])('sends %s to the artist page', (value) => {

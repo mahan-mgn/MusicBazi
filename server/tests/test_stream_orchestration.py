@@ -135,6 +135,7 @@ class TestYouTubeStreamResolverOrchestration:
             video_id="vid_sample",
             purpose="download",
             quality="m4a",
+            user_id="local",
         )
 
     @pytest.mark.asyncio

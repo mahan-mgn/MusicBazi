@@ -325,7 +325,7 @@ class TestConcurrencySingleFlight:
 
     def test_different_videos_resolve_independently(self, mock_resolver: AsyncMock):
         mock_resolver.resolve.side_effect = (
-            lambda video_id, purpose="playback", quality=None: make_stream(video_id=video_id)
+            lambda video_id, purpose="playback", quality=None, user_id="local": make_stream(video_id=video_id)
         )
         recovery = StreamRecovery(resolver=mock_resolver)
         a = make_stream("vidA", expires_in=-10)
@@ -394,7 +394,7 @@ class TestPhase6PolicyReuse:
             )
 
         mock_ytdlp.resolve_stream.side_effect = (
-            lambda video_id, purpose="playback", quality=None: ytdlp_factory(video_id)
+            lambda video_id, purpose="playback", quality=None, user_id="local": ytdlp_factory(video_id)
         )
 
         monitor = ClientHealthMonitor()

@@ -39,15 +39,23 @@ BASE_OPTS: dict = {
 }
 
 
-def auth_opts() -> dict:
+def auth_opts(user_id: str = "local") -> dict:
     """
     چیزهایی که یوتیوب برای استخراج سمت سرور لازم دارد.
 
     سه گیت مستقل وجود دارد و هر سه باید باز شوند، وگرنه یوتیوب یا «not a bot»
     می‌دهد یا لیست فرمت خالی برمی‌گرداند:
-      ۱. گیت ضدربات   → کوکی مرورگر یا کوکی‌فایل
+      ۱. گیت ضدربات   → کوکیِ مشترک (فایل یا مرورگر)
       ۲. PO Token     → سرور bgutil که در vendor/ بیلد شده
       ۳. چالش امضا/n  → yt-dlp-ejs به‌علاوه‌ی یک JS runtime
+
+    **کوکی عمداً مشترک است، نه شخصی.** برخلاف کلیدهای API، کوکیِ یوتیوب به
+    حسابِ یوتیوبِ سازنده‌اش گره خورده و «درست کار کردنش» به همان حساب و
+    دستگاه بستگی دارد؛ اینکه هر کاربر کوکیِ خودش را بگیرد و آپلود کند
+    عملاً یعنی هر کاربر باید همان مراحل را تکرار کند و اغلب هم شکست می‌خورد.
+    پس یک کوکی روی سرور نگه داشته می‌شود و همه‌ی حساب‌ها از آن استفاده
+    می‌کنند. `user_id` در امضا می‌ماند چون بقیه‌ی لایه‌ها یک‌شکل صدا می‌زنند،
+    ولی این‌جا اثری ندارد.
     """
     opts: dict = {}
 
@@ -75,9 +83,9 @@ def auth_opts() -> dict:
     return opts
 
 
-def opts(**extra) -> dict:
+def opts(user_id: str = "local", **extra) -> dict:
     """گزینه‌های پایه + احراز هویت + ffmpeg، به‌علاوه‌ی هر چیزی که صدازننده بدهد."""
-    merged = {**BASE_OPTS, **auth_opts()}
+    merged = {**BASE_OPTS, **auth_opts(user_id)}
     if FFMPEG_LOCATION:
         merged["ffmpeg_location"] = FFMPEG_LOCATION
     if YTDLP_PROXY:
@@ -88,7 +96,7 @@ def opts(**extra) -> dict:
     return merged
 
 
-def has_cookies() -> bool:
+def has_cookies(user_id: str = "local") -> bool:
     return bool(
         _live("COOKIES_FILE", COOKIES_FILE)
         or _live("COOKIES_BROWSER", COOKIES_BROWSER)

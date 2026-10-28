@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from app.providers import genius
+from app import config
 
 
 class TestBestUrl:
@@ -240,10 +241,10 @@ def _response(status: int, *, json_body=None, text: str = "") -> httpx.Response:
 class TestFetch:
     @pytest.fixture(autouse=True)
     def token(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
     def test_no_token_short_circuits_without_a_request(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
         monkeypatch.setattr(genius.httpx, "Client", lambda **_: (_ for _ in ()).throw(AssertionError("should not connect")))
 
         assert genius.fetch("Barf", "Farhad", None, 0) is None
@@ -352,10 +353,10 @@ class TestFetch:
 class TestSongInfo:
     @pytest.fixture(autouse=True)
     def token(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
     def test_no_token_short_circuits_without_a_request(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
         monkeypatch.setattr(
             genius.httpx, "Client", lambda **_: (_ for _ in ()).throw(AssertionError("should not connect"))
         )
@@ -523,11 +524,11 @@ class TestSongInfo:
 
 class TestEnabled:
     def test_true_when_token_is_set(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "x")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "x")
         assert genius.enabled() is True
 
     def test_false_without_a_token(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
         assert genius.enabled() is False
 
 
@@ -594,7 +595,7 @@ class TestDurationIsNotASignal:
     """
 
     def test_a_zero_duration_still_matches(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
         def handler(url, params, headers):
             if url.endswith("/search"):
@@ -606,7 +607,7 @@ class TestDurationIsNotASignal:
         assert genius.fetch("Barf", "Farhad", None, 0) is not None
 
     def test_a_garbage_duration_does_not_break_matching(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
         def handler(url, params, headers):
             if url.endswith("/search"):

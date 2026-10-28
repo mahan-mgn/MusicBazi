@@ -61,7 +61,9 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         label="Genius",
         capabilities=frozenset({"plain"}),
         terms_note="Terms prohibit scraping/automated use. Manual selection only.",
-        setup_hint="Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment.",
+        # کلیدها شخصی‌اند: کاربر از صفحه‌ی راه‌اندازی حسابِ خودش واردش می‌کند،
+        # نه اپراتور در `.env`. متنِ راهنما باید همان مسیر را نشان بدهد.
+        setup_hint="Add your Genius key in Settings → Setup.",
     ),
     ProviderEntry(
         "lyricsplus",
@@ -145,7 +147,10 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
         label='musixmatch',
         capabilities=frozenset({"line"}),
         terms_note='Official API only; synchronised text needs a commercial plan.',
-        setup_hint='Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment.',
+        # Musixmatch کلیدِ شخصی ندارد و از ویزارد قابلِ تنظیم نیست؛ پس صادقانه
+        # می‌گوید اپراتور باید تنظیمش کند — نه «در تنظیمات وارد کن» که مسیری
+        # برایش وجود ندارد.
+        setup_hint='Server-side only: set MUSICBAZI_MUSIXMATCH_API_KEY for the operator.',
     ),
 )
 
@@ -153,6 +158,13 @@ _PROVIDERS: tuple[ProviderEntry, ...] = (
 def _make_registry() -> ProviderRegistry:
     return ProviderRegistry(list(_PROVIDERS), LYRICS_PROVIDERS_ORDER)
 
+
+def _accepts_uid(fn) -> bool:
+    """آیا این Provider پارامترِ `uid` را می‌پذیرد؟ (همه به‌جز آداپترهای قدیمی)"""
+    try:
+        return "uid" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 def _accepts_hints(fn) -> bool:
     """آیا این تابع پارامترهای راهنمای اختیاری (`video_id`/`isrc`) می‌پذیرد؟"""
@@ -163,7 +175,7 @@ def _accepts_hints(fn) -> bool:
     return "video_id" in params and "isrc" in params
 
 
-def _invoke(fn, track: Track) -> Lyrics | None:
+def _invoke(fn, track: Track, uid: str = "local") -> Lyrics | None:
     """
     Provider را با راهنماهای در دسترس صدا بزن — ولی فقط اگر بپذیرد.
 
@@ -172,16 +184,13 @@ def _invoke(fn, track: Track) -> Lyrics | None:
     Manager آن را «خطای غیرمنتظره» می‌شمرد و Provider را بیهوده اخراج
     می‌کرد. پس یک بار امضا خوانده می‌شود.
     """
+    hints = {}
     if _accepts_hints(fn):
-        return fn(
-            track.title,
-            track.artist,
-            track.album,
-            track.durationMs,
-            video_id=getattr(track, "videoId", None),
-            isrc=getattr(track, "isrc", None),
-        )
-    return fn(track.title, track.artist, track.album, track.durationMs)
+        hints["video_id"] = getattr(track, "videoId", None)
+        hints["isrc"] = getattr(track, "isrc", None)
+    if _accepts_uid(fn):
+        hints["uid"] = uid
+    return fn(track.title, track.artist, track.album, track.durationMs, **hints)
 
 
 class LyricsManager:
@@ -209,13 +218,13 @@ class LyricsManager:
         self._clock = clock
         # کلید ترک → لحظه‌ی انقضا. در حافظه، هم‌شکل با `_pending_lyrics`
         # (`stream_cache.py`)، پس روی دیسک هیچ فرمت تازه‌ای ساخته نمی‌شود.
-        self._misses: dict[str, float] = {}
+        self._misses: dict[tuple[str, str], float] = {}
 
     @property
     def registry(self) -> ProviderRegistry:
         return self._registry
 
-    def _miss_cached(self, key: str) -> bool:
+    def _miss_cached(self, key: tuple[str, str]) -> bool:
         expires = self._misses.get(key)
         if expires is None:
             return False
@@ -224,7 +233,7 @@ class LyricsManager:
             return False
         return True
 
-    def forget(self, key: str) -> None:
+    def forget(self, key: tuple[str, str]) -> None:
         """کشِ منفیِ یک ترک را دور بریز — مثلاً وقتی کاربر دوباره درخواست می‌کند."""
         self._misses.pop(key, None)
 
@@ -238,11 +247,11 @@ class LyricsManager:
         if self._registry.breaker_applies(name):
             self._registry.breaker.record_failure(name)
 
-    def fetch(self, track: Track) -> Lyrics | None:
+    def fetch(self, track: Track, uid: str = "local") -> Lyrics | None:
         if not LYRICS_ENABLED or not track.title.strip():
             return None
 
-        if self._miss_ttl_s > 0 and self._miss_cached(track.id):
+        if self._miss_ttl_s > 0 and self._miss_cached((uid, track.id)):
             return None
 
         # اگر یک Provider خطا بدهد ولی دیگری جواب بدهد، این «یافت شد» است.
@@ -254,9 +263,9 @@ class LyricsManager:
         errored = any(
             self._registry.is_evicted(name) for name in self._registry.order
         )
-        for entry in self._registry.available():
+        for entry in self._registry.available(uid):
             try:
-                result = _invoke(entry.strict(), track)
+                result = _invoke(entry.strict(), track, uid)
             except ProviderError as exc:
                 # قابلِ‌عیب‌یابی، ولی بدون توکن و بدون URL حاوی کلید.
                 log.warning(
@@ -279,21 +288,21 @@ class LyricsManager:
             if self._registry.breaker_applies(entry.name):
                 self._registry.breaker.record_success(entry.name)
             if result:
-                self._misses.pop(track.id, None)
+                self._misses.pop((uid, track.id), None)
                 return replace(
                     result, source=result.source or entry.name, provider_id=entry.name
                 )
 
         # Providerی که رد شده (غیرفعال/بدون توکن) اینجا نیست، پس مانع کش نمی‌شود.
         if not errored and self._miss_ttl_s > 0:
-            self._misses[track.id] = self._clock() + self._miss_ttl_s
+            self._misses[(uid, track.id)] = self._clock() + self._miss_ttl_s
         return None
 
 
 lyrics_manager = LyricsManager()
 
 
-def fetch(track: Track) -> Lyrics | None:
+def fetch(track: Track, uid: str = "local") -> Lyrics | None:
     """Public shared entry point used by download and stream code."""
 
-    return lyrics_manager.fetch(track)
+    return lyrics_manager.fetch(track, uid)

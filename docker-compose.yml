@@ -35,6 +35,17 @@ services:
       MUSICBAZI_YTDLP_PROXY: ${MUSICBAZI_YTDLP_PROXY:-}
       MUSICBAZI_CONCURRENCY: ${MUSICBAZI_CONCURRENCY:-3}
       MUSICBAZI_FILE_RETENTION: ${MUSICBAZI_FILE_RETENTION:-604800}
+      # ورود با گوگل. نبودِ کلیدها یعنی گوگل خاموش است و حساب محلی کار می‌کند.
+      MUSICBAZI_GOOGLE_CLIENT_ID: ${MUSICBAZI_GOOGLE_CLIENT_ID:-}
+      MUSICBAZI_GOOGLE_CLIENT_SECRET: ${MUSICBAZI_GOOGLE_CLIENT_SECRET:-}
+      # ریشه‌ی عمومیِ سرور. گوگل برای redirect فقط https (یا localhost) را
+      # قبول می‌کند، پس روی LAN باید آدرس تونل باشد.
+      MUSICBAZI_AUTH_BASE_URL: ${MUSICBAZI_AUTH_BASE_URL:-}
+      # ریشه‌های دیگرِ مجاز برای ورود، با کاما جدا. گوگل redirect را دقیق مچ
+      # می‌کند، پس برای هم‌زمانیِ دامنه و localhost هر دو باید اینجا و در
+      # Google Console ثبت شوند؛ سرور ریشه را از روی درخواست انتخاب می‌کند.
+      MUSICBAZI_AUTH_ALLOWED_ORIGINS: ${MUSICBAZI_AUTH_ALLOWED_ORIGINS:-}
+      MUSICBAZI_STREAM_V2: ${MUSICBAZI_STREAM_V2:-1}
     ports:
       - "${MUSICBAZI_SERVER_PORT:-8000}:8000"
     # پروکسیِ روی هاست از داخل کانتینر با این نام دیده می‌شود. روی داکر دسکتاپ

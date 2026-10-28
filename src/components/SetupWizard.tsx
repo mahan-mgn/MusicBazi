@@ -5,7 +5,6 @@ import {
   fetchSetupState,
   saveSetup,
   testSetupKey,
-  waitForServer,
   uploadCookies,
   type SetupKey,
   type SetupState,
@@ -15,30 +14,42 @@ import { CheckIcon, CloseIcon, EyeIcon, EyeOffIcon, Spinner, TelegramIcon, WarnI
 import { GeminiLogo, GeniusLogo, SpotifyLogo } from './logos'
 
 /**
- * ویزاردِ راه‌اندازی — دروازه‌ی ورودِ مرورگر.
+ * ویزاردِ راه‌اندازی — *شخصیِ هر حساب*.
  *
- * کلیدها سمتِ سرور است، نه مرورگر. این یک واقعیتِ معماری است و نه ترجیح:
- * رازِ اسپاتیفای و توکنِ تلگرام اگر به صفحه بروند، در DevTools و در کشِ
- * سرویس‌ورکر و در دسترسِ هر اسکریپتِ تزریق‌شده می‌افتند. پس این صفحه فقط
- * *می‌فرستد*؛ نوشتنِ `.env` و آزمودنِ کلید و ری‌استارت را سرور انجام می‌دهد.
+ * هر کاربری که ثبت‌نام می‌کند کلیدِ اسپاتیفای/Genius/Gemini/AcoustID/AudD و
+ * کوکیِ یوتیوبِ خودش را می‌دهد؛ سرور آن‌ها را به‌ازای همان حساب در دیتابیس
+ * ذخیره می‌کند. روی دامنه، بدونِ این، هر بازدیدکننده سهمیه و کلیدِ پرداختیِ
+ * صاحبِ سرور را خرج می‌کرد.
  *
  * سه چیز را با هم انجام می‌دهد تا کاربر مجبور نشود README را بخواند:
- *   ۱. محیط را می‌سنجد (ffmpeg، جاوااسکریپت‌ران‌تایم، PO Token، اینترنت).
+ *   ۱. وضعیتِ سرور را می‌سنجد (ffmpeg، JS runtime، PO Token، اینترنت). اینها
+ *      مالِ سرورند — کاربر عوضشان نمی‌کند، فقط باید بداند چرا کار نمی‌کند.
  *   ۲. هر کلید را *قبل از ذخیره* با سرویسِ خودش می‌آزماید.
- *   ۳. سرور را ری‌استارت می‌کند تا مقدارهای تازه واقعاً به کار بروند.
+ *   ۳. در دیتابیسِ همین حساب ذخیره می‌کند.
  *
- * گامِ سوم ضروری است: `config.py` مقدارها را در زمانِ import می‌خواند. بدونش
- * کاربر کلیدِ درست را می‌دهد و «باز هم» چیزی کار نمی‌کند.
+ * **ری‌استارتی در کار نیست.** مقدارها زنده از دیتابیس خوانده می‌شوند، پس
+ * درخواستِ بعدی همان مقدارِ تازه را می‌بیند. نسخه‌ی قبلی `.env` می‌نوشت و
+ * مجبور بود سرور را پایین/بالا کند.
+ *
+ * اگر کاربر هنوز وارد نشده باشد، ویزارد وضعیتِ سرور را نشان می‌دهد ولی
+ * ذخیره‌کردن ۴۰۱ می‌گیرد — و دروازه خودش فقط برای حسابِ واردشده باز می‌شود.
  */
 
 /** گروه‌های آزمودنی — هرکدام یک یا دو فیلد را با هم می‌فرستند */
-type Probe = { kind: 'idle' } | { kind: 'busy' } | { kind: 'ok'; detail: string } | { kind: 'fail'; detail: string }
+type Probe =
+  | { kind: 'idle' }
+  | { kind: 'busy' }
+  | { kind: 'ok'; detail: string }
+  | { kind: 'fail'; detail: string }
 
 const EMPTY: Probe = { kind: 'idle' }
 
 /**
  * چیدمانِ فرم. `group` یعنی این فیلدها با *یک* کلیک آزموده می‌شوند (اسپاتیفای
  * دو قسمتی است و تک‌سرآزمودنی‌اش همیشه «غلط» می‌گفت).
+ *
+ * عمداً فقط کلیدهای شخصی: پروکسی و توکنِ باتِ تلگرام مالِ سرورند و کاربر
+ * اصلاً نمی‌بیندشان.
  */
 const FIELDS: {
   id: TestGroup
@@ -55,20 +66,6 @@ const FIELDS: {
     hint: (t) => t.setupSpotifyHint,
     url: 'https://developer.spotify.com/dashboard',
     secrets: ['MUSICBAZI_SPOTIFY_CLIENT_SECRET'],
-  },
-  {
-    id: 'proxy',
-    group: ['MUSICBAZI_PROXY'],
-    label: (t) => t.setupProxy,
-    hint: (t) => t.setupProxyHint,
-  },
-  {
-    id: 'telegram',
-    group: ['MUSICBAZI_TELEGRAM_BOT_TOKEN'],
-    label: (t) => t.setupTelegram,
-    hint: (t) => t.setupTelegramHint,
-    url: 'https://t.me/BotFather',
-    secrets: ['MUSICBAZI_TELEGRAM_BOT_TOKEN'],
   },
   {
     id: 'gemini',
@@ -103,7 +100,13 @@ const FIELDS: {
   },
 ]
 
-export default function SetupWizard({ onDone, onServer }: { onDone?: () => void; onServer?: () => void }) {
+export default function SetupWizard({
+  onDone,
+  onServer,
+}: {
+  onDone?: () => void
+  onServer?: () => void
+}) {
   useBackDismiss(Boolean(onDone), onDone ?? (() => {}))
   const { t } = useI18n()
   const [state, setState] = useState<SetupState | null>(null)
@@ -112,7 +115,6 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
   const [probes, setProbes] = useState<Record<string, Probe>>({})
   const [cookieProbe, setCookieProbe] = useState<Probe>(EMPTY)
   const [busy, setBusy] = useState(false)
-  const [waiting, setWaiting] = useState(false)
   const [fatal, setFatal] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -161,17 +163,19 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
     setProbes((p) => ({ ...p, [field.id]: { kind: 'busy' } }))
     const sent: Partial<Record<SetupKey, string>> = {}
     for (const key of field.group) sent[key] = values[key] ?? ''
-    // اگر پروکسی در فرم وارد شده باشد، آن را هم بفرست تا تست تلگرام/جمینای پشت فیلتر نماند
-    if (values.MUSICBAZI_PROXY && !sent.MUSICBAZI_PROXY) {
-      sent.MUSICBAZI_PROXY = values.MUSICBAZI_PROXY
-    }
     try {
       const r = await testSetupKey(field.id, sent)
       if (testSeq.current[field.id] !== seq) return
-      setProbes((p) => ({ ...p, [field.id]: r.ok ? { kind: 'ok', detail: r.detail } : { kind: 'fail', detail: r.detail } }))
+      setProbes((p) => ({
+        ...p,
+        [field.id]: r.ok ? { kind: 'ok', detail: r.detail } : { kind: 'fail', detail: r.detail },
+      }))
     } catch (err) {
       if (testSeq.current[field.id] !== seq) return
-      setProbes((p) => ({ ...p, [field.id]: { kind: 'fail', detail: err instanceof Error ? err.message : String(err) } }))
+      setProbes((p) => ({
+        ...p,
+        [field.id]: { kind: 'fail', detail: err instanceof Error ? err.message : String(err) },
+      }))
     }
   }
 
@@ -190,7 +194,7 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
   }
 
   /**
-   * ذخیره و ری‌استارت.
+   * ذخیره در دیتابیسِ همین حساب.
    *
    * فقط کلیدهایی می‌روند که کاربر چیزی تایپ کرده — فرستادنِ رشته‌ی خالی یعنی
    * پاک‌کردنِ کلیدی که از قبل کار می‌کرده.
@@ -199,42 +203,19 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
     const payload = Object.fromEntries(
       Object.entries(values).filter(([, v]) => v && v.trim()),
     ) as Partial<Record<SetupKey, string>>
-    const hasPayload = Object.keys(payload).length > 0
-    // بدونِ کلیدِ تازه هم باید ری‌استارت شود اگر چیزی روی دیسک خوانده‌نشده باشد
-    const restart = hasPayload || !!state?.restartNeeded
     setBusy(true)
     setFatal('')
     try {
-      const r = await saveSetup(payload, { restart, done: true })
-      // سرور گفت خودش نمی‌تواند ری‌استارت شود (Job Objectِ ویندوز اجازه‌ی
-      // breakaway نداد). زنده است و مقدارها روی دیسک‌اند — فقط دستی باید بالا
-      // بیاید. نگه‌داشتنِ کاربر روی «در حال انتظار» بدترین کار است.
-      if (r.manualRestart) {
-        setBusy(false)
-        setFatal(t.setupManualRestart)
-        return
-      }
-      if (r.restarting) {
-        setWaiting(true)
-        const back = await waitForServer()
-        if (!back) {
-          // سرور برنگشته. اینجا نباید کاربر را پشتِ یک صفحه‌ی سفید گذاشت:
-          // «ادامه» را نشان می‌دهیم تا خودش رفرش کند و راهنمایِ دستی هم می‌آید.
-          setWaiting(false)
-          setBusy(false)
-          setFatal(t.setupRestartFailed)
-          return
-        }
-        // `?setup=1` باید قبل از reload پاک شود، وگرنه صفحه‌ی تازه‌بارگذاری‌شده
-        // دوباره خودش را درِ ویزارد می‌بندد — کاربرِ «فقط کلید اضافه کردم» گیر
-        // می‌افتد و باید دو بار صفحه را ببندد
-        const p = new URLSearchParams(location.search)
+      await saveSetup(payload, { done: true })
+      // `?setup=1` باید قبل از بستن پاک شود، وگرنه لینکِ «راه‌اندازی» در آدرس
+      // می‌ماند و رفرشِ بعدی دوباره بازش می‌کند
+      const p = new URLSearchParams(location.search)
+      if (p.has('setup')) {
         p.delete('setup')
         const qs = p.toString()
         window.history.replaceState(null, '', qs ? `/?${qs}` : '/')
-        location.reload()
-        return
       }
+      setBusy(false)
       onDone?.()
     } catch (err) {
       setBusy(false)
@@ -242,12 +223,15 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
     }
   }
 
-  /** رد کردن — بدون هیچ کلیدی وارد می‌شود. قابلیت‌های اختیاری خاموش می‌مانند. */
+  /**
+   * رد کردن — بدون هیچ کلیدی وارد می‌شود. قابلیت‌های اختیاری خاموش می‌مانند و
+   * ویزارد دیگر برای این حساب باز نمی‌شود.
+   */
   async function skip() {
     setBusy(true)
     setFatal('')
     try {
-      await saveSetup({}, { restart: false, done: true })
+      await saveSetup({}, { done: true })
       onDone?.()
     } catch (err) {
       setBusy(false)
@@ -277,23 +261,12 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
         </div>
 
         <h1 className="text-xl font-bold">{t.setupTitle}</h1>
-        <p className="mt-2 text-sm leading-7 text-muted">{t.setupBody}</p>
+        <p className="mt-2 text-sm leading-7 text-muted">{t.setupPerUserBody}</p>
 
-        {/*
-         * روی دیسک چیزی هست که سرور هنوز نخوانده — معمولاً از اجرایِ قبلی که
-         * ری‌استارت نشده. بدونِ این، کاربر می‌بیند «کلید ست است» ولی همان
-         * قابلیت همچنان کار نمی‌کند و چیزی برای سرزنش کردن ندارد.
-         */}
-        {state?.restartNeeded && (
-          <p className="mt-5 flex items-start gap-1.5 rounded-xl border border-accent/40 bg-accent/10 p-3 text-xs leading-6 text-fg">
-            <WarnIcon className="mt-0.5 size-3.5 shrink-0 text-accent" />
-            <span>{t.setupRestartNeeded}</span>
-          </p>
-        )}
-
-        {/* ---------- محیط ---------- */}
+        {/* ---------- وضعیتِ سرور (فقط-خواندنی) ---------- */}
         <section className="mt-6 rounded-2xl border border-line bg-panel p-4">
-          <h2 className="text-sm font-bold">{t.setupEnvTitle}</h2>
+          <h2 className="text-sm font-bold">{t.setupServerTitle}</h2>
+          <p className="mt-1 text-xs leading-6 text-muted-2">{t.setupServerBody}</p>
           {!state ? (
             <p className="mt-3 flex items-center gap-2 text-xs text-muted">
               <Spinner className="size-3.5" />
@@ -315,8 +288,25 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
               />
               <EnvRow ok={env!.internet} label={t.setupEnvNet} bad={t.setupEnvNetBad} />
               <EnvRow ok={env!.proxy} label={t.setupEnvProxy} bad={t.setupEnvProxyBad} optional />
-              <EnvRow ok={env!.cookies} label={t.setupEnvCookies} bad={t.setupEnvCookiesBad} optional />
+              <EnvRow
+                ok={env!.cookies}
+                label={t.setupEnvCookies}
+                bad={t.setupEnvCookiesBad}
+                optional
+              />
             </ul>
+          )}
+          {/* تلگرام یک بات برای کلِ سرور است؛ کاربر چتِ خودش را با کدِ
+              جفت‌سازی وصل می‌کند و توکن را نمی‌بیند */}
+          {state?.telegram && (
+            <p className="mt-3 flex items-center gap-2 border-t border-line pt-3 text-[11px] leading-5 text-muted-2">
+              <TelegramIcon className="size-3.5 shrink-0 text-[#229ED9]" />
+              <span dir="auto">
+                {state.telegram.botTokenSet
+                  ? t.setupTelegramServer(state.telegram.botUsername || 'MusicBazi')
+                  : t.setupTelegramServerNone}
+              </span>
+            </p>
           )}
         </section>
 
@@ -346,7 +336,7 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
           <ProbeLine probe={cookieProbe} />
         </section>
 
-        {/* ---------- کلیدها ---------- */}
+        {/* ---------- کلیدهای شخصی ---------- */}
         <section className="mt-5 rounded-2xl border border-line bg-panel p-4">
           <h2 className="text-sm font-bold">{t.setupKeysTitle}</h2>
           <p className="mt-1 text-xs leading-6 text-muted">{t.setupKeysBody}</p>
@@ -363,7 +353,6 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
                   {f.id === 'gemini' && <GeminiLogo className="size-4 shrink-0" />}
                   {f.id === 'genius' && <GeniusLogo className="size-4 shrink-0 rounded" />}
                   {f.id === 'spotify' && <SpotifyLogo className="size-4 shrink-0" />}
-                  {f.id === 'telegram' && <TelegramIcon className="size-4 shrink-0 text-[#229ED9]" />}
                   <h3 className="text-xs font-bold">{f.label(t)}</h3>
                   {f.url && (
                     <a
@@ -396,9 +385,7 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
                           {key.replace('MUSICBAZI_', '')}
                         </span>
                         {isMulti && setValue && (
-                          <span className="text-muted-2">
-                            {t.setupAlreadySet(setValue)}
-                          </span>
+                          <span className="text-muted-2">{t.setupAlreadySet(setValue)}</span>
                         )}
                       </div>
                       <div className="flex gap-2">
@@ -421,7 +408,11 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
                               aria-label={isRevealed ? t.setupHideSecret : t.setupShowSecret}
                               className="absolute inset-y-0 end-0 grid size-9 place-items-center text-muted-2 transition hover:text-fg"
                             >
-                              {isRevealed ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+                              {isRevealed ? (
+                                <EyeOffIcon className="size-4" />
+                              ) : (
+                                <EyeIcon className="size-4" />
+                              )}
                             </button>
                           )}
                         </div>
@@ -432,7 +423,11 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
                             disabled={!canTest}
                             className="shrink-0 rounded-xl border border-line px-3 text-xs transition enabled:hover:border-accent/60 disabled:opacity-40"
                           >
-                            {probes[f.id]?.kind === 'busy' ? <Spinner className="size-3.5" /> : t.setupTest}
+                            {probes[f.id]?.kind === 'busy' ? (
+                              <Spinner className="size-3.5" />
+                            ) : (
+                              t.setupTest
+                            )}
                           </button>
                         )}
                       </div>
@@ -456,26 +451,6 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
 
                 {/* نتیجه یک خط است، حتی وقتی دو فیلد گروه‌اند */}
                 <ProbeLine probe={probes[f.id] ?? EMPTY} />
-
-                {/* وضعیت زنده و راهنمای تکمیلی بات تلگرام */}
-                {f.id === 'telegram' && (
-                  <div className="mt-3 space-y-2">
-                    {state?.telegram?.connected ? (
-                      <div className="flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
-                        <CheckIcon className="size-4 shrink-0" />
-                        <span dir="auto">{t.setupTelegramOnline(state.telegram.botUsername || 'MusicBazi')}</span>
-                      </div>
-                    ) : (state?.telegram?.botTokenSet || state?.set['MUSICBAZI_TELEGRAM_BOT_TOKEN']) ? (
-                      <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-5 text-amber-300">
-                        <WarnIcon className="mt-0.5 size-4 shrink-0 text-amber-400" />
-                        <span>{t.setupTelegramOffline}</span>
-                      </div>
-                    ) : null}
-                    <p className="text-[11px] leading-5 text-muted-2">
-                      {t.setupTelegramPairHint}
-                    </p>
-                  </div>
-                )}
               </div>
             )
           })}
@@ -509,11 +484,11 @@ export default function SetupWizard({ onDone, onServer }: { onDone?: () => void;
           </button>
           <button
             onClick={() => void save()}
-            disabled={busy || waiting}
+            disabled={busy}
             className="inline-flex flex-[1.4] items-center justify-center gap-2 rounded-full bg-accent px-4 py-2.5 text-sm font-semibold text-accent-fg transition enabled:hover:brightness-110 disabled:opacity-45"
           >
-            {busy || waiting ? <Spinner className="size-4" /> : null}
-            {waiting ? t.setupWaiting : filled ? t.setupSave(filled, testedOk) : t.setupSaveNothing}
+            {busy ? <Spinner className="size-4" /> : null}
+            {filled ? t.setupSave(filled, testedOk) : t.setupSaveNothing}
           </button>
         </div>
 
@@ -544,7 +519,17 @@ function ProbeLine({ probe }: { probe: Probe }) {
   )
 }
 
-function EnvRow({ ok, label, bad, optional }: { ok: boolean; label: string; bad: string; optional?: boolean }) {
+function EnvRow({
+  ok,
+  label,
+  bad,
+  optional,
+}: {
+  ok: boolean
+  label: string
+  bad: string
+  optional?: boolean
+}) {
   return (
     <li className="flex items-start gap-2">
       {ok ? (

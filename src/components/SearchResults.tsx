@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api } from '../lib/api'
+import { useCallback, useMemo, useState } from 'react'
 import { digits } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import { SOURCE_LABEL, type Album, type Artist, type Playlist, type SearchResults as Results, type Source, type Track } from '../lib/types'
@@ -233,22 +232,6 @@ export default function SearchResults({
   const [tab, setTab] = useState<TabId>('all')
   const [selectedSource, setSelectedSource] = useState<Source | null>(null)
   const { t, lang } = useI18n()
-
-  // پیش‌گرم‌سازی ۲ ترک اول نتایج جستجو تا موقع کلیک کاربر آهنگ بلافاصله پلی شود
-  useEffect(() => {
-    if (!results.tracks.length) return
-    const topTracks = results.tracks.slice(0, 2)
-    const timers: ReturnType<typeof setTimeout>[] = []
-    topTracks.forEach((track, i) => {
-      const timer = setTimeout(() => {
-        void api.prefetchStream?.(track)
-      }, i * 600)
-      timers.push(timer)
-    })
-    return () => {
-      timers.forEach((t) => clearTimeout(t))
-    }
-  }, [results.tracks])
 
   // در حالتِ اینترانت این نتایج از کشِ سرور آمده‌اند، نه از کاتالوگ‌ها. نگفتنش
   // یعنی کاربر فکر می‌کند کاتالوگ فقیر شده — و دنبال آهنگی می‌گردد که فقط

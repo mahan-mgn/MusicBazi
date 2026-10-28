@@ -326,7 +326,7 @@ class TestCoverIsReported:
         assert audio.read_bytes() == b"audio"
 
     def test_finalize_carries_both_the_lrc_and_the_cover_verdict(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(downloader, "fetch_lyrics", lambda track: Lyrics(plain="x", synced=None))
+        monkeypatch.setattr(downloader, "fetch_lyrics", lambda track, uid="local": Lyrics(plain="x", synced=None))
         monkeypatch.setattr(downloader, "_fetch_artwork", lambda url: None)
         monkeypatch.setitem(downloader._TAGGERS, ".mp3", lambda *a: None)
         audio = tmp_path / "a.mp3"

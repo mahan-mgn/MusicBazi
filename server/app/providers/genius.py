@@ -18,7 +18,9 @@ from html.parser import HTMLParser
 
 import httpx
 
-from ..config import GENIUS_ACCESS_TOKEN, GENIUS_API, PROXY
+from .. import credentials
+from ..config import GENIUS_API, PROXY
+from ..db import GUEST_ID
 from ..lyrics.models import Lyrics
 from ..lyrics.registry import ProviderError
 
@@ -73,8 +75,8 @@ class SongInfo:
     url: str | None
 
 
-def enabled() -> bool:
-    return bool(GENIUS_ACCESS_TOKEN)
+def enabled(uid: str = GUEST_ID) -> bool:
+    return credentials.genius_token(uid) is not None
 
 
 def _norm(text: str) -> set[str]:
@@ -157,11 +159,11 @@ def _best_url(hits: list[dict], title: str, artist: str) -> str | None:
     return hit.get("url") if hit else None
 
 
-def _search(client: httpx.Client, query: str) -> list[dict]:
+def _search(client: httpx.Client, query: str, token: str) -> list[dict]:
     res = client.get(
         f"{GENIUS_API}/search",
         params={"q": query},
-        headers={"Authorization": f"Bearer {GENIUS_ACCESS_TOKEN}"},
+        headers={"Authorization": f"Bearer {token}"},
     )
     # غیر-۲۰۰ خطاست نه «صفر نتیجه»: ۴۲۹ و ۵xx یعنی درخواست نرسید، و اگر
     # آن را خالی حساب کنیم یک قطعیِ گذرا به کشِ منفی می‌رود. ۴۰۴ روی endpoint
@@ -174,7 +176,7 @@ def _search(client: httpx.Client, query: str) -> list[dict]:
         raise ProviderError(_NAME, "body", detail=exc.__class__.__name__) from exc
 
 
-def _find(client: httpx.Client, title: str, artist: str) -> dict | None:
+def _find(client: httpx.Client, title: str, artist: str, token: str) -> dict | None:
     """
     بهترین نتیجه برای این ترک — اول با اسمِ کاملِ هنرمند، بعد فقط با اولی.
 
@@ -187,7 +189,7 @@ def _find(client: httpx.Client, title: str, artist: str) -> dict | None:
     if (primary := _primary(artist)) and primary != artist.strip():
         queries.append(f"{title} {primary}".strip())
     for query in queries:
-        if hit := _best_hit(_search(client, query), title, artist):
+        if hit := _best_hit(_search(client, query, token), title, artist):
             return hit
     return None
 
@@ -270,6 +272,7 @@ def fetch_strict(
     *,
     video_id: str | None = None,
     isrc: str | None = None,
+    uid: str = GUEST_ID,
 ) -> Lyrics | None:
     """
     `video_id` و `isrc` پذیرفته می‌شوند ولی **استفاده نمی‌شوند**: این منبع
@@ -281,12 +284,13 @@ def fetch_strict(
     بدون توکن `None` می‌دهد نه خطا: «پیکربندی نشده» با «قطع بود» یکی نیست،
     و Providerِ پیکربندی‌نشده نباید مانع کشِ منفی شود.
     """
-    if not title or not GENIUS_ACCESS_TOKEN:
+    token = credentials.genius_token(uid)
+    if not title or not token:
         return None
 
     with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True, proxy=PROXY) as client:
         try:
-            hit = _find(client, title, artist)
+            hit = _find(client, title, artist, token)
         except ProviderError:
             raise
         except Exception as exc:
@@ -309,7 +313,9 @@ def fetch_strict(
     return Lyrics(plain=text, format="plain", sync_type="plain") if text else None
 
 
-def fetch(title: str, artist: str, album: str | None, duration_ms: int) -> Lyrics | None:
+def fetch(
+    title: str, artist: str, album: str | None, duration_ms: int, uid: str = GUEST_ID
+) -> Lyrics | None:
     """
     قرارداد عمومی — دست‌نخورده: هر خطایی `None` می‌شود.
 
@@ -317,7 +323,7 @@ def fetch(title: str, artist: str, album: str | None, duration_ms: int) -> Lyric
     می‌زنند. آن‌که باید خطا را ببیند، `fetch_strict` را صدا می‌زند.
     """
     try:
-        return fetch_strict(title, artist, album, duration_ms)
+        return fetch_strict(title, artist, album, duration_ms, uid=uid)
     except Exception:
         return None
 
@@ -326,7 +332,7 @@ def _names(entries: list[dict] | None) -> list[str]:
     return [n for e in (entries or []) if (n := e.get("name"))]
 
 
-def song_info(title: str, artist: str) -> SongInfo | None:
+def song_info(title: str, artist: str, uid: str = GUEST_ID) -> SongInfo | None:
     """
     آهنگساز/تهیه‌کننده/آلبوم/تاریخ انتشار/کاور — از `/songs/{id}`، نه از
     `/search` که این فیلدها را ندارد.
@@ -334,13 +340,14 @@ def song_info(title: str, artist: str) -> SongInfo | None:
     `description` عمداً گرفته نمی‌شود: فرمتش (rich text/DOM) بدون یک
     parser جدا قابل‌اتکا استخراج نمی‌شود و ارزشش را برای این کار ندارد.
     """
-    if not title or not GENIUS_ACCESS_TOKEN:
+    token = credentials.genius_token(uid)
+    if not title or not token:
         return None
 
-    auth = {"Authorization": f"Bearer {GENIUS_ACCESS_TOKEN}"}
+    auth = {"Authorization": f"Bearer {token}"}
     try:
         with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS, follow_redirects=True, proxy=PROXY) as client:
-            hit = _find(client, title, artist)
+            hit = _find(client, title, artist, token)
             if not hit or not hit.get("id"):
                 return None
 

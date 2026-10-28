@@ -34,6 +34,7 @@ from mutagen.oggopus import OggOpus
 
 from . import artcache, artwork, ydl
 from .config import DOWNLOAD_DIR, FFMPEG_BIN, PROXY, YTDLP_PROXY
+from .db import GUEST_ID
 from .models import Quality, Track
 from .lyrics import manager as lyrics_manager
 
@@ -78,6 +79,7 @@ def _ydl_opts(
     quality: Quality,
     on_progress: ProgressFn,
     should_abort: Callable[[], bool] | None = None,
+    user_id: str = GUEST_ID,
 ) -> dict:
     def hook(d: dict) -> None:
         # تنها نقطه‌ای که به‌طور مرتب داخل نخ دانلود اجرا می‌شود
@@ -91,6 +93,7 @@ def _ydl_opts(
             on_progress(min(99.0, done / total * 100))
 
     opts = ydl.opts(
+        user_id=user_id,
         outtmpl=f"{out_stem}.%(ext)s",
         progress_hooks=[hook],
         format="bestaudio/best",
@@ -696,7 +699,7 @@ def describe(path: Path) -> str:
     return ext
 
 
-def fetch_lyrics(track: Track):
+def fetch_lyrics(track: Track, user_id: str = GUEST_ID):
     """
     متن آهنگ، یا None. خطا هیچ‌وقت بالا نمی‌رود — متن جزء اختیاری است.
 
@@ -704,7 +707,7 @@ def fetch_lyrics(track: Track):
     مثلاً چون Genius بدون کلید کار نمی‌کند — Genius (فقط متن ساده).
     """
     try:
-        return lyrics_manager.fetch(track)
+        return lyrics_manager.fetch(track, user_id)
     except Exception:
         return None
 
@@ -795,9 +798,9 @@ class Finalized:
     cover: bool
 
 
-def finalize(path: Path, track: Track) -> Finalized:
+def finalize(path: Path, track: Track, user_id: str = GUEST_ID) -> Finalized:
     """متن را می‌گیرد، تگ می‌زند و .lrc را می‌نویسد."""
-    lyrics = fetch_lyrics(track)
+    lyrics = fetch_lyrics(track, user_id)
     cover = tag(path, track, lyrics)
     return Finalized(lyrics_path=write_lrc(path, lyrics), cover=cover)
 
@@ -810,6 +813,7 @@ def download_stream(
     out_dir: Path | None = None,
     should_abort: Callable[[], bool] | None = None,
     headers: dict[str, str] | None = None,
+    user_id: str = GUEST_ID,
 ) -> Path:
     """
     دانلود مستقیم یک آدرس استریم صوتی خام (استخراج‌شده توسط InnerTubeX یا کلاینت‌های مشابه).
@@ -830,7 +834,7 @@ def download_stream(
     for leftover in siblings():
         leftover.unlink(missing_ok=True)
 
-    opts = _ydl_opts(stem, quality, on_progress, should_abort)
+    opts = _ydl_opts(stem, quality, on_progress, should_abort, user_id)
     opts["extractor_args"] = {}
     if headers:
         opts["http_headers"] = dict(headers)
@@ -871,6 +875,7 @@ def _try_innertubex_download(
     on_progress: ProgressFn,
     out_dir: Path | None,
     should_abort: Callable[[], bool] | None,
+    user_id: str = GUEST_ID,
 ) -> Path | None:
     try:
         from .stream.resolver import YouTubeStreamResolver
@@ -893,6 +898,7 @@ def _try_innertubex_download(
                 out_dir=out_dir,
                 should_abort=should_abort,
                 headers=getattr(stream, "headers", None),
+                user_id=user_id,
             )
     except Exception as exc:
         log.warning("InnerTubeX fallback download failed for vid=%s: %s", video_id, exc)
@@ -906,6 +912,7 @@ def download(
     on_progress: ProgressFn,
     out_dir: Path | None = None,
     should_abort: Callable[[], bool] | None = None,
+    user_id: str = GUEST_ID,
 ) -> Path:
     """
     فایل را دانلود و ترنسکد می‌کند و مسیر نهایی را برمی‌گرداند.
@@ -937,7 +944,7 @@ def download(
 
     # نام محلی عمداً ydl نیست — ماژول ydl را سایه می‌انداخت
     try:
-        with YoutubeDL(_ydl_opts(stem, quality, on_progress, should_abort)) as y:
+        with YoutubeDL(_ydl_opts(stem, quality, on_progress, should_abort, user_id)) as y:
             y.extract_info(url, download=True)
     except DownloadCanceled:
         # پاک‌سازی باید همین‌جا و داخل همین نخ باشد: yt-dlp فایل `.part` را برای
@@ -956,7 +963,7 @@ def download(
         if m and _is_recoverable_yt_error(str(exc)):
             log.info("تلاش مجدد برای دانلود «%s» از یوتیوب با استخراج‌کننده InnerTubeX", track.title)
             resolved_file = _try_innertubex_download(
-                track, m.group(1), quality, on_progress, out_dir, should_abort
+                track, m.group(1), quality, on_progress, out_dir, should_abort, user_id
             )
             if resolved_file:
                 return resolved_file

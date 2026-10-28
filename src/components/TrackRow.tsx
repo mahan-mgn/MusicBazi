@@ -1,4 +1,4 @@
-import { api } from '../lib/api'
+import { useEffect, useRef } from 'react'
 import {
   cleanArtist,
   duration as fmtDuration,
@@ -17,6 +17,7 @@ import { useToasts } from '../store/toasts'
 import { toPlayItem } from '../lib/stream'
 import { useRowSwipe } from '../lib/useRowSwipe'
 import { canSaveToDevice, haptic, saveToDevice } from '../lib/native'
+import { prewarmTrack } from '../lib/prewarm'
 import Artwork from './Artwork'
 import SendToTelegram from './SendToTelegram'
 import SourceBadge from './SourceBadge'
@@ -97,6 +98,32 @@ export default function TrackRow({
     useToasts.getState().push(t.queueAdded(track.title), 'info')
   }
 
+  const hoverTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+    }
+  }, [])
+
+  const handleMouseEnter = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+    hoverTimer.current = window.setTimeout(() => {
+      prewarmTrack(track, quality)
+    }, 60)
+  }
+
+  const handleMouseLeave = () => {
+    if (hoverTimer.current) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }
+
+  const handlePointerDown = () => {
+    prewarmTrack(track, quality)
+  }
+
   const rowRef = useRowSwipe<HTMLDivElement>({
     onStartToEnd: handleSwipeToQueue,
     onEndToStart: handleSwipeToQueue,
@@ -106,9 +133,9 @@ export default function TrackRow({
   return (
     <div
       ref={rowRef}
-      onMouseEnter={() => {
-        if (!job) void api.prefetchStream?.(track)
-      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onPointerDown={handlePointerDown}
       className={`group relative flex items-center gap-2 overflow-hidden rounded-lg px-1.5 py-2 transition sm:gap-3 sm:px-2 ${
         selected
           ? 'bg-accent-dim'
@@ -154,6 +181,7 @@ export default function TrackRow({
       <button
         type="button"
         onClick={() => onTogglePlay(track)}
+        onFocus={() => prewarmTrack(track, quality)}
         aria-label={playing ? t.pause : t.playTrack(track.title)}
         className="group/art relative size-10 shrink-0 overflow-hidden rounded-lg shadow-sm border border-white/10 text-start"
       >
@@ -181,6 +209,7 @@ export default function TrackRow({
           <button
             type="button"
             onClick={() => onTogglePlay(track)}
+            onFocus={() => prewarmTrack(track, quality)}
             className="bidi truncate text-start text-sm font-medium transition-colors hover:text-accent"
           >
             <span

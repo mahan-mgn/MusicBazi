@@ -7,6 +7,12 @@ interface Props {
   seed: string
   className?: string
   rounded?: string
+  /**
+   * آدرسِ جانشین اگر `src` لود نشد — پیش از افتادن به گرادیانِ سید امتحان
+   * می‌شود. مصرف‌کننده‌ی اصلی‌اش `HeroBackdrop` است که `src`ش نسخهٔ بلورشده‌ی
+   * سمتِ سرور است و آن نسخه ممکن است ۴۰۴ بدهد در حالی که خودِ کاور سالم است.
+   */
+  fallbackSrc?: string | null
   /** استایل اضافه — بک‌دراپ با opacity کمتر از خودش استفاده می‌کند */
   style?: CSSProperties
   /**
@@ -106,6 +112,10 @@ export function HeroBackdrop({ src, seed, rounded = '' }: { src: string | null; 
     >
       <Artwork
         src={blurred ?? src}
+        // بلور روی سرور تنبل ساخته می‌شود؛ اگر پیش از آینه‌شدنِ کاور برسیم
+        // ۴۰۴ می‌گیریم و این فالبک همان کاورِ اصل را می‌آورد — بهتر از
+        // گرادیانِ سید که هیچ ربطی به عکسِ واقعی ندارد.
+        fallbackSrc={blurred ? src : null}
         alt=""
         seed={seed}
         rounded=""
@@ -139,6 +149,7 @@ export default function Artwork({
   seed,
   className = '',
   rounded = 'rounded-lg',
+  fallbackSrc,
   transitionName,
   style: extraStyle,
 }: Props) {
@@ -150,26 +161,42 @@ export default function Artwork({
    * فیلترشده بینشان عادی است — و نتیجه‌اش آیکونِ شکسته‌ی خودِ مرورگر بود،
    * که از یک کاورِ نداشته هم بدتر به‌نظر می‌رسد.
    *
-   * خودِ آدرس ذخیره می‌شود نه یک پرچمِ بولی: با عوض‌شدنِ ترک، `src` جدید
+   * خودِ آدرس‌ها لیست می‌شوند نه یک پرچمِ بولی: با عوض‌شدنِ ترک، `src` جدید
    * دوباره شانسِ خودش را دارد، بدون افکت و بدون ریست‌کردنِ دستی.
    */
-  const [brokenSrc, setBrokenSrc] = useState<string | null>(null)
+  const [failedSrcs, setFailedSrcs] = useState<string[]>([])
   const style = extraStyle
     ? { ...(transitionName ? { viewTransitionName: transitionName } : {}), ...extraStyle }
     : transitionName
       ? { viewTransitionName: transitionName }
       : undefined
 
-  if (src && src !== brokenSrc) {
+  /*
+   * `src` اول، بعد `fallbackSrc`، و گرادیان به‌عنوان آخرین چاره.
+   *
+   * `fallbackSrc` برای هیرو ساخته شد: آن‌جا `src` نسخهٔ بلورشده است و بلور
+   * *تنبل* روی سرور ساخته می‌شود — اگر درخواست پیش از آینه‌شدنِ کاورِ اصلی
+   * برسد، سرور ۴۰۴ می‌دهد. بدونِ فالبک، کلِ هیرو به یک گرادیانِ تخت می‌افتاد
+   * و کاورِ اصلی هم هرگز امتحان نمی‌شد، درست وقتی که کاربر تازه صفحه را باز
+   * کرده و بیشترین اثر را دارد.
+   */
+  const active = [src, fallbackSrc].find(
+    (candidate): candidate is string =>
+      Boolean(candidate) && !failedSrcs.includes(candidate!),
+  )
+
+  if (active) {
     return (
       <img
-        src={src}
+        src={active}
         alt={alt}
         loading="lazy"
         // رمزگشاییِ تصویر روی نخِ اصلی، اسکرولِ لیستی که ده‌ها کاور دارد را
         // تکه‌تکه می‌کند
         decoding="async"
-        onError={() => setBrokenSrc(src)}
+        onError={() =>
+          setFailedSrcs((prev) => (prev.includes(active) ? prev : [...prev, active]))
+        }
         style={style}
         // img به‌صورت پیش‌فرض inline است؛ بدون block، اندازه‌ی واقعی‌اش گاهی
         // با اندازه‌ی جعبه‌ی تعیین‌شده توسط کلاس‌ها (مخصوصاً کنار aspect-square)

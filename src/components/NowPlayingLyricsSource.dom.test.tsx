@@ -20,18 +20,27 @@ vi.mock('../lib/audioEngine', async (importOriginal) => {
   }
 })
 
-vi.mock('../lib/artColor', () => ({
-  dominantColor: vi.fn().mockResolvedValue([100, 150, 200]),
-  fallbackTint: vi.fn().mockReturnValue([100, 150, 200]),
-  tidalBgColor: vi.fn().mockReturnValue('rgb(20, 30, 40)'),
-  tintVars: vi.fn().mockReturnValue({ rgb: '100 150 200', strong: '#ffffff' }),
-  deriveHarmonics: vi.fn().mockReturnValue({
-    dominant: [100, 150, 200],
-    secondary: [150, 100, 200],
-    accent: [200, 150, 100],
-    muted: [30, 40, 50],
-  }),
-}))
+/*
+ * ماکِ جزئی، نه کامل: `pageTheme` هم از همین ماژول رنگ می‌گیرد و به کمکی‌های
+ * واقعی‌اش (`clampLuminance`، `contrastRatio`) نیاز دارد.
+ */
+vi.mock('../lib/artColor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/artColor')>()
+  return {
+    ...actual,
+    dominantColor: vi.fn().mockResolvedValue([100, 150, 200]),
+    peekArtworkColor: vi.fn().mockReturnValue([100, 150, 200]),
+    fallbackTint: vi.fn().mockReturnValue([100, 150, 200]),
+    tidalBgColor: vi.fn().mockReturnValue('rgb(20, 30, 40)'),
+    tintVars: vi.fn().mockReturnValue({ rgb: '100 150 200', strong: '#ffffff' }),
+    deriveHarmonics: vi.fn().mockReturnValue({
+      dominant: [100, 150, 200],
+      secondary: [150, 100, 200],
+      accent: [200, 150, 100],
+      muted: [30, 40, 50],
+    }),
+  }
+})
 
 const item: PlayItem = {
   id: 'test-track-1',

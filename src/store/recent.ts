@@ -1,4 +1,7 @@
 import { create } from 'zustand'
+
+import { onIdentityChange } from '../lib/identity'
+import { scopedKey } from '../lib/storage'
 import type { PlayItem } from './player'
 
 /**
@@ -44,9 +47,16 @@ export type RecentEntry =
 /** Omit روی یونیون خودش توزیع نمی‌شود و شاخه‌ها را قاطی می‌کند؛ این می‌کند */
 type WithoutAt<T> = T extends unknown ? Omit<T, 'at'> : never
 
+/**
+ * کلیدِ حساب‌محور. «ادامه بده» شاملِ خودِ ترک و آدرسش است — تاریخِ گوش‌دادنِ
+ * حسابِ اول نباید در حسابِ دوم دیده شود. مهمان همان کلیدِ قدیمی را نگه
+ * می‌دارد تا داده‌ی نسخه‌ی تک‌کاربره از دست نرود.
+ */
+const key = () => scopedKey(KEY)
+
 function read(): RecentEntry[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(key())
     const parsed: unknown = raw ? JSON.parse(raw) : []
     if (!Array.isArray(parsed)) return []
     // نسخه‌های قدیمی‌ترِ ساختار نباید کلِ ردیف را بترکانند
@@ -60,7 +70,7 @@ function read(): RecentEntry[] {
 
 function write(items: RecentEntry[]) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(items))
+    localStorage.setItem(key(), JSON.stringify(items))
   } catch {
     // سهمیه‌ی localStorage پر است — این لیست یک راحتی است، نه چیز حیاتی
   }
@@ -92,3 +102,6 @@ export const useRecent = create<RecentState>((set, get) => ({
     set({ items: [] })
   },
 }))
+
+// ورود/خروج بدونِ رفرش: «ادامه بده»‌ی حسابِ قبلی نباید در حسابِ تازه بماند
+onIdentityChange(() => useRecent.setState({ items: read() }))

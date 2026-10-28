@@ -4,6 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { usePlayer } from '../store/player'
 import type { PlayItem } from '../store/player'
+import { clampLuminance, relativeLuminance, type RGB } from '../lib/artColor'
+import { WASH_MAX_LUM } from '../lib/pageTheme'
 import NowPlaying from './NowPlaying'
 
 vi.mock('../lib/audioEngine', async (importOriginal) => {
@@ -18,18 +20,29 @@ vi.mock('../lib/audioEngine', async (importOriginal) => {
   }
 })
 
-vi.mock('../lib/artColor', () => ({
-  dominantColor: vi.fn().mockResolvedValue([100, 150, 200]),
-  fallbackTint: vi.fn().mockReturnValue([100, 150, 200]),
-  tidalBgColor: vi.fn().mockReturnValue('rgb(20, 30, 40)'),
-  tintVars: vi.fn().mockReturnValue({ rgb: '100 150 200', strong: '#ffffff' }),
-  deriveHarmonics: vi.fn().mockReturnValue({
-    dominant: [100, 150, 200],
-    secondary: [150, 100, 200],
-    accent: [200, 150, 100],
-    muted: [30, 40, 50],
-  }),
-}))
+/*
+ * ماکِ جزئی، نه کامل: `pageTheme` هم از همین ماژول رنگ می‌گیرد و به کمکی‌های
+ * واقعی‌اش (`clampLuminance`، `contrastRatio`) نیاز دارد. اگر ماک کامل باشد،
+ * آن‌ها `undefined` می‌شوند و ساختِ تم می‌ترکد.
+ */
+vi.mock('../lib/artColor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/artColor')>()
+  return {
+    ...actual,
+    dominantColor: vi.fn().mockResolvedValue([100, 150, 200]),
+    // کش گرم ⇒ فریمِ اول هم رنگِ واقعی را دارد و تست لازم نیست صبر کند
+    peekArtworkColor: vi.fn().mockReturnValue([100, 150, 200]),
+    fallbackTint: vi.fn().mockReturnValue([100, 150, 200]),
+    tidalBgColor: vi.fn().mockReturnValue('rgb(20, 30, 40)'),
+    tintVars: vi.fn().mockReturnValue({ rgb: '100 150 200', strong: '#ffffff' }),
+    deriveHarmonics: vi.fn().mockReturnValue({
+      dominant: [100, 150, 200],
+      secondary: [150, 100, 200],
+      accent: [200, 150, 100],
+      muted: [30, 40, 50],
+    }),
+  }
+})
 
 const mockTrackItem: PlayItem = {
   id: 'test-track-1',
@@ -499,6 +512,82 @@ describe('NowPlaying component', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
   })
+
+  /*
+   * تمِ بر پایه‌ی تصویر.
+   *
+   * شیت سه لایه دارد: تصویرِ بلورشده، اتمسفرِ نوری، و scrimهای تیره. دو تای
+   * اول رنگشان را از کاور می‌گیرند و آخری تضمینِ خوانایی است؛ این‌جا سنجیده
+   * می‌شود که آن رنگ‌ها از راهِ متغیرهای ثبت‌شده می‌آیند — وگرنه گرادیان‌ها با
+   * `transition` عوض نمی‌شدند و یک‌باره می‌پریدند — و واش از سقفِ روشنایی رد
+   * نمی‌شود.
+   */
+  describe('artwork theme', () => {
+    const renderSheet = () => {
+      act(() => {
+        root.render(<NowPlaying onClose={vi.fn()} />)
+      })
+      return host.querySelector<HTMLElement>('.tint-scope-sheet')
+    }
+
+    it('puts the theme tokens on the sheet and keeps the aura mesh raw', () => {
+      const sheet = renderSheet()
+      expect(sheet).not.toBeNull()
+      const style = (sheet as HTMLElement).style
+
+      expect([
+        style.getPropertyValue('--mesh1-r'),
+        style.getPropertyValue('--mesh1-g'),
+        style.getPropertyValue('--mesh1-b'),
+      ]).toEqual(['100', '150', '200'])
+
+      const wash: RGB = [
+        Number(style.getPropertyValue('--tint-r')),
+        Number(style.getPropertyValue('--tint-g')),
+        Number(style.getPropertyValue('--tint-b')),
+      ]
+      expect(wash).toEqual(clampLuminance([100, 150, 200], WASH_MAX_LUM))
+      expect(relativeLuminance(wash)).toBeLessThanOrEqual(WASH_MAX_LUM)
+    })
+
+    it('drives the aura gradient from the registered mesh tokens', () => {
+      const sheet = renderSheet()
+      const backgrounds = Array.from((sheet as HTMLElement).querySelectorAll('span')).map(
+        (span) => (span as HTMLElement).style.background,
+      )
+      for (const token of ['--mesh1-r', '--mesh2-r', '--mesh3-r']) {
+        expect(backgrounds.some((bg) => bg.includes(`var(${token})`))).toBe(true)
+      }
+      // دیگر رشته‌ی رنگِ ثابت نیست، پس مرورگر می‌تواند نرم عوضش کند
+      expect(backgrounds.some((bg) => /rgb\(100 150 200/.test(bg))).toBe(false)
+    })
+
+    /*
+     * قراردادِ «رنگِ آرت‌ورک، نه تصویرِ آرت‌ورک».
+     *
+     * پس‌زمینه دقیقاً رنگِ کاور است (`tidalBgColor` روی خودِ شیت) و هیچ لایهٔ
+     * بلورشده یا scrimِ تیره‌ای رویش نیست. این تست جلوی برگشتنِ آن پیاده‌سازیِ
+     * قبلی را می‌گیرد — و هم‌زمان یادآور است که خوانایی حالا کاملاً بر دوشِ
+     * `tidalBgColor` و αهای پایینِ mesh است، پس کسی نباید αها را بالا ببرد
+     * بدونِ اینکه تستِ کنتراستِ پایین را هم به‌روز کند.
+     */
+    it('paints the raw artwork colour with no blurred cover and no dark scrim', () => {
+      const sheet = renderSheet()
+      const el = sheet as HTMLElement
+
+      // رنگِ خودِ آرت‌ورک، از راهِ tidalBgColor
+      expect(el.style.backgroundColor).toBe('rgb(20, 30, 40)')
+
+      // هیچ تصویری اصلاً رندر نمی‌شود (کاورِ آهنگ از جای دیگری می‌آید، نه
+      // داخلِ لایهٔ پس‌زمینه) — پس نه بلورِ تصویر، نه onErrorش
+      const bgLayer = el.firstElementChild as HTMLElement
+      expect(bgLayer.querySelector('img')).toBeNull()
+
+      // و هیچ scrimِ تیره‌ای روی لایهٔ پس‌زمینه نیست
+      const darkOverlays = Array.from(bgLayer.querySelectorAll('span')).filter((span) =>
+        /bg-black\/|from-black\//.test((span as HTMLElement).className),
+      )
+      expect(darkOverlays).toEqual([])
+    })
+  })
 })
-
-

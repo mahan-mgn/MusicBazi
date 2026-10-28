@@ -29,6 +29,11 @@ interface Props {
   /** نمایش به عنوان ردیف کامل منو (برای منوی سه‌نقطه در NowPlaying) */
   asMenuItem?: boolean
   className?: string
+  /** کنترل وضعیت باز/بسته از والد */
+  open?: boolean
+  onClose?: () => void
+  /** مرجع المانِ لنگر جهت موقعیت‌یابی پاپ‌اور در حالت کنترل‌شده */
+  anchorRef?: React.RefObject<HTMLElement | null>
 }
 
 /**
@@ -117,11 +122,19 @@ function TonePad({
   )
 }
 
-export default function AudioSettings({ asMenuItem = false, className = '' }: Props) {
+export default function AudioSettings({
+  asMenuItem = false,
+  className = '',
+  open: propsOpen,
+  onClose,
+  anchorRef,
+}: Props) {
   const { t, lang } = useI18n()
   const {
     normalize,
     crossfade,
+    automix,
+    smartDj,
     eqBands,
     tone,
     balance,
@@ -129,6 +142,8 @@ export default function AudioSettings({ asMenuItem = false, className = '' }: Pr
     boost,
     setNormalize,
     setCrossfade,
+    setAutomix,
+    setSmartDj,
     setEqBands,
     setTone,
     setBalance,
@@ -146,7 +161,19 @@ export default function AudioSettings({ asMenuItem = false, className = '' }: Pr
   )
   const tintStyle = useMemo(() => pageThemeVars(theme), [theme])
 
-  const [open, setOpen] = useState(false)
+  const isControlled = typeof propsOpen === 'boolean'
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = isControlled ? propsOpen : internalOpen
+
+  const setOpen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const val = typeof next === 'function' ? next(open) : next
+      if (!val) onClose?.()
+      if (!isControlled) setInternalOpen(val)
+    },
+    [isControlled, onClose, open],
+  )
+
   const [sheet, setSheet] = useState(false)
   const [showPipeline, setShowPipeline] = useState(false)
   const [, tick] = useState(0)
@@ -157,17 +184,22 @@ export default function AudioSettings({ asMenuItem = false, className = '' }: Pr
 
   useBackDismiss(open, () => setOpen(false))
 
+  const getAnchor = useCallback(() => {
+    return anchorRef?.current ?? triggerRef.current
+  }, [anchorRef])
+
   // بستن با کلیکِ بیرون
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
       const target = e.target as Node
-      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      const anchor = getAnchor()
+      if (anchor?.contains(target) || panelRef.current?.contains(target)) return
       setOpen(false)
     }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
-  }, [open])
+  }, [open, getAnchor, setOpen])
 
   // بستن با کلید Escape
   useEffect(() => {
@@ -175,16 +207,16 @@ export default function AudioSettings({ asMenuItem = false, className = '' }: Pr
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOpen(false)
-        triggerRef.current?.focus()
+        getAnchor()?.focus()
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [open])
+  }, [open, getAnchor, setOpen])
 
   // محاسبه موقعیت هوشمند پاپ‌اور با تضمین عدم خروج از سقف، کف و کناره‌های پنجره
   const reposition = useCallback(() => {
-    const trigger = triggerRef.current
+    const trigger = getAnchor()
     const panel = panelRef.current
     if (!trigger || !panel) return
 
@@ -343,6 +375,78 @@ export default function AudioSettings({ asMenuItem = false, className = '' }: Pr
           />
         </div>
       </div>
+
+      {crossfade > 0 && (
+        <>
+          <div className="rounded-xl bg-white/5 border border-white/10 p-2.5 transition">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                {t.automix}
+                <span
+                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                    automix ? 'bg-accent/25 text-accent font-bold' : 'bg-white/10 text-white/50'
+                  }`}
+                >
+                  {automix ? t.automixActive : t.automixInactive}
+                </span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                dir="ltr"
+                aria-checked={automix}
+                onClick={() => setAutomix(!automix)}
+                aria-label={t.automix}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  automix ? 'bg-accent' : 'bg-white/20'
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    automix ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[11px] leading-snug text-white/60">{t.automixHint}</p>
+          </div>
+
+          <div className="rounded-xl bg-white/5 border border-white/10 p-2.5 transition">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                {t.smartDj}
+                <span
+                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                    smartDj ? 'bg-accent/25 text-accent font-bold' : 'bg-white/10 text-white/50'
+                  }`}
+                >
+                  {smartDj ? t.smartDjActive : t.smartDjInactive}
+                </span>
+              </span>
+              <button
+                type="button"
+                role="switch"
+                dir="ltr"
+                aria-checked={smartDj}
+                onClick={() => setSmartDj(!smartDj)}
+                aria-label={t.smartDj}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  smartDj ? 'bg-accent' : 'bg-white/20'
+                }`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none inline-block size-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    smartDj ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-[11px] leading-snug text-white/60">{t.smartDjHint}</p>
+          </div>
+        </>
+      )}
 
       <div className="rounded-xl bg-white/5 border border-white/10 p-2.5 transition">
         <div className="flex items-center justify-between gap-2 mb-2">
@@ -540,7 +644,7 @@ export default function AudioSettings({ asMenuItem = false, className = '' }: Pr
     </>
   )
 
-  const trigger = asMenuItem ? (
+  const trigger = isControlled ? null : asMenuItem ? (
     <button
       ref={triggerRef}
       onClick={() => setOpen((v) => !v)}

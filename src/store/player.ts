@@ -9,6 +9,7 @@ import {
   stopPlaybackNotification,
   syncPlayback,
   nativePlay,
+  nativeSetNext,
   nativePause,
   nativeResume,
   nativeStop,
@@ -325,6 +326,8 @@ export const usePlayer = create<PlayerState>((set, get) => {
 
     const settings = useSettings.getState()
     engine.setCrossfade(settings.crossfade)
+    engine.setAutomix(settings.automix)
+    engine.setSmartDj(settings.smartDj)
     engine.setEq7(
       { bandsDb: settings.eqBands, tone: settings.tone, balance: settings.balance },
       settings.eqEnabled,
@@ -433,6 +436,22 @@ export const usePlayer = create<PlayerState>((set, get) => {
       state.playing,
     )
     engine.setNext(item?.streamUrl ?? null, item?.gainDb ?? 0, item?.id)
+    if (isNativeApp() && useSettings.getState().nativeAudioEngine !== 'off') {
+      if (item) {
+        void nativeSetNext({
+          url: item.streamUrl,
+          gainDb: useSettings.getState().normalize ? item.gainDb : 0,
+          sourceId: item.id,
+          title: item.track.title,
+          artist: item.track.artist,
+          album: item.track.album ?? '',
+          artworkUrl: item.track.artworkUrl ?? '',
+          duration: item.track.durationMs / 1000,
+        })
+      } else {
+        void nativeSetNext(null)
+      }
+    }
   }
 
   /**

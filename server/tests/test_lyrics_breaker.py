@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from app.lyrics.manager import LyricsManager
+from app import config
 from app.lyrics.matching import looks_like_a_duplicate
 from app.lyrics.models import LyricLine, Lyrics
 from app.lyrics.registry import (
@@ -430,7 +431,7 @@ class TestLrclibAndGeniusKeepTheirOldBehaviour:
             raise httpx.ConnectTimeout("down")
 
         monkeypatch.setattr(lrclib.httpx, "Client", lambda **_: _FakeClient(handler))
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         # breaker برای lrclib روشن است (چون فقط lrclib صدا زده می‌شود)
         manager = LyricsManager(miss_ttl_s=300, clock=lambda: now[0])

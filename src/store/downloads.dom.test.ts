@@ -3,7 +3,7 @@
 // خودِ انتخاب خالص است، ولی `downloads` غیرمستقیم `i18n` را می‌آورد و آن در
 // سطحِ ماژول به `document` دست می‌زند — همان قراردادی که
 // `AnimatedList.dom.test.tsx` هم دنبال می‌کند.
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { selectTrackJob, type Job } from './downloads'
 import type { JobStatus, Quality, Track } from '../lib/types'
 
@@ -147,4 +147,90 @@ describe('enqueueMany و صف کلاینت', () => {
     expect(retried?.status).toBe('queued')
     expect(retried?.gainDb).toBeUndefined()
   })
+})
+
+/**
+ * `pump` — سقفِ دانلودِ هم‌زمانِ قابل‌تنظیم.
+ *
+ * تا پیش از این یک ثابتِ سطحِ ماژول بود و صفحه‌ی تنظیمات حالا آن را عوض
+ * می‌کند. دوچیز باید ثابت بماند: سقف واقعاً از تنظیمات خوانده شود، و بالا
+ * بردنش *همان لحظه* کارهای «در انتظار» را راه بیندازد — وگرنه کاربر تنظیم
+ * را عوض می‌کند و تا رویدادِ بعدیِ صف هیچ اتفاقی نمی‌بیند.
+ */
+describe('pump و سقفِ هم‌زمانیِ دانلود', () => {
+  function queued(id: string): Job {
+    return {
+      ...job(id, '320', 'queued'),
+      id,
+      track: { ...track(id), id },
+    }
+  }
+
+  it('به‌اندازه‌ی سقفِ تنظیمات کار شروع می‌کند', async () => {
+    const { useDownloads } = await import('./downloads')
+    const { useSettings } = await import('./settings')
+    const api = await import('../lib/api')
+    const started: string[] = []
+    // `start` فقط تا اولین پیامِ پیشرفت زنده می‌ماند؛ اینجا فقط می‌خواهیم
+    // بشماریم چند کار اصلاً *شروع* شده‌اند
+    const spy = vi.spyOn(api.api, 'download').mockImplementation((req) => {
+      started.push(req.track.id)
+      return () => {}
+    })
+
+    useSettings.setState({ maxConcurrentDownloads: 2 })
+    useDownloads.setState({
+      jobs: [queued('a'), queued('b'), queued('c')],
+      batches: [{ id: 'b1', title: 'Batch', artworkUrl: null, quality: '320', createdAt: 1 }],
+    })
+
+    useDownloads.getState().pump()
+    expect(started).toHaveLength(2)
+    spy.mockRestore()
+  })
+
+  it('بالا بردنِ سقف، کارهای در انتظار را همان لحظه راه می‌اندازد', async () => {
+    const { useDownloads } = await import('./downloads')
+    const { useSettings } = await import('./settings')
+    const api = await import('../lib/api')
+    const started: string[] = []
+    const spy = vi.spyOn(api.api, 'download').mockImplementation((req) => {
+      started.push(req.track.id)
+      return () => {}
+    })
+
+    useSettings.setState({ maxConcurrentDownloads: 1 })
+    useDownloads.setState({
+      jobs: [queued('a'), queued('b'), queued('c')],
+      batches: [{ id: 'b1', title: 'Batch', artworkUrl: null, quality: '320', createdAt: 1 }],
+    })
+    useDownloads.getState().pump()
+    expect(started).toHaveLength(1)
+
+    // سقفِ بالاتر باید بقیه را هم بلافاصله بردارد
+    useSettings.setState({ maxConcurrentDownloads: 3 })
+    useDownloads.getState().pump()
+    expect(started).toHaveLength(3)
+    spy.mockRestore()
+  })
+})
+
+/**
+ * صف باید بینِ تست‌ها تمیز شود.
+ *
+ * `cancelers` بیرون از state و در سطحِ ماژول است؛ یک کارِ «شروع‌شده» از تستِ
+ * قبلی باعث می‌شود `drainQueue` آن را *فعال* بشمارد و جای خالیِ کمتری ببیند —
+ * یعنی تستِ بعدی به‌جای ۲ کار، ۱ کار شروع می‌کند. `remove` تنها راهِ عمومیِ
+ * پاک‌کردنِ آن نگاشت است.
+ */
+beforeEach(async () => {
+  const { useDownloads } = await import('./downloads')
+  for (const job of [...useDownloads.getState().jobs]) {
+    useDownloads.getState().remove(job.id)
+  }
+  useDownloads.setState({ jobs: [], batches: [] })
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })

@@ -2,36 +2,67 @@
 
 <div align="center">
 
-**High-performance, self-hosted music streaming and downloader with public catalog aggregation, smart audio resolving, lossless transcoding, offline resilience, and a native Android application.**
+**Self-hosted music streaming and downloading. Public catalog metadata, audio resolved from open sources, offline-first for networks where the international internet is unreliable.**
 
+[![CI](https://github.com/mahan-mgn/MusicBazi/actions/workflows/ci.yml/badge.svg)](https://github.com/mahan-mgn/MusicBazi/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mahan-mgn/MusicBazi?style=flat-square&color=blue)](https://github.com/mahan-mgn/MusicBazi/releases)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
-[![Node](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
-[![Capacitor](https://img.shields.io/badge/Capacitor-Android-119EFF?style=flat-square&logo=capacitor&logoColor=white)](https://capacitorjs.com)
-[![Tests](https://img.shields.io/badge/Tests-1800%2B%20Passed-brightgreen?style=flat-square)]()
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.118%2B-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Node](https://img.shields.io/badge/Node-22-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev)
 
-[Features](#key-features) • [Quick Start](#system-setup-desktop--server) • [Mobile Setup](#mobile-setup-android) • [Architecture](#architecture) • [API Reference](#api-reference) • [Releases](https://github.com/mahan-mgn/MusicBazi/releases)
+[Features](#features) • [Screenshots](#screenshots) • [Quick Start](#quick-start) • [Android](#android) • [Configuration](#configuration) • [API](#api-reference) • [Docs](#documentation)
 
 </div>
 
 ---
 
-## Overview
+## Table of Contents
 
-**Music Bazi** bridges the gap between commercial streaming platforms and self-hosted personal music libraries. It queries public metadata catalogs (**Apple Music**, **Deezer**, **Spotify**, and **YouTube Music**) to index tracks, albums, and playlists, then intelligently locates, extracts, and transcodes high-quality audio from open sources (**YouTube**, **YouTube Music**, and **SoundCloud** via `yt-dlp` and an isolated **InnerTubeX** Kotlin microservice bridge).
-
-Audio files are automatically transcoded to user-selected bitrates, injected with official cover artwork, tagged with normalized ID3 metadata, aligned with synchronized lyrics (`.lrc`), and normalized for loudness according to **EBU R128**.
-
-Whether deployed on a home server via Docker, run locally for development, accessed as a PWA, installed as a native Android APK with the **BitChord v1.8 audiophile engine**, or executed fully standalone on an Android phone via Termux without any computer, Music Bazi provides a unified audiophile experience.
+- [What is Music Bazi?](#what-is-music-bazi)
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Android](#android)
+- [Configuration](#configuration)
+- [Accounts & Sign-in](#accounts--sign-in)
+- [YouTube Extraction: The 3 Gates](#youtube-extraction-the-3-gates)
+- [API Reference](#api-reference)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Key Features
+## What is Music Bazi?
 
-### 🎧 Catalog Aggregation & Metadata
+**Music Bazi** is a self-hosted music app. It reads public metadata from **Apple Music**, **Deezer**, **Spotify**, and **YouTube Music**, then finds matching audio on open sources (**YouTube**, **YouTube Music**, **SoundCloud**) through `yt-dlp` and a small Kotlin bridge service. Tracks are transcoded to the bitrate you choose, tagged with ID3 metadata and cover art, given synchronized lyrics, and loudness-normalized to EBU R128.
+
+It runs in three shapes: as a Docker stack on a home server, as a PWA in the browser, or as a native Android app — including a mode where the entire backend runs on the phone itself under Termux, with no computer involved.
+
+Two constraints shaped most of the design. **It has to keep working when the international internet drops** — catalogs, artwork, and downloads are cached so a home LAN keeps functioning during an outage, and failed downloads resume when connectivity returns. And **it has to install on a phone**, which is why account hashing uses `hashlib.scrypt` rather than a C extension.
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/store-screenshots/01-home.png" width="180" alt="Home">
+  <img src="docs/store-screenshots/02-library.png" width="180" alt="Library">
+  <img src="docs/store-screenshots/03-liked.png" width="180" alt="Liked">
+  <img src="docs/store-screenshots/04-identify.png" width="180" alt="Identify">
+  <img src="docs/store-screenshots/05-search.png" width="180" alt="Search">
+</p>
+
+---
+
+## Features
+
+### Catalog & metadata
 - **Keyless Public Catalogs:** Direct search and metadata indexing via Apple Music (iTunes Search API) and Deezer API with zero API keys required.
 - **YouTube Music & Channel Catalog:** Search and full artist catalog scraping (top songs, releases, albums, singles, official videos, subscriber counts, and channel panoramic banners) via `ytmusicapi` and enhanced `yt-dlp`.
 - **Spotify Integration:** Instant URL resolution via public oEmbed, with optional Spotify Web API credentials for exact playlist and album parsing.
@@ -381,6 +412,64 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 | `MUSICBAZI_INNERTUBEX_PORT` | `8765` | Port number of the InnerTubeX JVM bridge microservice. |
 | `YOUTUBE_ENABLED` | `1` | Enable YouTube search and channel catalog aggregation (`1` = on, `0` = off). |
 | `YOUTUBE_MUSIC_ENABLED` | `1` | Enable YouTube Music (`ytmusicapi`) search and artist catalog (`1` = on, `0` = off). |
+| `MUSICBAZI_GOOGLE_CLIENT_ID` | *None* | Google OAuth client ID. Unset = Google sign-in off; local accounts still work. |
+| `MUSICBAZI_GOOGLE_CLIENT_SECRET` | *None* | Google OAuth client secret. |
+| `MUSICBAZI_AUTH_BASE_URL` | *None* | Public root of this server (tunnel domain or `http://localhost:8080`). The Google redirect URI is `{this}/api/auth/google/callback`. |
+| `MUSICBAZI_AUTH_ALLOWED_ORIGINS` | *None* | Extra origins allowed to start Google sign-in, comma-separated (e.g. `http://localhost:8080`). Each needs its own redirect URI registered in the console. |
+| `MUSICBAZI_AUTH_SESSION_DAYS` | `400` | Session lifetime in days. Long so a signed-in user keeps working while offline. |
+| `MUSICBAZI_AUTH_MEDIA_TTL` | `3600` | Lifetime of the media token (seconds) used by `<audio>`, `<img>` and `EventSource`. |
+| `MUSICBAZI_AVATAR_MAX_BYTES` | `5242880` | Avatar upload cap in bytes. |
+
+---
+
+## Accounts & Sign-in
+
+Sign-in is **optional**. With no Google keys configured the app behaves exactly as it
+always did: everything belongs to a single built-in `guest` account, and nothing is gated
+behind a login screen.
+
+Two ways in:
+
+- **Local account** — username (3–24 chars, `[A-Za-z0-9._-]`) plus a password (8+ chars).
+  Hashed with `hashlib.scrypt`; no C-extension dependency, so it installs in Termux.
+  This path needs **no internet at all**, which matters when international connectivity
+  is down.
+- **Google** — set `MUSICBAZI_GOOGLE_CLIENT_ID`, `MUSICBAZI_GOOGLE_CLIENT_SECRET` and
+  `MUSICBAZI_AUTH_BASE_URL`, then register `{MUSICBAZI_AUTH_BASE_URL}/api/auth/google/callback`
+  as an authorized redirect URI in the Google Cloud Console. The profile photo is copied
+  onto the server disk on first sign-in so it survives an outage.
+
+> **Google requires `https`.** Its console only accepts `https://` (or `http://localhost`)
+> redirect URIs, so on a plain `http://192.168.x.x` address Google sign-in is unavailable —
+> the button is shown disabled with an explanation, and local accounts still work. Use your
+> Cloudflare tunnel URL for `MUSICBAZI_AUTH_BASE_URL` if you want Google on the LAN.
+
+**Signing in from more than one address.** Google matches a redirect URI *exactly*, so
+using both a domain and `localhost` means two entries in the console — and the server has
+to know which one this particular sign-in started from. Put the main origin in
+`MUSICBAZI_AUTH_BASE_URL` and any extras in `MUSICBAZI_AUTH_ALLOWED_ORIGINS`
+(comma-separated), registering every one of them:
+
+| Setting | Value | Redirect URI to register |
+|---|---|---|
+| `MUSICBAZI_AUTH_BASE_URL` | `https://music.example.com` | `https://music.example.com/api/auth/google/callback` |
+| `MUSICBAZI_AUTH_ALLOWED_ORIGINS` | `http://localhost:8080` | `http://localhost:8080/api/auth/google/callback` |
+
+The server picks the origin from the request and reuses it for the token exchange, so both
+work from a single deployment. Only origins listed in those two settings are ever used —
+the request's `Origin` header alone is not trusted, or an attacker could aim a sign-in at
+their own domain and capture the returning code.
+
+Sessions are **bearer tokens** in the `Authorization` header, not cookies: inside the
+Android app the page is served from `https://localhost` while the API is an absolute
+cross-origin URL. Tokens are self-contained and HMAC-signed with a secret stored under
+`MUSICBAZI_DATA_DIR/auth_secret`, so sessions survive restarts and Docker rebuilds.
+`<audio>`, `<img>` and `EventSource` cannot send headers, so those routes take a
+short-lived media token in the `mt` query parameter instead.
+
+Everyone reaches the server without a token is treated as the **guest** account. On a
+shared network that means an unauthenticated visitor sees the guest library — the same
+exposure the app had before accounts existed, but worth stating plainly.
 
 ---
 
@@ -422,6 +511,17 @@ You can inspect the active status of all three gates at any time via `GET /api/h
 | `GET` | `/api/net` | Inspect current international network reachability status. |
 | `POST` | `/api/net/check` | Trigger an immediate network reachability probe. |
 | `GET` | `/api/art/{sha}` | Fetch locally mirrored cover artwork. |
+| `GET` | `/api/auth/providers` | Which sign-in methods are available (whether Google is configured). |
+| `POST` | `/api/auth/local/register` | Create a local account (`{ username, password, displayName? }`) → session. |
+| `POST` | `/api/auth/local/login` | Sign in with a local account → session. |
+| `GET` | `/api/auth/me` | Current profile. Requires `Authorization: Bearer`. |
+| `PATCH` | `/api/auth/me` | Update display name and optional username. |
+| `POST` | `/api/auth/media` | Issue a short-lived media token for header-less media URLs. |
+| `GET` | `/api/auth/google/start` | Begin Google OAuth (302 to Google). |
+| `GET` | `/api/auth/google/callback` | Google redirect target; redirects back with `#auth={token}`. |
+| `POST` | `/api/auth/avatar` | Upload a profile photo (multipart). |
+| `DELETE`| `/api/auth/avatar` | Remove the profile photo. |
+| `GET` | `/api/avatar/{userId}` | Serve a profile photo. |
 | `GET` | `/api/health` | Comprehensive system health check (ffmpeg, YouTube gates, storage). |
 
 ---

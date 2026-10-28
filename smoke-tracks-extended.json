@@ -1,0 +1,300 @@
+
+{
+  "_comment": "نمونه ورودی scripts/lyrics_smoke.py — فقط متادیتا؛ هیچ متن آهنگی اضافه نشده است. مدت‌های تقریبی باید پیش از تست دقیق تأیید شوند.",
+  "tracks": [
+    {
+      "_why": "فارسی؛ ترک شناخته‌شده از Tlkhoon برای بررسی رومانیزه‌سازی",
+      "title": "Mordi",
+      "artist": "Tlkhoon",
+      "album": "Mordi",
+      "duration_ms": 100000
+    },
+    {
+      "_why": "فارسی؛ ترک Dorcci برای تست تطبیق عنوان و هنرمند",
+      "title": "Ghatle Amd",
+      "artist": "Dorcci",
+      "album": "Ghatle Amd",
+      "duration_ms": 216000
+    },
+    {
+      "_why": "فارسی؛ ترک Amin Tijay برای تست تطبیق کاتالوگ",
+      "title": "Chikar Kardi Baam",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 180000
+    },
+    {
+      "_why": "فارسی؛ ترک شناخته‌شده Dorcci از آلبوم Young Morvarid",
+      "title": "BE KOJA RESIDI",
+      "artist": "Dorcci",
+      "album": "Young Morvarid",
+      "duration_ms": 216000
+    },
+    {
+      "_why": "فارسی؛ ترک Amin Tijay با نام کوتاه و نسبتاً مبهم",
+      "title": "DIE4U",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 215000
+    },
+    {
+      "_why": "فارسی؛ ترک Dorcci برای بررسی تفاوت حروف بزرگ و کوچک",
+      "title": "H2CO3",
+      "artist": "Dorcci",
+      "album": "Young Morvarid",
+      "duration_ms": 136000
+    },
+    {
+      "_why": "فارسی؛ همکاری Amin Tijay با Neemski",
+      "title": "Zombie",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 200000
+    },
+    {
+      "_why": "فارسی؛ ترک Dorcci با عنوان انگلیسی و احتمال تطبیق اشتباه",
+      "title": "Before You Gone",
+      "artist": "Dorcci",
+      "album": null,
+      "duration_ms": 177000
+    },
+    {
+      "_why": "فارسی؛ ترک Amin Tijay با عنوان کوتاه",
+      "title": "Promethazine",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 200000
+    },
+    {
+      "_why": "فارسی؛ ترک Dorcci با عنوان کوتاه و مبهم",
+      "title": "RIRI",
+      "artist": "Dorcci",
+      "album": null,
+      "duration_ms": 160000
+    },
+    {
+      "_why": "فارسی؛ ترک Amin Tijay برای تست تشخیص عنوان و همکاری‌ها",
+      "title": "Tabaghe 13",
+      "artist": "Amin Tijay",
+      "album": "Tabaghe 13",
+      "duration_ms": 173000
+    },
+    {
+      "_why": "فارسی؛ ترک Dorcci با عنوان یک‌کلمه‌ای",
+      "title": "Eshgh",
+      "artist": "Dorcci",
+      "album": null,
+      "duration_ms": 245000
+    },
+    {
+      "_why": "فارسی؛ ترک Amin Tijay با عنوان فارسی رومانیزه‌شده",
+      "title": "Tehran Delgir",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 200000
+    },
+    {
+      "_why": "فارسی؛ ترک Dorcci برای سنجش تطبیق نسخه و نام آلبوم",
+      "title": "Morvarid",
+      "artist": "Dorcci",
+      "album": null,
+      "duration_ms": 249000
+    },
+    {
+      "_why": "فارسی؛ همکاری Amin Tijay با Neemski",
+      "title": "Gang Over Love",
+      "artist": "Amin Tijay",
+      "album": "Gang Over Love",
+      "duration_ms": 220000
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ نقطه مرجع اصلی Providerها",
+      "title": "Blinding Lights",
+      "artist": "The Weeknd",
+      "album": "After Hours",
+      "duration_ms": 200040
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ تطبیق دقیق هنرمند و آلبوم",
+      "title": "Shape of You",
+      "artist": "Ed Sheeran",
+      "album": "÷ (Divide)",
+      "duration_ms": 233713
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ عنوان طولانی‌تر و قابل تشخیص",
+      "title": "Someone You Loved",
+      "artist": "Lewis Capaldi",
+      "album": "Divinely Uninspired to a Hellish Extent",
+      "duration_ms": 182160
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ تست عنوان و نسخه اصلی",
+      "title": "Starboy",
+      "artist": "The Weeknd",
+      "album": "Starboy",
+      "duration_ms": 230453
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ عنوان و هنرمند شناخته‌شده",
+      "title": "Bad Guy",
+      "artist": "Billie Eilish",
+      "album": "When We All Fall Asleep, Where Do We Go?",
+      "duration_ms": 194088
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ تست تطبیق آهنگ با عنوان متداول",
+      "title": "Perfect",
+      "artist": "Ed Sheeran",
+      "album": "÷ (Divide)",
+      "duration_ms": 263400
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ عنوان دارای احتمال هم‌نامی",
+      "title": "Believer",
+      "artist": "Imagine Dragons",
+      "album": "Evolve",
+      "duration_ms": 204346
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ عنوان رایج برای سنجش تطبیق اشتباه",
+      "title": "Stay",
+      "artist": "The Kid LAROI",
+      "album": "F*CK LOVE 3: OVER YOU",
+      "duration_ms": 141805
+    },
+    {
+      "_why": "انگلیسی پرطرفدار؛ تست آهنگ شناخته‌شده با نام هنرمند متفاوت",
+      "title": "Flowers",
+      "artist": "Miley Cyrus",
+      "album": "Endless Summer Vacation",
+      "duration_ms": 200000
+    },
+    {
+      "_why": "نسخه جایگزین؛ باید با نسخه اصلی Blinding Lights اشتباه نشود",
+      "title": "Blinding Lights (Live)",
+      "artist": "The Weeknd",
+      "album": null,
+      "duration_ms": 220000
+    },
+    {
+      "_why": "نسخه Acoustic؛ بررسی تحمل تفاوت عنوان و نسخه اصلی Shape of You",
+      "title": "Shape of You (Acoustic)",
+      "artist": "Ed Sheeran",
+      "album": null,
+      "duration_ms": 230000
+    },
+    {
+      "_why": "نسخه Live؛ بررسی تمایز نسخه زنده از نسخه استودیویی",
+      "title": "Someone You Loved (Live)",
+      "artist": "Lewis Capaldi",
+      "album": null,
+      "duration_ms": 190000
+    },
+    {
+      "_why": "نسخه Remix؛ تطبیق باید ریمیکس را از نسخه اصلی Starboy جدا کند",
+      "title": "Starboy (Kygo Remix)",
+      "artist": "The Weeknd",
+      "album": null,
+      "duration_ms": 220000
+    },
+    {
+      "_why": "نسخه Live فارسی؛ تست نسخه‌های جایگزین و تطبیق هنرمند",
+      "title": "Mard-e Tanha (Live)",
+      "artist": "Farhad Mehrad",
+      "album": null,
+      "duration_ms": 210000
+    },
+    {
+      "_why": "مستقل/کم‌شناخته‌تر؛ تست پوشش کاتالوگ Amin Tijay",
+      "title": "Tijay:(",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 180000
+    },
+    {
+      "_why": "مستقل؛ عنوان کوتاه و احتمال اختلاف در نگارش",
+      "title": "SOOT",
+      "artist": "Dorcci",
+      "album": null,
+      "duration_ms": 196000
+    },
+    {
+      "_why": "مستقل؛ عنوان کم‌اطلاعات برای تست تطبیق دقیق",
+      "title": "PILE",
+      "artist": "Dorcci",
+      "album": null,
+      "duration_ms": 178000
+    },
+    {
+      "_why": "مستقل؛ عنوان مبهم و نام هنرمند مشخص",
+      "title": "Baroone Khoon",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 200000
+    },
+    {
+      "_why": "مستقل؛ تست جست‌وجوی عنوان غیرانگلیسی رومانیزه‌شده",
+      "title": "Rangin Kamoon",
+      "artist": "Amin Tijay",
+      "album": null,
+      "duration_ms": 255000
+    },
+    {
+      "_why": "هم‌نامی؛ Home از Michael Bublé نباید با اثر هنرمند دیگر اشتباه شود",
+      "title": "Home",
+      "artist": "Michael Bublé",
+      "album": "It's Time",
+      "duration_ms": 227000
+    },
+    {
+      "_why": "هم‌نامی؛ عنوان Home با هنرمند متفاوت",
+      "title": "Home",
+      "artist": "Edward Sharpe & The Magnetic Zeros",
+      "album": "Up from Below",
+      "duration_ms": 307000
+    },
+    {
+      "_why": "هم‌نامی؛ Stay از Rihanna باید با آهنگ‌های هم‌نام دیگر تفکیک شود",
+      "title": "Stay",
+      "artist": "Rihanna",
+      "album": "Unapologetic",
+      "duration_ms": 240000
+    },
+    {
+      "_why": "بی‌کلام؛ قطعه پیانوی شناخته‌شده، نباید انتظار متن ترانه داشته باشد",
+      "title": "River Flows in You",
+      "artist": "Yiruma",
+      "album": "First Love",
+      "duration_ms": 180000
+    },
+    {
+      "_why": "بی‌کلام؛ موسیقی الکترونیک بدون وکال برای بررسی نتیجه منفی متن",
+      "title": "Strobe",
+      "artist": "deadmau5",
+      "album": "For Lack of a Better Name",
+      "duration_ms": 635000
+    },
+    {
+      "_why": "ساختگی؛ هیچ Provider نباید متن آهنگ دیگری را به آن نسبت دهد",
+      "title": "Zqxwv Nonexistent Track Nine Eight Seven Six",
+      "artist": "Nobody At All Zqxwv",
+      "album": null,
+      "duration_ms": 0
+    },
+    {
+      "_why": "عنوان رایج؛ بررسی تطبیق کور و استفاده از هنرمند به‌عنوان سیگنال",
+      "title": "Home",
+      "artist": "Nobody At All Zqxwv",
+      "album": null,
+      "duration_ms": 0
+    },
+    {
+      "_why": "عنوان کوتاه و مبهم؛ نام هنرمند عمداً ناقص است تا رفتار تطبیق بررسی شود",
+      "title": "Barf",
+      "artist": "Farhad",
+      "album": null,
+      "duration_ms": 0
+    }
+  ]
+}

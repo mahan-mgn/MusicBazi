@@ -68,7 +68,7 @@ export function isArtistUrl(value: string): boolean {
     /music\.apple\.com\/[a-z]{2}\/artist\//i.test(url) ||
     /deezer\.com\/(?:[a-z]{2}\/)?(?:artist|profile)\//i.test(url) ||
     /open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(?:artist|user)\//i.test(url) ||
-    /^https?:\/\/(?:www\.|m\.)?soundcloud\.com\/[\w.-]+\/?(?:[?#].*)?$/i.test(url) ||
+    /^https?:\/\/(?:www\.|m\.)?soundcloud\.com\/[\w.-]+(?:\/(?:tracks|albums|sets|popular-tracks|reposts|likes))?\/?(?:[?#].*)?$/i.test(url) ||
     /^https?:\/\/(?:www\.|m\.)?youtube\.com\/(?:@[\w.-]+|channel\/[\w-]+|c\/[\w.-]+|user\/[\w.-]+)(?:\/[a-z]+)?\/?(?:[?#].*)?$/i.test(
       url,
     )

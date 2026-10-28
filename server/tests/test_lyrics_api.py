@@ -128,7 +128,7 @@ class TestStreamLyricsWithProvider:
         """بدونِ `provider` هیچ چیز عوض نمی‌شود — همان ۴۰۴/۲۰۰ قبلی."""
         from app import stream_cache
 
-        monkeypatch.setattr(stream_cache, "get_or_fetch_lyrics", _async(lambda _t: "[00:01.00]x"))
+        monkeypatch.setattr(stream_cache, "get_or_fetch_lyrics", _async(lambda _t, _uid="local": "[00:01.00]x"))
 
         response = client.get("/api/stream/lyrics", params=_params())
 
@@ -139,7 +139,7 @@ class TestStreamLyricsWithProvider:
     def test_a_named_provider_is_used(self, client, monkeypatch):
         from app.lyrics import sources as sources_module
 
-        async def fake_fetch(name, track, *, force=False):
+        async def fake_fetch(name, track, uid="local", *, force=False):
             return sources_module.SourceResult(
                 provider=name, lyrics=Lyrics(plain="t", synced="[00:02.00]named")
             )
@@ -160,7 +160,7 @@ class TestStreamLyricsWithProvider:
     def test_a_needs_setup_provider_is_409(self, client, monkeypatch):
         from app.lyrics import sources as sources_module
 
-        async def fake_fetch(name, track, *, force=False):
+        async def fake_fetch(name, track, uid="local", *, force=False):
             return sources_module.SourceResult(provider=name, lyrics=None, error="needs-setup")
 
         monkeypatch.setattr(sources_module.lyrics_sources, "fetch_from", fake_fetch)
@@ -172,7 +172,7 @@ class TestStreamLyricsWithProvider:
     def test_a_provider_error_is_502_without_details(self, client, monkeypatch):
         from app.lyrics import sources as sources_module
 
-        async def fake_fetch(name, track, *, force=False):
+        async def fake_fetch(name, track, uid="local", *, force=False):
             return sources_module.SourceResult(provider=name, lyrics=None, error="network")
 
         monkeypatch.setattr(sources_module.lyrics_sources, "fetch_from", fake_fetch)
@@ -185,7 +185,7 @@ class TestStreamLyricsWithProvider:
     def test_an_empty_source_result_is_404(self, client, monkeypatch):
         from app.lyrics import sources as sources_module
 
-        async def fake_fetch(name, track, *, force=False):
+        async def fake_fetch(name, track, uid="local", *, force=False):
             return sources_module.SourceResult(provider=name, lyrics=None)
 
         monkeypatch.setattr(sources_module.lyrics_sources, "fetch_from", fake_fetch)
@@ -198,7 +198,7 @@ class TestStreamLyricsWithProvider:
         from app.lyrics import sources as sources_module
         from app.lyrics.models import LyricLine, LyricWord
 
-        async def fake_fetch(name, track, *, force=False):
+        async def fake_fetch(name, track, uid="local", *, force=False):
             return sources_module.SourceResult(
                 provider=name,
                 lyrics=Lyrics(

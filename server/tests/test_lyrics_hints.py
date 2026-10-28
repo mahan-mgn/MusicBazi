@@ -259,8 +259,7 @@ class TestStreamLyricsEndpointHints:
         return asyncio.run(main.stream_lyrics(**params))
 
     def test_the_old_contract_without_hints_is_unchanged(self, temp_cache):
-        key = stream_cache.cache_key_for("spotify:track:1")
-        (temp_cache / f"{key}.lrc").write_text("[00:01.00]x", encoding="utf-8")
+        stream_cache.lyrics_path("spotify:track:1").write_text("[00:01.00]x", encoding="utf-8")
 
         response = self._call()
 
@@ -268,8 +267,7 @@ class TestStreamLyricsEndpointHints:
         assert response.body.decode("utf-8") == "[00:01.00]x"
 
     def test_the_endpoint_accepts_the_hint_parameters(self, temp_cache):
-        key = stream_cache.cache_key_for("ytm:track:dQw4w9WgXcQ")
-        (temp_cache / f"{key}.lrc").write_text("[00:01.00]y", encoding="utf-8")
+        stream_cache.lyrics_path("ytm:track:dQw4w9WgXcQ").write_text("[00:01.00]y", encoding="utf-8")
 
         response = self._call(
             track_id="ytm:track:dQw4w9WgXcQ", videoId="dQw4w9WgXcQ", isrc="US1234567890"
@@ -282,7 +280,7 @@ class TestStreamLyricsEndpointHints:
 
         from app.lyrics import manager as manager_module
 
-        monkeypatch.setattr(manager_module, "fetch", lambda _t: None)
+        monkeypatch.setattr(manager_module, "fetch", lambda _t, _uid="local": None)
 
         with pytest.raises(HTTPException) as info:
             self._call(track_id="fresh:1")
@@ -301,7 +299,7 @@ class TestStreamLyricsEndpointHints:
 
         seen: list[object] = []
 
-        def capturing(track):
+        def capturing(track, uid="local"):
             seen.append(getattr(track, "videoId", None))
             return _Lyrics(plain="x", synced="[00:01.00]x")
 
@@ -319,7 +317,7 @@ class TestStreamLyricsEndpointHints:
         monkeypatch.setattr(
             manager_module,
             "fetch",
-            lambda t: (seen.append(t.videoId), _Lyrics(plain="x", synced="[00:01.00]x"))[1],
+            lambda t, _uid="local": (seen.append(t.videoId), _Lyrics(plain="x", synced="[00:01.00]x"))[1],
         )
 
         self._call(track_id="ytm:track:dQw4w9WgXcQ", videoId="AAAAAAAAAAA")
@@ -334,7 +332,7 @@ class TestStreamLyricsEndpointHints:
         monkeypatch.setattr(
             manager_module,
             "fetch",
-            lambda t: (seen.append(t.videoId), _Lyrics(plain="x", synced="[00:01.00]x"))[1],
+            lambda t, _uid="local": (seen.append(t.videoId), _Lyrics(plain="x", synced="[00:01.00]x"))[1],
         )
 
         self._call(track_id="spotify:track:4uLU6hMCjMI75M1A2tKUQC")

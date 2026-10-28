@@ -121,7 +121,7 @@ class TestSpotifyUserPage:
         برخلاف بقیه‌ی اسپاتیفای، این مسیر از Web API نمی‌آید (آن اندپوینت‌ها
         روی توکنِ بدون‌کاربر ۴۰۳ می‌دهند) — پس نبودِ کلید نباید صفحه را ببندد.
         """
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
         monkeypatch.setattr(
             spotify, "_access_token", lambda *_: pytest.fail("نباید توکن بگیرد")
         )
@@ -365,7 +365,7 @@ class TestUserPageRouting:
         بدون این، مسیرِ بی‌کلیدِ `resolve_ref` عنوانِ oEmbed را در اپل/دیزر
         می‌گشت و یک آلبومِ بی‌ربط به‌جای پروفایل برمی‌گرداند.
         """
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
         monkeypatch.setattr(
             catalog, "_spotify_fallback", lambda *a: pytest.fail("نباید حدس بزند")
         )
@@ -391,13 +391,13 @@ class TestArtistRouting:
             called.append(f"itunes:{ident}")
             return dummy_detail("apple")
 
-        async def fake_spotify_artist(client, ident):
+        async def fake_spotify_artist(client, ident, uid="local"):
             called.append(f"spotify:{ident}")
             return dummy_detail("spotify")
 
         monkeypatch.setattr(itunes, "artist", fake_itunes_artist)
         monkeypatch.setattr(spotify, "artist", fake_spotify_artist)
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
 
         # apple:artist:123 should route to itunes
         res_apple = asyncio.run(catalog.resolve_artist(None, "apple:artist:123"))
@@ -410,10 +410,10 @@ class TestArtistRouting:
         assert called[-1] == "spotify:456"
 
     def test_spotify_artist_without_key_falls_back_from_id(self, monkeypatch):
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
         called = []
 
-        async def fake_fallback(client, url):
+        async def fake_fallback(client, url, uid="local"):
             called.append(url)
             return ArtistDetail(
                 id="sp:artist:fallback", name="Fallback Artist", source="spotify",
@@ -441,3 +441,7 @@ class TestArtistRouting:
         res = asyncio.run(catalog.resolve_artist(None, "https://soundcloud.com/dorcci/tracks"))
         assert res is not None
         assert called == ["https://soundcloud.com/dorcci"]
+
+        res2 = asyncio.run(catalog.resolve_artist(None, "https://soundcloud.com/dorcci/tracks?si=123"))
+        assert res2 is not None
+        assert called[-1] == "https://soundcloud.com/dorcci?si=123"

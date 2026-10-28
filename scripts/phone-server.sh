@@ -248,6 +248,14 @@ export MUSICBAZI_COOKIES_FILE="$HOME/musicbazi/cookies.txt"
 # را همین‌جا بگذار تا لینک‌هایش دقیق خوانده شوند.
 # export MUSICBAZI_SPOTIFY_CLIENT_ID=
 # export MUSICBAZI_SPOTIFY_CLIENT_SECRET=
+#
+# حساب کاربری. ورود اختیاری است؛ ست‌نکردنِ این‌ها یعنی گوگل خاموش می‌ماند و
+# فقط حساب محلی کار می‌کند — که روی گوشی همان چیزی است که می‌خواهی.
+# ورود با گوگل به آدرس https نیاز دارد و این سرور فقط روی 127.0.0.1 گوش
+# می‌دهد، پس عملاً از روی همین گوشی و با آدرس تونل معنا پیدا می‌کند.
+# export MUSICBAZI_GOOGLE_CLIENT_ID=
+# export MUSICBAZI_GOOGLE_CLIENT_SECRET=
+# export MUSICBAZI_AUTH_BASE_URL=
 ENV
   ok "$ENV_FILE"
 

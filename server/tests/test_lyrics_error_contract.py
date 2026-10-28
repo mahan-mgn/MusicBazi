@@ -176,7 +176,7 @@ class TestBackwardsCompatibility:
         """مسیرِ بدونِ provider هیچ فیلدِ تازه‌ای نمی‌گیرد."""
         from app import stream_cache
 
-        async def fake(_track):
+        async def fake(_track, _uid="local"):
             return "[00:01.00]x"
 
         monkeypatch.setattr(stream_cache, "get_or_fetch_lyrics", fake)
@@ -193,7 +193,7 @@ class TestBackwardsCompatibility:
         """
         from app import stream_cache
 
-        async def fake(_track):
+        async def fake(_track, _uid="local"):
             return None
 
         monkeypatch.setattr(stream_cache, "get_or_fetch_lyrics", fake)

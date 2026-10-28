@@ -18,6 +18,10 @@ def clean_stream_cache(tmp_path, monkeypatch, fresh_db):
     cache_dir = tmp_path / "cache" / "stream"
     cache_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(stream_cache, "STREAM_CACHE_DIR", cache_dir)
+    # نمایه‌ی کش ماژول‌سطح است و تا ۳ ثانیه معتبر می‌ماند؛ اگر پاک نشود، مسیرِ
+    # فایلِ تستِ قبلی (که با tmp_path خودش رفته) به تست بعدی نشت می‌کند و
+    # extension/media-type اشتباه برمی‌گردد.
+    stream_cache._cache_index.clear()
     return cache_dir
 
 
@@ -112,7 +116,7 @@ def test_stream_audio_endpoint_returns_file(clean_stream_cache, track):
 def test_stream_lyrics_endpoint(clean_stream_cache, track):
     """اندپوینت /api/stream/lyrics متن ترانه را بازمی‌گرداند."""
     cache_key = stream_cache.cache_key_for(track.id)
-    lrc_file = clean_stream_cache / f"{cache_key}.lrc"
+    lrc_file = stream_cache.lyrics_path(track.id)
     lrc_file.write_text("[00:10.00] Line 1\n[00:20.00] Line 2", encoding="utf-8")
 
     response = asyncio.run(
@@ -138,7 +142,7 @@ def test_concurrent_lyrics_requests_are_merged(clean_stream_cache, track, monkey
 
     calls = []
 
-    def slow_fetch(_track):
+    def slow_fetch(_track, _uid="local"):
         calls.append(1)
         time.sleep(0.05)
         return Lyrics(plain="text", synced="[00:01.00]x")
@@ -166,7 +170,7 @@ def test_a_negative_result_is_merged_too(clean_stream_cache, track, monkeypatch)
 
     calls = []
 
-    def miss(_track):
+    def miss(_track, _uid="local"):
         calls.append(1)
         time.sleep(0.05)
         return None
@@ -194,7 +198,7 @@ def test_a_failed_lyrics_fetch_does_not_wedge_the_cache(clean_stream_cache, trac
 
     calls = []
 
-    def flaky(_track):
+    def flaky(_track, _uid="local"):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("network down")
@@ -215,9 +219,9 @@ def test_lyrics_are_not_rewritten_when_already_cached(clean_stream_cache, track,
     from app.lyrics import manager as lyrics_manager
 
     cache_key = stream_cache.cache_key_for(track.id)
-    (clean_stream_cache / f"{cache_key}.lrc").write_text("[00:01.00]cached", encoding="utf-8")
+    stream_cache.lyrics_path(track.id).write_text("[00:01.00]cached", encoding="utf-8")
 
-    def unexpected(_track):
+    def unexpected(_track, _uid="local"):
         raise AssertionError("should not fetch")
 
     monkeypatch.setattr(lyrics_manager, "fetch", unexpected)
@@ -256,7 +260,7 @@ class TestEnhancedLrcIsOffByDefault:
     def _run(self, clean_stream_cache, track, monkeypatch, found):
         from app.lyrics import manager as lyrics_manager
 
-        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: found)
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t, _uid="local": found)
         return asyncio.run(stream_cache.get_or_fetch_lyrics(track))
 
     def test_the_default_never_writes_a_word_tag(self, clean_stream_cache, track, monkeypatch):
@@ -289,12 +293,12 @@ class TestEnhancedLrcIsOffByDefault:
         from app.lyrics import manager as lyrics_manager
 
         found = Lyrics(plain="t", synced="[00:01.00]plain", sync_type="line")
-        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: found)
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t, _uid="local": found)
 
         monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
         off = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
 
-        (clean_stream_cache / f"{stream_cache.cache_key_for(track.id)}.lrc").unlink()
+        stream_cache.lyrics_path(track.id).unlink()
         monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
         on = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
 
@@ -308,7 +312,7 @@ class TestEnhancedLrcIsOffByDefault:
         from app.lyrics import manager as lyrics_manager
 
         found = Lyrics(plain="t", synced="[00:01.00]raw from provider")
-        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: found)
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t, _uid="local": found)
         monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
 
         assert asyncio.run(stream_cache.get_or_fetch_lyrics(track)) == "[00:01.00]raw from provider"
@@ -332,11 +336,11 @@ class TestEnhancedLrcIsOffByDefault:
         """
         from app.lyrics import manager as lyrics_manager
 
-        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t: self._word_timed())
+        monkeypatch.setattr(lyrics_manager, "fetch", lambda _t, _uid="local": self._word_timed())
 
         monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
         first = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
-        (clean_stream_cache / f"{stream_cache.cache_key_for(track.id)}.lrc").unlink()
+        stream_cache.lyrics_path(track.id).unlink()
 
         monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
         second = asyncio.run(stream_cache.get_or_fetch_lyrics(track))
@@ -365,6 +369,29 @@ def test_stream_prefetch_endpoint(clean_stream_cache, track):
         mock_fetch.assert_awaited_once()
 
 
+def test_stream_prefetch_v2_warms_cache():
+    """اگر V2 روشن و ترک یوتیوب باشد، کشِ URL گرم می‌شود بدون دانلودِ فایل سنگین روی دیسک."""
+    from unittest.mock import AsyncMock
+    from app.models import TrackRef
+
+    req = TrackRef(
+        trackId="yt_track_1",
+        source="youtube",
+        sourceUrl="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        title="Test Title",
+        artist="Test Artist",
+    )
+
+    with patch("app.main.is_stream_v2_enabled", return_value=True), \
+         patch("app.main.get_live_playback") as mock_glp, \
+         patch("app.stream_cache.get_or_fetch", new_callable=AsyncMock) as mock_fetch:
+        mock_glp.return_value.warm = AsyncMock(return_value=True)
+        res = asyncio.run(main.stream_prefetch(req))
+        assert res == {"ok": True, "warm": "resolved"}
+        mock_glp.return_value.warm.assert_awaited_once()
+        mock_fetch.assert_not_called()
+
+
 def test_stream_prefetch_endpoint_reports_download_failure(track):
     """شکست آماده‌سازی باید پاسخ ناموفق بدهد تا زمان‌بندی کل صف ادامه یابد."""
     from unittest.mock import AsyncMock
@@ -385,6 +412,62 @@ def test_stream_prefetch_endpoint_reports_download_failure(track):
             assert exc.status_code == 502
         else:
             raise AssertionError("prefetch failure should return HTTP 502")
+
+
+def test_soundcloud_stream_download_uses_bestaudio_and_ffmpeg_postprocessor(clean_stream_cache, track):
+    """ترک ساندکلاد حتی وقتی کیفیت ۳۲۰ ارسال می‌شود باید فرمت bestaudio و تبدیل FFmpeg داشته باشد."""
+    from app.resolver import Candidate
+
+    sc_track = track.model_copy(
+        update={
+            "source": "soundcloud",
+            "sourceUrl": "https://soundcloud.com/dorccileaks/track-1",
+        }
+    )
+    cache_key = stream_cache.cache_key_for(sc_track.id, quality="320")
+
+    candidates = [
+        Candidate(
+            url="https://soundcloud.com/dorccileaks/track-1",
+            title="Track 1",
+            uploader="dorccileaks",
+            duration_ms=180000,
+            score=100.0,
+            source="soundcloud",
+        )
+    ]
+
+    captured_opts = {}
+
+    def mock_extract(url, download=True):
+        out_file = clean_stream_cache / f"{cache_key}.mp3"
+        out_file.write_bytes(b"\x00" * 4096)
+        return {"id": "mock_sc_1"}
+
+    class MockYDL:
+        def __init__(self, opts):
+            captured_opts.update(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=True):
+            return mock_extract(url, download=download)
+
+    with (
+        patch("app.stream_cache.resolver.resolve", return_value=candidates),
+        patch("app.stream_cache.YoutubeDL", MockYDL),
+    ):
+        result_path = asyncio.run(stream_cache.get_or_fetch(sc_track, quality="320"))
+
+    assert result_path.exists()
+    assert captured_opts.get("format") == "bestaudio/best"
+    assert captured_opts.get("postprocessors") == [
+        {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "320"}
+    ]
 
 
 def test_resolver_candidate_caching(track, fresh_db):
@@ -527,6 +610,78 @@ def test_stream_worker_falls_back_when_primary_candidate_fails(clean_stream_cach
     assert mock_fb.called
     assert result_path.exists()
     assert result_path.stem == cache_key
+
+
+def test_stream_cache_evicts_stale_file_when_duration_mismatches(clean_stream_cache, track, fresh_db):
+    """
+    اگر فایلی در کش استریم با طول نامنطبق (مثلاً ۲۲۹ ثانیه) وجود داشته باشد،
+    اما متادیتای مرجع ترک ۱۹۹ ثانیه باشد، فایل نامنطبق باید از دیسک پاک شده و بازگردانده نشود.
+    """
+    track = track.model_copy(update={"durationMs": 199_000})
+    cache_key = stream_cache.cache_key_for(track.id)
+    cached_file = clean_stream_cache / f"{cache_key}.m4a"
+    cached_file.write_bytes(b"\x00" * 4096)
+
+    # کاندیدای ذخیره‌شده در دیتابیس با طول ۲۲۹ ثانیه (۳:۴۹)
+    fresh_db.put_resolved_candidates(track.id, [{
+        "url": "https://soundcloud.com/slowed",
+        "title": track.title,
+        "uploader": track.artist,
+        "duration_ms": 229_000,
+        "score": 70.0,
+        "source": "soundcloud",
+    }])
+
+    ready_file = stream_cache._find_ready_file_sync(track)
+    assert ready_file is None, "فایل با طول نامنطبق نباید به عنوان فایل آماده تایید شود"
+    assert not cached_file.exists(), "فایل نامنطبق باید از روی دیسک پاک شده باشد"
+
+
+def test_stream_cache_clears_stale_when_canonical_override_present(clean_stream_cache, fresh_db):
+    """اگر آدرس در اورراید قطعی تعریف شده باشد، کاندیدای مغایر قبلی پاک و ابطال می‌شود."""
+    from app.models import Track
+    from app import resolver
+
+    tr = Track(
+        id="sp:track:32xQkDh3INkWDqFYOdpZdP",
+        title="Havasam",
+        artist="Tlkhoon, Matin Fattahi",
+        durationMs=199_000,
+        source="spotify",
+        sourceUrl="https://open.spotify.com/track/32xQkDh3INkWDqFYOdpZdP",
+    )
+    cache_key = stream_cache.cache_key_for(tr.id)
+    cached_file = clean_stream_cache / f"{cache_key}.m4a"
+    cached_file.write_bytes(b"\x00" * 4096)
+
+    # فایل کش شده قبلی با URL اشتباه
+    fresh_db.put_resolved_candidates(tr.id, [{
+        "url": "https://soundcloud.com/random_user/slowed_reupload",
+        "title": "Havasam Slowed",
+        "uploader": "random_user",
+        "duration_ms": 229_000,
+        "score": 60.0,
+        "source": "soundcloud",
+    }])
+
+    ready = stream_cache._find_ready_file_sync(tr)
+    assert ready is None
+    assert not cached_file.exists()
+
+
+def test_stream_cache_purges_file_when_mutagen_duration_mismatches(clean_stream_cache, track, monkeypatch):
+    """اگر متادیتا با مدت زمان واقعی فایل صوتی روی دیسک تفاوت داشته باشد، فایل از دیسک پاک می‌شود."""
+    track = track.model_copy(update={"durationMs": 199_000})  # 3:19
+    cache_key = stream_cache.cache_key_for(track.id)
+    cached_file = clean_stream_cache / f"{cache_key}.mp3"
+    cached_file.write_bytes(b"\x00" * 4096)
+
+    # شبیه‌سازی خواندن طول واقعی فایل با mutagen (فایل واقعی روی دیسک ۲۲۹ ثانیه است)
+    monkeypatch.setattr(stream_cache, "file_duration_ms", lambda p: 229_000)
+
+    ready = stream_cache._find_ready_file_sync(track)
+    assert ready is None
+    assert not cached_file.exists(), "فایل صوتی که طول واقعی آن ۲۲۹ ثانیه است باید از دیسک پاک شود"
 
 
 def test_find_any_ready_prefers_highest_quality(tmp_path, track, fresh_db):

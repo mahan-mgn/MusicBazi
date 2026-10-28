@@ -332,6 +332,24 @@ export const SlidersIcon = ({ className = base }: P) => (
   </svg>
 )
 
+/**
+ * چرخ‌دندهٔ تنظیمات — بدنه‌ی گرد + هشت دندانه + سوراخِ وسط.
+ *
+ * آیکونِ ریزِ cog واقعی روی ۱۶ پیکسل به یک لکه تبدیل می‌شود؛ این نسخه با
+ * هندسهٔ ساده (شعاعِ ۶٫۵ برای بدنه، دندانه‌ها تا ۱۰) در همان اندازه خوانا
+ * می‌ماند. دندانه‌ها از لبه‌ی بدنه به بیرون می‌روند و از روی آن رد نمی‌شوند.
+ */
+export const GearIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
+    <circle cx="12" cy="12" r="3.5" />
+    <circle cx="12" cy="12" r="6.5" />
+    <path
+      d="M12 5.5V2M12 18.5V22M18.5 12H22M5.5 12H2M16.6 7.4l2.47-2.47M7.4 16.6l-2.47 2.47M16.6 16.6l2.47 2.47M7.4 7.4L4.93 4.93"
+      strokeLinecap="round"
+    />
+  </svg>
+)
+
 export const TimerIcon = ({ className = base }: P) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className}>
     <circle cx="12" cy="13" r="8" />
@@ -722,3 +740,42 @@ export const ClockPendingIcon = ({ className = base }: P) => (
   </svg>
 )
 
+
+/**
+ * تک‌نگاره‌ی کاربر — برای وقتی هنوز کسی وارد نشده.
+ *
+ * عمداً آدمکِ توپُر نیست: آواتارِ خالی باید «جای خالی» به نظر برسد، نه عکس.
+ */
+export const UserIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <circle cx="12" cy="8.2" r="3.6" />
+    <path d="M4.8 20c0-3.6 3.2-6 7.2-6s7.2 2.4 7.2 6" />
+  </svg>
+)
+
+/**
+ * لوگوی گوگل — چهار مسیرِ رنگی.
+ *
+ * رنگ‌ها ثابت‌اند (`fill` صریح، نه `currentColor`): نشانِ گوگل در هر تمی باید
+ * همان نشان باشد، وگرنه دیگر قابل تشخیص نیست.
+ */
+export const GoogleIcon = ({ className = base }: P) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path
+      fill="#4285F4"
+      d="M23.5 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.63v3h3.88c2.27-2.09 3.55-5.17 3.55-8.87Z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 24c3.24 0 5.96-1.08 7.95-2.91l-3.88-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09A12 12 0 0 0 12 24Z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.27 14.29a7.2 7.2 0 0 1 0-4.58V6.62H1.29a12 12 0 0 0 0 10.76l3.98-3.09Z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.44-3.44C17.95 1.18 15.24 0 12 0A12 12 0 0 0 1.29 6.62l3.98 3.09C6.22 6.87 8.87 4.75 12 4.75Z"
+    />
+  </svg>
+)

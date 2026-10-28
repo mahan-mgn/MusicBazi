@@ -16,7 +16,9 @@ from pathlib import Path
 
 import httpx
 
-from .config import ACOUSTID_KEY, FPCALC, PROXY
+from . import credentials
+from .config import FPCALC, PROXY
+from .db import GUEST_ID
 from .identify import fingerprint as _fingerprint
 from .resolver import _overlap, _tokens
 
@@ -29,17 +31,20 @@ MATCH_THRESHOLD = 0.4
 MIN_CONFIDENCE = 0.5
 
 
-def available() -> bool:
-    return bool(ACOUSTID_KEY and FPCALC)
+def available(uid: str = GUEST_ID) -> bool:
+    return bool(credentials.acoustid_key(uid) and FPCALC)
 
 
-def check(path: Path, title: str, artist: str) -> str | None:
+def check(
+    path: Path, title: str, artist: str, uid: str = GUEST_ID
+) -> str | None:
     """
     پیام هشدار اگر فایل با ترکِ درخواستی نخواند، وگرنه None.
 
     بلاک‌کننده است — از داخل thread دانلود صدا زده می‌شود.
     """
-    if not available() or not path.exists():
+    key = credentials.acoustid_key(uid)
+    if not key or not FPCALC or not path.exists():
         return None
 
     fp = _fingerprint(path)
@@ -51,7 +56,7 @@ def check(path: Path, title: str, artist: str) -> str | None:
         res = httpx.post(
             LOOKUP_URL,
             data={
-                "client": ACOUSTID_KEY,
+                "client": key,
                 "duration": duration,
                 "fingerprint": fingerprint,
                 "meta": "recordings",

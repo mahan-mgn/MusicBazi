@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { deriveHarmonics, dominantColor, fallbackTint, tidalBgColor } from '../lib/artColor'
+import { meshAuraBackground, pageThemeVars } from '../lib/pageTheme'
+import { useArtworkTheme } from '../lib/useArtworkTheme'
 import { engine } from '../lib/audioEngine'
 import { digits } from '../lib/format'
 import { useDialog } from '../lib/useDialog'
@@ -25,7 +26,7 @@ import { useRecent } from '../store/recent'
 import { useSettings } from '../store/settings'
 import { PlaylistPicker } from './AddToPlaylist'
 import AudioSettings from './AudioSettings'
-import Artwork, { artBlurUrl } from './Artwork'
+import Artwork from './Artwork'
 import LikeHeart from './LikeHeart'
 import LyricsPanel from './LyricsPanel'
 import LyricsSourceMenu from './LyricsSourceMenu'
@@ -47,6 +48,7 @@ import {
   RepeatIcon,
   ShareIcon,
   ShuffleIcon,
+  SlidersIcon,
   Spinner,
   WarnIcon,
 } from './icons'
@@ -248,6 +250,7 @@ export default function NowPlaying({
     repeat,
     shuffle,
     failed,
+    buffering,
     radio,
     radioLoading,
     toggle,
@@ -278,6 +281,7 @@ export default function NowPlaying({
   const [usedSource, setUsedSource] = useState<string | null>(null)
   const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [audioSettingsOpen, setAudioSettingsOpen] = useState(false)
 
   const playlistPickerBox = usePopover<HTMLDivElement>(playlistPickerOpen, () =>
     setPlaylistPickerOpen(false),
@@ -453,17 +457,24 @@ export default function NowPlaying({
   const favorite = useFavorites((s) => (jobId ? Boolean(s.items[jobId]) : false))
   const toggleFavorite = useFavorites((s) => s.toggle)
 
-  // رنگ‌های استخراج‌شده از کاور به سبک TIDAL — دریافت رنگ اولیه از PlayerBar برای حذف پرش رنگ
-  const [tint, setTint] = useState<[number, number, number] | null>(initialTint ?? null)
-  useEffect(() => {
-    let cancelled = false
-    void dominantColor(item?.track.artworkUrl ?? null).then((c) => {
-      if (!cancelled) setTint(c)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [item?.track.artworkUrl])
+  /*
+   * تمِ شیت از کاورِ همین ترک به سبک TIDAL.
+   *
+   * `initialTint` از PlayerBar می‌آید و فریمِ اول را سنکرون می‌سازد، پس باز
+   * شدنِ شیت پرشِ رنگ ندارد؛ روی تعویضِ ترک هم رنگِ قبلی تا رسیدنِ رنگِ تازه
+   * می‌ماند. اگر استخراج نشد پالتِ قطعیِ سید می‌نشیند — همان
+   * `albumId ?? id` که قبلاً هم فالبک از رویش ساخته می‌شد.
+   *
+   * جای این هوک باید *پیش از* `if (!item) return null` باشد، چون هوک است.
+   */
+  const theme = useArtworkTheme(
+    item?.track.artworkUrl ?? null,
+    item?.track.albumId ?? item?.track.id ?? 'np',
+    initialTint ?? null,
+  )
+  // رنگ‌ها متغیر CSS می‌شوند تا ترنزیشنِ ثبت‌شده در index.css گرادیان‌ها را
+  // هم نرم عوض کند؛ `theme` خودش memo است، پس این هم پایدار می‌ماند.
+  const tintStyle = useMemo(() => pageThemeVars(theme), [theme])
 
   // ترجیحِ ذخیره‌شده‌ی همین آهنگ را بخوان (یک بار به ازای هر آهنگ)
   useEffect(() => {
@@ -561,15 +572,14 @@ export default function NowPlaying({
       ? track.album
       : t.nowPlayingView
 
-  // پس‌زمینهٔ بلورشده‌ی کاور — بلور سمت سرور یا خود تصویر کاور
-  const bgBlur = artBlurUrl(track.artworkUrl)
-  const [bgBlurFailed, setBgBlurFailed] = useState<string | null>(null)
-  const bgSrc = bgBlur && bgBlurFailed !== track.artworkUrl ? bgBlur : track.artworkUrl
+  // پس‌زمینهٔ بلورشدهٔ کاور حذف شد: شیت *رنگِ* آرت‌ورک را می‌گیرد، نه تصویرش.
 
-  // رنگ پس‌زمینه اختصاصی TIDAL و هارمونیک‌های اتمسفری نوری با فالبک پایدار از روی شناسه
-  const effectiveTint = tint ?? fallbackTint(track.albumId ?? track.id)
-  const tidalBg = tidalBgColor(effectiveTint)
-  const harmonics = useMemo(() => deriveHarmonics(effectiveTint), [effectiveTint])
+  /*
+   * پس‌زمینه‌ی ماتِ شیت و اتمسفرِ نوریِ آن، هر دو از `theme` می‌آیند: `bg` از
+   * رنگِ خام ساخته می‌شود (همان `tidalBgColor` قبلی) و سه‌گانه‌های `mesh` هم
+   * عمداً خام می‌مانند تا هویتِ بصریِ این شیت دست‌نخورده بماند.
+   */
+  const tidalBg = theme.bg
 
   // توکن‌های هنرمندان برای نمایش دکمه‌های پروفایل هنرمندان
   const artistTokens = useMemo(
@@ -806,7 +816,7 @@ export default function NowPlaying({
         title={playing ? t.pause : t.play}
         className="grid size-16 place-items-center text-white hover:scale-105 active:scale-95 transition cursor-pointer"
       >
-        {radioLoading ? (
+        {radioLoading || buffering ? (
           <Spinner className="size-10 sm:size-12 text-white" />
         ) : (
           <PlayPauseIcon playing={playing} className="size-10 sm:size-12 text-white" />
@@ -928,12 +938,27 @@ export default function NowPlaying({
                 </button>
               )}
 
-              <div className="px-3 py-1 border-t border-white/10">
-                <AudioSettings />
+              <div className="border-t border-white/10 pt-1">
+                <button
+                  onClick={() => {
+                    setMoreMenuOpen(false)
+                    setAudioSettingsOpen(true)
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-semibold text-white/90 hover:bg-white/15 transition cursor-pointer"
+                >
+                  <SlidersIcon className="size-4 text-white/70" />
+                  <span>{t.audioSettings}</span>
+                </button>
               </div>
             </div>
           )}
         </div>
+
+        <AudioSettings
+          open={audioSettingsOpen}
+          onClose={() => setAudioSettingsOpen(false)}
+          anchorRef={moreMenuBox}
+        />
       </div>
     </div>
   )
@@ -1090,39 +1115,38 @@ export default function NowPlaying({
           if (closing && e.target === e.currentTarget) finishDismiss()
         }}
         style={{
+          ...tintStyle,
           backgroundColor: tidalBg,
-          transition: 'background-color 0.8s ease',
         }}
-        className={`absolute inset-0 flex flex-col overflow-hidden text-white p-4 sm:p-6 pb-[calc(1.25rem+var(--safe-b))] pt-[calc(0.75rem+var(--safe-t))] ps-[calc(1rem+var(--safe-l))] pe-[calc(1rem+var(--safe-r))] ${
+        className={`tint-scope-sheet absolute inset-0 flex flex-col overflow-hidden text-white p-4 sm:p-6 pb-[calc(1.25rem+var(--safe-b))] pt-[calc(0.75rem+var(--safe-t))] ps-[calc(1rem+var(--safe-l))] pe-[calc(1rem+var(--safe-r))] ${
           closing ? 'np-sheet-out' : 'np-sheet-in'
         }`}
       >
         {/* ============================================================== */}
-        {/* لایهٔ پس‌زمینهٔ پویا و زنده از کاور آرت‌ورک و گرادیان هارمونیک     */}
+        {/* لایهٔ پس‌زمینهٔ پویا: رنگِ خودِ آرت‌ورک (نه تصویرِ بلورشده)        */}
         {/* ============================================================== */}
+        {/*
+         * پس‌زمینه دقیقاً *رنگِ* کاور است: `tidalBgColor` روی شیت
+         * (backgroundColor در همان عنصرِ بالا) هیو را نگه می‌دارد و فقط
+         * روشنایی را به ۰٫۱۲–۰٫۲۰ می‌آورد تا متنِ سفید بدونِ هیچ لایهٔ
+         * تاریک‌کننده‌ای AA بماند.
+         *
+         * قبلاً این‌جا خودِ کاور با blur-3xl کشیده می‌شد و رویش سه scrimِ
+         * تیره می‌نشست. آن تصویر حذف شد: قراردادِ این صفحه «رنگِ آرت‌ورک» است
+         * نه «خودِ آرت‌ورکِ محو». با حذفِ scrimها، خوانایی کاملاً به
+         * `tidalBgColor` + آلفای پایینِ mesh تکیه دارد — پس این αها را
+         * بی‌محابا بالا نبر؛ تستِ کنتراست در NowPlaying.dom.test.tsx
+         * دقیقاً همین را می‌سنجد.
+         */}
         <span aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-          {bgSrc && (
-            <img
-              key={bgSrc}
-              src={bgSrc}
-              alt=""
-              onError={() => setBgBlurFailed(track.artworkUrl)}
-              className="absolute inset-0 size-full scale-125 object-cover opacity-50 saturate-150 blur-3xl transition-opacity duration-700"
-            />
-          )}
-
-          {/* اتمسفر نوری زنده (Living Mesh Aurora) با پالت هارمونیک */}
-          <span
-            className="absolute inset-0 transition-all duration-700"
-            style={{
-              background: `radial-gradient(ellipse 85% 65% at 50% 15%, rgb(${harmonics.dominant.join(' ')} / 0.5), transparent 75%), radial-gradient(ellipse 70% 55% at 85% 85%, rgb(${harmonics.secondary.join(' ')} / 0.38), transparent 65%), radial-gradient(ellipse 60% 50% at 15% 75%, rgb(${harmonics.accent.join(' ')} / 0.28), transparent 60%)`,
-            }}
-          />
-
-          {/* لایهٔ گرادیان تیره برای تضمین خوانایی متون و کنترل‌ها به سبک TIDAL */}
-          <span className="absolute inset-0 bg-black/55" />
-          <span className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/85 via-black/40 to-transparent" />
-          <span className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/60 to-transparent" />
+          {/*
+            اتمسفر نوری زنده (Living Mesh Aurora) با پالت هارمونیک — رنگ‌ها
+            از سه‌گانه‌های ثبت‌شده می‌آیند تا مثلِ بقیه نرم عوض شوند
+            (`transition-all` روی `background-image` به‌تنهایی بی‌اثر بود).
+            هندسه و آلفاها از lib/pageTheme می‌آید تا تستِ کنتراست روی
+            همان اعدادی عدد بگیرد که واقعاً رندر می‌شوند.
+          */}
+          <span className="absolute inset-0" style={{ background: meshAuraBackground() }} />
         </span>
 
         {/* ============================================================== */}

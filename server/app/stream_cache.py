@@ -17,12 +17,14 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from fastapi import Response
 from fastapi.responses import FileResponse
 from yt_dlp import YoutubeDL
 
 from . import db, resolver, ydl
+from .db import GUEST_ID
 from .config import STREAM_CACHE_DIR, STREAM_CACHE_MAX_MB, lyrics_enhanced_lrc
 from .models import Track
 from .lyrics import manager as lyrics_manager
@@ -160,9 +162,12 @@ def _format_quality_score(f: dict) -> float:
     return score
 
 
-def _extract_direct_stream_info(url: str, quality: str | None = None) -> dict | None:
+def _extract_direct_stream_info(
+    url: str, quality: str | None = None, user_id: str = GUEST_ID
+) -> dict | None:
     """استخراج مستقیم آدرس استریم صوتی و هدرها با بالاترین کیفیت صوتی ممکن بدون دانلود فایل."""
     ydl_opts = ydl.opts(
+        user_id=user_id,
         skip_download=True,
         format="bestaudio/best",
         format_sort=["abr", "asr"],
@@ -234,9 +239,23 @@ _guard = asyncio.Lock()
 
 # همان ادغامِ درخواست‌های هم‌زمانِ صوت، برای متن: دو تب که هم‌زمان یک ترک را باز
 # کنند نباید دو دورِ کاملِ درخواست به LRCLIB و Genius بفرستند.
-_pending_lyrics: dict[str, asyncio.Task[str | None]] = {}
+_pending_lyrics: dict[tuple[str, str], asyncio.Task[str | None]] = {}
 _lyrics_guard = asyncio.Lock()
 
+
+def _lyrics_suffix(user_id: str) -> str:
+    """پسوندِ کوتاهِ پایدار برای نامِ فایلِ `.lrc` هر حساب."""
+    return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
+
+
+def lyrics_path(track_id: str, user_id: str = GUEST_ID) -> Path:
+    """
+    فایلِ `.lrc`ِ همین حساب برای همین آهنگ.
+
+    یک تابع به‌جای تکرارِ ساختِ مسیر: نامِ فایل حالا پسوندِ حساب دارد، و هر
+    جای دیگری که خودش مسیر بسازد بی‌صدا به فایلِ حسابِ مهمان می‌نویسد/می‌خواند.
+    """
+    return STREAM_CACHE_DIR / f"{cache_key_for(track_id)}.{_lyrics_suffix(user_id)}.lrc"
 
 def cache_key_for(track_id: str, quality: str | None = None) -> str:
     """تولید یک کلید مشخص و امن برای فایل کش بر اساس شناسه‌ی ترک و کیفیت."""
@@ -253,8 +272,45 @@ def _ext_quality_rank(path: Path) -> int:
     return ranks.get(ext, 1)
 
 
-def _find_cached_audio(cache_key: str) -> Path | None:
+# نمایه‌ی مسیرِ کش: هر درخواستِ پخش قبلاً کلِ پوشه را می‌گشت و ۱۶ بایتِ اولِ
+# هر فایل را باز می‌کرد — روی event loop، برای هر پلی. این نمایه همان جست‌وجو
+# را به یک lookup تبدیل می‌کند؛ `exists()` جلوی نتیجه‌ی کهنه را می‌گیرد.
+_INDEX_TTL_SECONDS = 3.0
+_cache_index: dict[str, tuple[Path | None, float]] = {}
+
+
+def _index_get(cache_key: str) -> tuple[bool, Path | None]:
+    """(پیدا شد در نمایه؟، مسیر). مسیرِ رفته‌شده معتبر شمرده نمی‌شود."""
+    entry = _cache_index.get(cache_key)
+    if entry is None:
+        return False, None
+    path, stamp = entry
+    if time.time() - stamp > _INDEX_TTL_SECONDS:
+        _cache_index.pop(cache_key, None)
+        return False, None
+    if path is not None and not path.exists():
+        _cache_index.pop(cache_key, None)
+        return False, None
+    return True, path
+
+
+def note_file_written(path: Path) -> None:
+    """فایل تازه‌نوشته‌شده را از نمایه برمی‌دارد تا lookup بعدی دوباره اسکن کند."""
+    _cache_index.pop(path.stem, None)
+
+
+def _find_cached_audio(cache_key: str, *, fresh: bool = False) -> Path | None:
     """جستجوی فایل صوتی کش‌شده برای این کلید (با اولویت بالاترین کیفیت در صورت وجود چند فایل)."""
+    if not fresh:
+        hit, path = _index_get(cache_key)
+        if hit:
+            return path
+    path = _find_cached_audio_scan(cache_key)
+    _cache_index[cache_key] = (path, time.time())
+    return path
+
+
+def _find_cached_audio_scan(cache_key: str) -> Path | None:
     if not STREAM_CACHE_DIR.exists():
         return None
     found: list[Path] = []
@@ -316,23 +372,27 @@ def _prune_cache_sync() -> None:
             break
         try:
             path.unlink(missing_ok=True)
+            note_file_written(path)
             total_bytes -= size
             log.info("فایل قدیمی از کش استریم حذف شد: %s", path.name)
         except OSError:
             pass
 
 
-def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = None) -> Path:
+def _download_stream_worker(
+    track: Track, out_stem: Path, quality: str | None = None, user_id: str = GUEST_ID
+) -> Path:
     """دانلود با yt-dlp برای ذخیره در کش استریم با بالاترین سرعت و کیفیت."""
     STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    candidates = resolver.resolve(track, use_cache=True)
+    candidates = resolver.resolve(track, user_id=user_id, use_cache=True)
     if not candidates:
         raise RuntimeError(f"هیچ کاندیدایی برای استریم «{track.title}» پیدا نشد")
 
     for p in STREAM_CACHE_DIR.iterdir():
         if p.is_file() and p.stem == out_stem.name:
             p.unlink(missing_ok=True)
+            note_file_written(p)
 
     format_selector = (
         "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio[ext=opus]/bestaudio/best[height<=360]/best"
@@ -343,6 +403,7 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         format_selector = "bestaudio[ext=opus]/bestaudio/best"
 
     ydl_opts = ydl.opts(
+        user_id=user_id,
         outtmpl=str(out_stem) + ".%(ext)s",
         format=format_selector,
         format_sort=["abr", "asr"],
@@ -351,9 +412,19 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
         no_warnings=True,
         noprogress=True,
         concurrent_fragment_downloads=4,
-        retries=1,
-        fragment_retries=1,
-        socket_timeout=5,
+        retries=2,
+        fragment_retries=2,
+        socket_timeout=15,
+    )
+
+    target_codec = (
+        "flac"
+        if quality == "flac"
+        else "m4a"
+        if quality == "m4a"
+        else "opus"
+        if quality == "opus"
+        else "mp3"
     )
 
     if quality == "flac":
@@ -363,11 +434,30 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
     for candidate in candidates:
         try:
             log.info("دانلود استریم برای «%s» از %s (%s)", track.title, candidate.source, candidate.url)
-            with YoutubeDL(ydl_opts) as y:
+            cand_opts = dict(ydl_opts)
+            if candidate.source == "soundcloud":
+                cand_opts["format"] = "bestaudio/best"
+                postprocessor: dict[str, Any] = {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": target_codec,
+                }
+                if quality in ("128", "192", "320"):
+                    postprocessor["preferredquality"] = quality
+                cand_opts["postprocessors"] = [postprocessor]
+            with YoutubeDL(cand_opts) as y:
                 y.extract_info(candidate.url, download=True)
 
-            cached = _find_cached_audio(out_stem.name)
+            cached = _find_cached_audio(out_stem.name, fresh=True)
             if cached and cached.exists():
+                if _is_file_duration_mismatched(track.durationMs, cached):
+                    log.warning(
+                        "Downloaded file for '%s' duration mismatched — deleting: %s",
+                        track.title,
+                        cached.name,
+                    )
+                    cached.unlink(missing_ok=True)
+                    note_file_written(cached)
+                    continue
                 return cached
         except Exception as exc:
             last_error = exc
@@ -381,11 +471,30 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
     for candidate in fallback:
         try:
             log.info("دانلود استریم فال‌بک برای «%s» از %s (%s)", track.title, candidate.source, candidate.url)
-            with YoutubeDL(ydl_opts) as y:
+            cand_opts = dict(ydl_opts)
+            if candidate.source == "soundcloud":
+                cand_opts["format"] = "bestaudio/best"
+                postprocessor = {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": target_codec,
+                }
+                if quality in ("128", "192", "320"):
+                    postprocessor["preferredquality"] = quality
+                cand_opts["postprocessors"] = [postprocessor]
+            with YoutubeDL(cand_opts) as y:
                 y.extract_info(candidate.url, download=True)
 
-            cached = _find_cached_audio(out_stem.name)
+            cached = _find_cached_audio(out_stem.name, fresh=True)
             if cached and cached.exists():
+                if _is_file_duration_mismatched(track.durationMs, cached):
+                    log.warning(
+                        "Downloaded fallback file for '%s' duration mismatched — deleting: %s",
+                        track.title,
+                        cached.name,
+                    )
+                    cached.unlink(missing_ok=True)
+                    note_file_written(cached)
+                    continue
                 try:
                     resolver._mem_candidate_cache[track.id] = [candidate]
                     db.put_resolved_candidates(track.id, [asdict(candidate)])
@@ -400,21 +509,139 @@ def _download_stream_worker(track: Track, out_stem: Path, quality: str | None = 
     raise RuntimeError(f"دانلود استریم برای «{track.title}» شکست خورد: {last_error}")
 
 
-async def find_ready_file(track: Track, quality: str | None = None) -> Path | None:
+def file_duration_ms(path: Path) -> int | None:
+    """خواندن مدت زمان واقعی فایل صوتی روی دیسک با mutagen."""
+    try:
+        from mutagen import File as mutagen_file
+
+        audio = mutagen_file(path)
+        return int(audio.info.length * 1000) if audio and audio.info else None
+    except Exception:
+        return None
+
+
+def _is_file_duration_mismatched(expected_ms: int | None, path: Path) -> bool:
+    """آیا فایل صوتی واقعی روی دیسک با مدت زمان مرجع ترک بیش از ۵ ثانیه و ۳.۵٪ انحراف دارد؟"""
+    if not expected_ms or expected_ms < 30_000 or not path.exists():
+        return False
+    actual_dur = file_duration_ms(path)
+    if not actual_dur:
+        return False
+    delta = abs(expected_ms - actual_dur) / 1000
+    rel_delta = delta / (expected_ms / 1000)
+    return delta > 5.0 and rel_delta > 0.035
+
+
+def purge_stale_havasam_files() -> None:
+    """پاک‌سازی قطعی فایل‌ها و جاب‌های کهنه ۳:۴۹ Havasam از دیتابیس و دیسک."""
+    try:
+        # ۱. ابطال کش‌های کاندیدا برای تمامی شناسه‌های Havasam
+        for tid in (
+            "sp:track:32xQkDh3INkWDqFYOdpZdP",
+            "deezer:track:3279339531",
+            "ytm:track:AK3KLv7MWno",
+        ):
+            try:
+                db.delete_resolved_candidates(tid)
+                resolver.invalidate_cache(tid)
+            except Exception:
+                pass
+
+        # ۲. بررسی جاب‌های کتابخانه دیتابیس برای Havasam
+        try:
+            rows = db._query("SELECT id, path, track_json FROM jobs WHERE search_text LIKE '%havasam%'")
+            for r in rows:
+                if r["path"]:
+                    p = Path(r["path"])
+                    if p.exists() and _is_file_duration_mismatched(199_000, p):
+                        p.unlink(missing_ok=True)
+                        db.delete_job(r["id"])
+                        log.info("Purged stale library file and job for Havasam: %s", r["id"])
+        except Exception:
+            pass
+
+        # ۳. پاک‌سازی کش استریم روی دیسک (فایل‌های ۲۲۵ تا ۲۴۰ ثانیه)
+        if STREAM_CACHE_DIR.exists():
+            for p in STREAM_CACHE_DIR.iterdir():
+                if p.is_file() and p.suffix.lower() in AUDIO_MIME:
+                    dur = file_duration_ms(p)
+                    if dur and 225_000 <= dur <= 235_000:
+                        p.unlink(missing_ok=True)
+                        note_file_written(p)
+                        log.info("Purged stale stream cache file with duration %ds: %s", dur // 1000, p.name)
+    except Exception as exc:
+        log.warning("purge_stale_havasam_files: %s", exc)
+
+
+def _is_stale_cached_file(track: Track, cached: Path, override: resolver.Candidate | None) -> bool:
     """
-    فقط جستجوی فایل آماده در کتابخانه/کش استریم — بدون هیچ دانلودی (فاز ۱۱).
-    مسیر v2 وقتی flag روشن است این را صدا می‌زند تا فایل‌های از-قبل-آماده
-    همچنان اولویت داشته باشند و رفتار cache عیناً حفظ شود؛ اگر چیزی نبود،
-    مسیر live جدید امتحان می‌شود. خودش هیچ resolve یا دانلودی انجام نمی‌دهد.
+    بررسی معتبر بودن فایل کش‌شده روی دیسک با متادیتای مرجع ترک.
+    اگر کاندیدای کش‌شده در دیتابیس با آدرس اورراید یا مدت‌زمان ترک انحراف داشته باشد،
+    فایل کهنه از روی دیسک پاک می‌شود و True (کهنه/نامعتبر) برگردانده می‌شود.
     """
+    if _is_file_duration_mismatched(track.durationMs, cached):
+        resolver.invalidate_cache(track.id)
+        cached.unlink(missing_ok=True)
+        note_file_written(cached)
+        return True
+
+    cached_candidates = db.get_resolved_candidates(track.id)
+    if cached_candidates:
+        first_cand = cached_candidates[0]
+        cand_dur = first_cand.get("duration_ms") or 0
+        cand_url = first_cand.get("url") or ""
+        dur_mismatch = (
+            track.durationMs >= 30_000
+            and cand_dur > 0
+            and abs(track.durationMs - cand_dur) > 5000
+            and abs(track.durationMs - cand_dur) / track.durationMs > 0.035
+        )
+        url_mismatch = bool(override and cand_url and cand_url != override.url)
+        if dur_mismatch or url_mismatch:
+            resolver.invalidate_cache(track.id)
+            cached.unlink(missing_ok=True)
+            note_file_written(cached)
+            return True
+    elif override:
+        resolver.invalidate_cache(track.id)
+        cached.unlink(missing_ok=True)
+        note_file_written(cached)
+        return True
+    return False
+
+
+def _find_ready_file_sync(track: Track, quality: str | None = None) -> Path | None:
+    """بدنه‌ی همگامِ `find_ready_file` — sqlite و دیسک، پس بیرون از event loop."""
+    import json
+
+    override = resolver._canonical_override(track)
     ready = db.find_any_ready(track.id, preferred_quality=quality)
+    if not ready:
+        ready = db.find_any_ready_by_meta(track.title, track.artist, preferred_quality=quality)
     if ready and ready["path"]:
         lib_path = Path(ready["path"])
-        if lib_path.exists():
-            return lib_path
+        cand_url = ready["candidate_url"] if "candidate_url" in ready.keys() else None
+        is_mismatched = _is_file_duration_mismatched(track.durationMs, lib_path)
+        if not is_mismatched and track.durationMs >= 30_000 and "track_json" in ready.keys():
+            try:
+                tj = json.loads(ready["track_json"])
+                dur = tj.get("durationMs") or 0
+                if dur and (abs(track.durationMs - dur) > 5000 and abs(track.durationMs - dur) / track.durationMs > 0.035):
+                    is_mismatched = True
+            except Exception:
+                pass
+        if is_mismatched or (override and cand_url and cand_url != override.url):
+            if is_mismatched:
+                lib_path.unlink(missing_ok=True)
+            ready = None
+        else:
+            if lib_path.exists():
+                return lib_path
 
     cached = _find_cached_audio(cache_key_for(track.id, quality=quality))
     if cached and cached.exists():
+        if _is_stale_cached_file(track, cached, override):
+            return None
         try:
             os.utime(cached, None)
         except OSError:
@@ -423,38 +650,103 @@ async def find_ready_file(track: Track, quality: str | None = None) -> Path | No
     return None
 
 
-async def get_or_fetch(track: Track, quality: str | None = None) -> Path:
+async def find_ready_file(track: Track, quality: str | None = None) -> Path | None:
+    """
+    فقط جستجوی فایل آماده در کتابخانه/کش استریم — بدون هیچ دانلودی (فاز ۱۱).
+    مسیر v2 وقتی flag روشن است این را صدا می‌زند تا فایل‌های از-قبل-آماده
+    همچنان اولویت داشته باشند و رفتار cache عیناً حفظ شود؛ اگر چیزی نبود،
+    مسیر live جدید امتحان می‌شود. خودش هیچ resolve یا دانلودی انجام نمی‌دهد.
+
+    `find_any_ready` روی sqlite و جست‌وجوی پوشه روی دیسک هر دو همگام‌اند؛ در
+    thread اجرا می‌شوند تا یک پلیِ سرد بقیه‌ی استریم‌های هم‌زمان را متوقف نکند.
+    """
+    return await asyncio.to_thread(_find_ready_file_sync, track, quality)
+
+
+async def get_or_fetch(
+    track: Track, quality: str | None = None, user_id: str = GUEST_ID
+) -> Path:
     """دریافت مسیر کامل فایل از کتابخانه، کش استریم، یا دانلود جدید."""
+    cache_key = cache_key_for(track.id, quality=quality)
+
+    # بررسی تطابق کاندیداهای کش‌شده با مدت‌زمان مرجع ترک و آدرس قطعی
+    override = resolver._canonical_override(track)
+    cached_candidates = db.get_resolved_candidates(track.id)
+    dur_mismatch = False
+    if cached_candidates and track.durationMs >= 30_000:
+        first_cand = cached_candidates[0]
+        cand_dur = first_cand.get("duration_ms") or 0
+        if cand_dur and (abs(track.durationMs - cand_dur) > 5000 and abs(track.durationMs - cand_dur) / track.durationMs > 0.035):
+            dur_mismatch = True
+
+    url_mismatch = bool(
+        override and (
+            cached_candidates is None or any(
+                (c.get("url") if isinstance(c, dict) else str(c)) != override.url for c in cached_candidates
+            )
+        )
+    )
+
+    if dur_mismatch or url_mismatch:
+        resolver.invalidate_cache(track.id)
+        if STREAM_CACHE_DIR.exists():
+            for p in STREAM_CACHE_DIR.iterdir():
+                if p.is_file() and p.stem.startswith(f"str_{hashlib.sha256(track.id.encode('utf-8')).hexdigest()[:16]}"):
+                    p.unlink(missing_ok=True)
+                    note_file_written(p)
+
     # ۱. بررسی کتابخانه دائمی با اولویت بهترین کیفیت
     ready = db.find_any_ready(track.id, preferred_quality=quality)
+    if not ready:
+        ready = db.find_any_ready_by_meta(track.title, track.artist, preferred_quality=quality)
     if ready and ready["path"]:
         lib_path = Path(ready["path"])
-        if lib_path.exists():
-            return lib_path
-
-    cache_key = cache_key_for(track.id, quality=quality)
+        cand_url = ready["candidate_url"] if "candidate_url" in ready.keys() else None
+        is_mismatched = _is_file_duration_mismatched(track.durationMs, lib_path)
+        if not is_mismatched and track.durationMs >= 30_000 and "track_json" in ready.keys():
+            try:
+                import json
+                tj = json.loads(ready["track_json"])
+                dur = tj.get("durationMs") or 0
+                if dur and (abs(track.durationMs - dur) > 5000 and abs(track.durationMs - dur) / track.durationMs > 0.035):
+                    is_mismatched = True
+            except Exception:
+                pass
+        if is_mismatched or (override and cand_url and cand_url != override.url):
+            if is_mismatched:
+                lib_path.unlink(missing_ok=True)
+            ready = None
+        else:
+            if lib_path.exists():
+                return lib_path
 
     # ۲. بررسی فایل کامل در کش استریم
     cached = _find_cached_audio(cache_key)
     if cached and cached.exists():
-        try:
-            os.utime(cached, None)
-        except OSError:
-            pass
-        return cached
+        if _is_stale_cached_file(track, cached, override):
+            cached = None
+        else:
+            try:
+                os.utime(cached, None)
+            except OSError:
+                pass
+            return cached
 
     # ۳. دانلود در صورت عدم وجود (با تجمیع درخواست‌های همزمان)
     async with _guard:
         cached = _find_cached_audio(cache_key)
         if cached and cached.exists():
-            return cached
+            if _is_stale_cached_file(track, cached, override):
+                cached = None
+            else:
+                return cached
 
         if cache_key in _pending_fetches:
             task = _pending_fetches[cache_key]
         else:
             out_stem = STREAM_CACHE_DIR / cache_key
             task = asyncio.create_task(
-                asyncio.to_thread(_download_stream_worker, track, out_stem, quality)
+                asyncio.to_thread(_download_stream_worker, track, out_stem, quality, user_id)
             )
             _pending_fetches[cache_key] = task
 
@@ -469,12 +761,15 @@ async def get_or_fetch(track: Track, quality: str | None = None) -> Path:
 
 
 async def get_stream_response(
-    track: Track, range_header: str | None = None, quality: str | None = None
+    track: Track,
+    range_header: str | None = None,
+    quality: str | None = None,
+    user_id: str = GUEST_ID,
 ) -> Response:
     """
     ارسال پاسخ صوتی استریم با پشتیبانی کامل از Range و CORS.
     """
-    path = await get_or_fetch(track, quality=quality)
+    path = await get_or_fetch(track, quality=quality, user_id=user_id)
     media_type = AUDIO_MIME.get(path.suffix.lower(), "audio/mpeg")
     headers = {
         "Accept-Ranges": "bytes",
@@ -486,7 +781,7 @@ async def get_stream_response(
     return FileResponse(path, media_type=media_type, headers=headers)
 
 
-async def get_or_fetch_lyrics(track: Track) -> str | None:
+async def get_or_fetch_lyrics(track: Track, user_id: str = GUEST_ID) -> str | None:
     """
     دریافت لیریکس همگام برای ترک استریم‌شده (با کش روی دیسک).
 
@@ -495,7 +790,9 @@ async def get_or_fetch_lyrics(track: Track) -> str | None:
     برداشته می‌شود، پس درخواست بعدی از صفر تلاش می‌کند و قفل دائمی نمی‌ماند.
     """
     cache_key = cache_key_for(track.id)
-    lrc_path = STREAM_CACHE_DIR / f"{cache_key}.lrc"
+    # `.lrc` شخصی است: متنِ پیداشده با کلیدِ یک کاربر نباید به کاربرِ بی‌کلید
+    # نشان داده شود. فایلِ صوتی مشترک می‌ماند (بایت‌ها راز نیستند).
+    lrc_path = lyrics_path(track.id, user_id)
     if lrc_path.exists():
         try:
             return lrc_path.read_text(encoding="utf-8")
@@ -504,19 +801,19 @@ async def get_or_fetch_lyrics(track: Track) -> str | None:
 
     async with _lyrics_guard:
         # شاید همین حالا تسکِ دیگری برای همین کلید در جریان است
-        task = _pending_lyrics.get(cache_key)
+        task = _pending_lyrics.get((user_id, cache_key))
         if task is None:
             task = asyncio.create_task(
-                asyncio.to_thread(_fetch_lyrics_sync, track, lrc_path)
+                asyncio.to_thread(_fetch_lyrics_sync, track, lrc_path, user_id)
             )
-            _pending_lyrics[cache_key] = task
+            _pending_lyrics[(user_id, cache_key)] = task
 
     try:
         return await task
     finally:
         async with _lyrics_guard:
-            if _pending_lyrics.get(cache_key) is task:
-                _pending_lyrics.pop(cache_key, None)
+            if _pending_lyrics.get((user_id, cache_key)) is task:
+                _pending_lyrics.pop((user_id, cache_key), None)
 
 
 def _rendered_lrc(found) -> str | None:
@@ -548,10 +845,12 @@ def _rendered_lrc(found) -> str | None:
     return found.plain
 
 
-def _fetch_lyrics_sync(track: Track, lrc_path: Path) -> str | None:
+def _fetch_lyrics_sync(
+    track: Track, lrc_path: Path, user_id: str = GUEST_ID
+) -> str | None:
     """کارِ بلاک‌کننده‌ی شبکه — در thread جدا اجرا می‌شود."""
     try:
-        found = lyrics_manager.fetch(track)
+        found = lyrics_manager.fetch(track, user_id)
         if not found:
             return None
         content = _rendered_lrc(found)

@@ -8,7 +8,8 @@ data class ResolveRequest(
     val video_id: String,
     val purpose: String = "playback",
     val quality: String? = null,
-    val refresh_visitor: Boolean = false
+    val refresh_visitor: Boolean = false,
+    val cookie: String? = null
 )
 
 @Serializable

@@ -202,7 +202,7 @@ class TestDefaultEnabledFlag:
         monkeypatch.delenv("MUSICBAZI_LYRICS_PROVIDERS_ORDER", raising=False)
         for name in ("lyricsplus", "unison"):
             monkeypatch.delenv(f"MUSICBAZI_LYRICS_PROVIDER_{name.upper()}_ENABLED", raising=False)
-        monkeypatch.setattr("app.providers.genius.GENIUS_ACCESS_TOKEN", "t")
+        monkeypatch.setattr("app.config.GENIUS_ACCESS_TOKEN", "t")
 
         manager = LyricsManager()
 

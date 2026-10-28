@@ -40,6 +40,10 @@ interface SettingsState {
   normalize: boolean
   /** ثانیه؛ صفر یعنی خاموش */
   crossfade: number
+  /** فعال بودن میکس خودکار زمان‌بندی (Automix) */
+  automix: boolean
+  /** فعال بودن ترنزیشن‌های دی‌جی (سوئیپ فیلتر LPF و تعویض ساب‌بیس) */
+  smartDj: boolean
   /** اکولایزر دقیق اندروید: ۷ باند دستی (۶۰Hz تا ۱۴kHz) به دسی‌بل */
   eqBands: number[]
   /** پد تون — x: tilt، y: contour؛ هر دو در بازهٔ ۵± گام */
@@ -62,6 +66,8 @@ interface SettingsState {
   setReduceMotion: (on: boolean) => void
   setNormalize: (on: boolean) => void
   setCrossfade: (seconds: number) => void
+  setAutomix: (on: boolean) => void
+  setSmartDj: (on: boolean) => void
   setEqBands: (bands: number[]) => void
   setTone: (tone: { x: number; y: number }) => void
   setBalance: (balance: number) => void
@@ -223,6 +229,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
   reduceMotion: initialReduceMotion,
   normalize: readStored('audio:normalize') !== '0',
   crossfade: readStoredNumber('audio:crossfade', 0, { max: MAX_CROSSFADE }),
+  automix: readStored('audio:automix') !== '0',
+  smartDj: readStored('audio:smartDj') !== '0',
   eqBands: migratedEq.eqBands,
   tone: migratedEq.tone,
   balance: migratedEq.balance,
@@ -285,6 +293,18 @@ export const useSettings = create<SettingsState>((set, get) => ({
     engine.setCrossfade(value)
     nativeSetCrossfade(value)
     set({ crossfade: value })
+  },
+
+  setAutomix: (on) => {
+    writeStored('audio:automix', on ? '1' : '0')
+    engine.setAutomix(on)
+    set({ automix: on })
+  },
+
+  setSmartDj: (on) => {
+    writeStored('audio:smartDj', on ? '1' : '0')
+    engine.setSmartDj(on)
+    set({ smartDj: on })
   },
 
   setEqBands: (bands) => {

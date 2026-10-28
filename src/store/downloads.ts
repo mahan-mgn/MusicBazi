@@ -2,8 +2,11 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { onIdentityChange } from '../lib/identity'
+import { readStored, scopedKey } from '../lib/storage'
 import type { DownloadProgress, JobStatus, Quality, Track } from '../lib/types'
 import { useNet } from './net'
+import { useSettings } from './settings'
 import { useToasts } from './toasts'
 
 export interface Job {
@@ -101,8 +104,18 @@ function queuedToast(title: string): void {
 /** کنسل‌کننده‌ی هر کار، بیرون از state نگه داشته می‌شود */
 const cancelers = new Map<string, () => void>()
 
-/** سقف دانلودهای فعال هم‌زمان در فرانت — جلوگیری از اشباع ۶ سوکت HTTP/1.1 مرورگر */
-const MAX_CONCURRENT_ACTIVE_DOWNLOADS = 3
+/**
+ * سقفِ دانلودهای فعالِ هم‌زمان در فرانت — جلوگیری از اشباعِ ۶ سوکتِ HTTP/1.1
+ * مرورگر. از تنظیمات خوانده می‌شود نه از یک ثابت، تا کاربر با گوشی/شبکه‌ی
+ * قوی‌تر بتواند بالا ببردش.
+ *
+ * لحظه‌ای خوانده می‌شود (نه یک بار در سطحِ ماژول) چون مقدارش وسطِ کار عوض
+ * می‌شود و `drainQueue` چندین بار صدا زده می‌شود؛ مقدارِ کش‌شده یعنی تنظیمِ
+ * تازه تا رفرشِ بعدی بی‌اثر بماند.
+ */
+function activeDownloadCap(): number {
+  return useSettings.getState().maxConcurrentDownloads
+}
 
 let batchSeq = 0
 
@@ -137,6 +150,14 @@ interface DownloadState {
   clearFinished: () => void
   setCollapsed: (v: boolean) => void
   /**
+   * صف را دوباره پر کن.
+   *
+   * `drainQueue` یک تابعِ داخلیِ closure است و از بیرون دیده نمی‌شود؛ صفحه‌ی
+   * تنظیمات بعد از بالا بردنِ سقفِ دانلود این را صدا می‌زند تا کارهای
+   * «در انتظار» همان لحظه راه بیفتند، نه در رویدادِ بعدیِ صف.
+   */
+  pump: () => void
+  /**
    * بعد از رفرشِ صفحه: به جاب‌های نیمه‌کاره‌ی دارای شناسه‌ی سروری دوباره وصل
    * می‌شود و بقیه را خطای قابلِ retry می‌دهد. توسط persist بعد از rehydrate
    * صدا زده می‌شود — بخشی از API عمومیِ استور نیست.
@@ -153,7 +174,7 @@ export const useDownloads = create<DownloadState>()(
     const runningCount = currentJobs.filter(
       (j) => cancelers.has(j.id) && isActive(j.status),
     ).length
-    const availableSlots = MAX_CONCURRENT_ACTIVE_DOWNLOADS - runningCount
+    const availableSlots = activeDownloadCap() - runningCount
     if (availableSlots <= 0) return
 
     const pending = currentJobs.filter((j) => j.status === 'queued' && !cancelers.has(j.id))
@@ -416,6 +437,8 @@ export const useDownloads = create<DownloadState>()(
 
     setCollapsed: (collapsed) => set({ collapsed }),
 
+    pump: () => drainQueue(),
+
     resumeStaleJobs: () => {
       for (const job of get().jobs) {
         if (isDone(job.status) || job.status === 'error' || job.status === 'canceled') continue
@@ -431,7 +454,11 @@ export const useDownloads = create<DownloadState>()(
   }
 },
 {
-  name: 'musicbazi-downloads',
+  // کلید حساب‌محور: صفِ حسابِ قبلی (با شناسه‌ی جاب‌هایش) نباید در حسابِ تازه
+  // بالا بیاید — جابِ حسابِ دیگر ۴۰۴ می‌دهد و صف پر از ردیفِ شکست‌خورده می‌شود.
+  // استور در سطحِ ماژول ساخته می‌شود، پس این کلید در لحظه‌ی لود حسابِ همان
+  // نشست را می‌گیرد؛ تعویضِ حساب کلیدِ جدیدی می‌سازد.
+  name: scopedKey('musicbazi-downloads'),
       storage: createJSONStorage(() => localStorage),
       // فقط داده‌ها — اکشن‌ها و باز/بسته‌بودنِ پنل مالِ همین نشست‌اند
       partialize: (s) => ({ jobs: s.jobs, batches: s.batches }) as DownloadState,
@@ -439,6 +466,36 @@ export const useDownloads = create<DownloadState>()(
     },
   ),
 )
+
+/*
+ * تعویضِ حساب بدونِ رفرش.
+ *
+ * سه کار که هیچ‌کدام اختیاری نیست:
+ *
+ *  ۱. اتصال‌های زنده بسته می‌شوند. `EventSource` به جابِ حسابِ قبلی وصل است؛
+ *     اگر باز بماند، پیام‌هایش تا آخر عمر صفحه می‌آید و — بدتر — `drainQueue`
+ *     جای سوکت را اشغال‌شده می‌بیند.
+ *  ۲. کلیدِ ماندگاری به حسابِ تازه اشاره می‌کند *پیش از* هر نوشتنی. `persist`
+ *     کلید را در لحظه‌ی ساختِ استور می‌بندد، پس بدونِ `setOptions` هر نوشتنِ
+ *     بعدی (از جمله خالی‌کردنِ زیر) زیرِ نامِ حسابِ قبلی می‌رفت و صفش را
+ *     نابود می‌کرد — دقیقاً همان چیزی که خروج نباید بکند.
+ *  ۳. صف از کلیدِ حسابِ تازه خوانده می‌شود، نه خالی‌کردنِ کور. اگر آن حساب صفی
+ *     داشت برمی‌گردد؛ اگر نه، `rehydrate` چیزی پیدا نمی‌کند و صف خالی می‌ماند.
+ *     (`setState` نمی‌شود، چون خودش بلافاصله در `localStorage` می‌نویسد و
+ *     صفِ ذخیره‌شده‌ی مقصد را قبل از خواندنش پاک می‌کند.)
+ */
+onIdentityChange(() => {
+  for (const cancel of cancelers.values()) cancel()
+  cancelers.clear()
+  const name = scopedKey('musicbazi-downloads')
+  useDownloads.persist.setOptions({ name })
+  // `localStorage` همگام است، پس این خواندن و `rehydrate` هر دو فوری‌اند.
+  // تفکیکِ دو حالت لازم است چون `setState` همیشه می‌نویسد: اگر ذخیره‌شده‌ای
+  // هست باید اول خوانده شود (وگرنه با خالی‌کردن پاک می‌شد)، و اگر نیست
+  // باید حافظه خالی شود (وگرنه صفِ حسابِ قبلی می‌ماند).
+  if (readStored(name)) void useDownloads.persist.rehydrate()
+  else useDownloads.setState({ jobs: [], batches: [] })
+})
 
 /**
  * کارِ مربوط به یک (ترک، کیفیت) — همان جفتی که در بقیه‌ی این استور و در سرور

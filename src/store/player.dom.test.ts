@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { nextMuteState, usePlayer, type PlayItem } from './player'
 
 window.HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined)
@@ -182,5 +182,111 @@ describe('shuffle and history navigation in usePlayer', () => {
 
     usePlayer.getState().drop('2', 1)
     expect(usePlayer.getState().queue.map((x) => x.id)).toEqual(['1', '3'])
+  })
+})
+
+describe('buffering state in usePlayer', () => {
+  it('load sets buffering: true and playing: false until audio starts playing', () => {
+    usePlayer.setState({ playing: false, buffering: false })
+    const item = makePlayItem('buffering-test')
+    usePlayer.getState().play([item], 0)
+
+    expect(usePlayer.getState().buffering).toBe(true)
+    expect(usePlayer.getState().playing).toBe(false)
+  })
+})
+
+describe('finite Artist Shuffle sessions', () => {
+  afterEach(() => {
+    usePlayer.setState({
+      queue: [],
+      index: 0,
+      playing: false,
+      repeat: 'off',
+      shuffle: false,
+      radio: false,
+      radioLoading: false,
+      artistShuffleSession: null,
+    })
+    vi.restoreAllMocks()
+  })
+
+  it('plays every unique track ID once in the session’s forward path', () => {
+    const items = [makePlayItem('a'), makePlayItem('b'), makePlayItem('c'), makePlayItem('d')]
+    const duplicateTrack = { ...makePlayItem('duplicate-alias'), track: items[1].track }
+    usePlayer.setState({ repeat: 'all', shuffle: true, radio: true })
+
+    usePlayer.getState().playArtistShuffle([...items, duplicateTrack], 'artist-1')
+
+    const sessionQueue = usePlayer.getState().queue
+    expect(sessionQueue).toHaveLength(4)
+    expect(new Set(sessionQueue.map((item) => item.track.id))).toEqual(
+      new Set(items.map((item) => item.track.id)),
+    )
+    expect(usePlayer.getState().artistShuffleSession).toEqual({ artistId: 'artist-1' })
+
+    const played = [sessionQueue[0].track.id]
+    for (let i = 1; i < sessionQueue.length; i++) {
+      usePlayer.getState().next()
+      played.push(usePlayer.getState().queue[usePlayer.getState().index].track.id)
+    }
+    usePlayer.getState().next()
+
+    expect(played).toHaveLength(4)
+    expect(new Set(played)).toEqual(new Set(items.map((item) => item.track.id)))
+    expect(usePlayer.getState().index).toBe(sessionQueue.length - 1)
+    expect(usePlayer.getState().queue).toHaveLength(4)
+    expect(usePlayer.getState().playing).toBe(false)
+    expect(usePlayer.getState().radio).toBe(true)
+    expect(usePlayer.getState().artistShuffleSession).toEqual({
+      artistId: 'artist-1',
+      completed: true,
+    })
+  })
+
+  it('does not start an empty queue and stops safely for one track', () => {
+    usePlayer.setState({ queue: [], index: 0, playing: false, radio: true, repeat: 'all' })
+    usePlayer.getState().playArtistShuffle([], 'empty-artist')
+    expect(usePlayer.getState().queue).toEqual([])
+    expect(usePlayer.getState().artistShuffleSession).toBeNull()
+
+    const only = makePlayItem('only')
+    usePlayer.getState().playArtistShuffle([only], 'single-artist')
+    expect(usePlayer.getState().queue.map((item) => item.track.id)).toEqual([only.track.id])
+    usePlayer.getState().next()
+    expect(usePlayer.getState().queue).toHaveLength(1)
+    expect(usePlayer.getState().index).toBe(0)
+    expect(usePlayer.getState().playing).toBe(false)
+    expect(usePlayer.getState().artistShuffleSession).toEqual({
+      artistId: 'single-artist',
+      completed: true,
+    })
+  })
+
+  it('keeps repeat-one and radio from extending the session while preserving navigation', () => {
+    const items = [makePlayItem('repeat-a'), makePlayItem('repeat-b'), makePlayItem('repeat-c')]
+    usePlayer.setState({ repeat: 'one', radio: true })
+    usePlayer.getState().playArtistShuffle(items, 'repeat-artist')
+
+    const firstTrackId = usePlayer.getState().queue[0].track.id
+    usePlayer.getState().next()
+    const secondTrackId = usePlayer.getState().queue[usePlayer.getState().index].track.id
+    usePlayer.getState().prev()
+    expect(usePlayer.getState().queue[usePlayer.getState().index].track.id).toBe(firstTrackId)
+    usePlayer.getState().next()
+    expect(usePlayer.getState().queue[usePlayer.getState().index].track.id).toBe(secondTrackId)
+
+    usePlayer.getState().next()
+    usePlayer.getState().next()
+    expect(usePlayer.getState().queue).toHaveLength(3)
+    expect(usePlayer.getState().playing).toBe(false)
+    expect(usePlayer.getState().radio).toBe(true)
+    expect(usePlayer.getState().artistShuffleSession?.completed).toBe(true)
+  })
+
+  it('returns to normal player rules when a different queue is played', () => {
+    usePlayer.getState().playArtistShuffle([makePlayItem('artist')], 'artist-1')
+    usePlayer.getState().play([makePlayItem('ordinary')], 0)
+    expect(usePlayer.getState().artistShuffleSession).toBeNull()
   })
 })

@@ -272,9 +272,12 @@ class TestResolverAntiStormIntegration:
         assert mock_primary.resolve_stream.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_cookies_setup_route_triggers_on_session_changed(self, monkeypatch):
+    async def test_cookies_setup_route_triggers_on_session_changed(
+        self, monkeypatch, fresh_db
+    ):
         """تایید اتصال واقعی اندپوینت /api/setup/cookies به ابطال کش نشست."""
         from fastapi.testclient import TestClient
+        from app import auth
         from app.main import app
         from app.stream.playback import get_live_playback
 
@@ -287,7 +290,11 @@ class TestResolverAntiStormIntegration:
         streamer = get_live_playback()
         monkeypatch.setattr(streamer, "on_session_changed", mock_on_session_changed)
 
-        client = TestClient(app)
+        # آپلودِ کوکی حالا حسابِ واردشده می‌خواهد — کوکی مالِ یک کاربر است،
+        # نه یک تنظیمِ سراسری.
+        fresh_db.create_user("u_cookie", "password", username="cookietester")
+        token, _ = auth.mint_session("u_cookie")
+        client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
         # نمونه کوکی معتبر با فرمت Netscape
         netscape_cookies = (
             "# Netscape HTTP Cookie File\n"

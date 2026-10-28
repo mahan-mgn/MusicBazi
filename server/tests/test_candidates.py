@@ -42,6 +42,9 @@ def fake_search(monkeypatch):
 
         monkeypatch.setattr(resolver, "YoutubeDL", FakeYDL)
         monkeypatch.setattr(resolver, "_search_youtube_music", lambda *a, **kw: [])
+        # ساندکلاد اندپوینتِ اختصاصیِ خودش را دارد و از yt-dlp رد نمی‌شود؛
+        # بدونِ این، تست به شبکه‌ی واقعی می‌زند و نتیجه‌ی زنده به داخل می‌ریزد.
+        monkeypatch.setattr(resolver, "_search_soundcloud", lambda *a, **kw: [])
         return queries
 
     return factory
@@ -74,6 +77,7 @@ def fake_search_by_query(monkeypatch):
 
         monkeypatch.setattr(resolver, "YoutubeDL", FakeYDL)
         monkeypatch.setattr(resolver, "_search_youtube_music", lambda *a, **kw: [])
+        monkeypatch.setattr(resolver, "_search_soundcloud", lambda *a, **kw: [])
         return queries
 
     return factory
@@ -290,7 +294,7 @@ class TestSearchQueries:
         found = resolver.resolve(featured)
 
         assert [c.url for c in found] == [entry["webpage_url"]]
-        assert queries == ["scsearch6:Farhad Mehrad - Mard-e Tanha"]
+        assert queries == [f"scsearch{resolver.CANDIDATES}:Farhad Mehrad - Mard-e Tanha"]
 
     def test_bracketed_extras_are_dropped_too(self, featured, fake_search_by_query):
         """«(feat. X)» و «[Remastered]» هم همان واژه‌های اضافه‌اند."""
@@ -298,7 +302,7 @@ class TestSearchQueries:
 
         resolver.resolve(featured.model_copy(update={"title": "Mard-e Tanha (feat. X) [2024]"}))
 
-        assert queries[0] == "scsearch6:Farhad Mehrad - Mard-e Tanha"
+        assert queries[0] == f"scsearch{resolver.CANDIDATES}:Farhad Mehrad - Mard-e Tanha"
 
     def test_the_title_alone_is_the_last_resort(self, featured, fake_search_by_query):
         """
@@ -311,7 +315,11 @@ class TestSearchQueries:
         found = resolver.resolve(featured)
 
         assert [c.url for c in found] == [entry["webpage_url"]]
-        assert queries == ["scsearch6:Farhad Mehrad - Mard-e Tanha", "scsearch6:Mard-e Tanha"]
+        n = resolver.CANDIDATES
+        assert queries[0] == f"scsearch{n}:Farhad Mehrad - Mard-e Tanha"
+        # عنوانِ تنها آخرین تیر است، نه یکی از تیرهای اول
+        assert queries[-1] == f"scsearch{n}:Mard-e Tanha"
+        assert queries.count(f"scsearch{n}:Mard-e Tanha") == 1
 
     def test_a_title_only_match_needs_the_duration_too(self, featured, fake_search_by_query):
         """
@@ -319,11 +327,11 @@ class TestSearchQueries:
         ترکِ دیگری با همان نام به‌جای اصل دانلود می‌شد. این امتیاز از آستانه‌ی
         معمولی رد می‌شود ولی از آستانه‌ی سخت‌گیرترِ این کوئری نه.
         """
-        loose = _entry("Mard-e Tanha", "Some Other Account", seconds=193)
+        loose = _entry("Mard-e Tanha", "Some Other Account", seconds=190)
         fake_search_by_query({"Mard-e Tanha": [loose]})
 
         assert resolver.MIN_SCORE <= resolver.score_candidate(
-            featured, loose["title"], loose["uploader"], 193_000
+            featured, loose["title"], loose["uploader"], 190_000
         ) < resolver.TITLE_ONLY_MIN_SCORE
         assert resolver.resolve(featured) == []
 
@@ -377,9 +385,11 @@ class TestDrmFallback:
         queries_normal = resolver._queries(featured, include_all_artists=False)
         queries_fallback = resolver._queries(featured, include_all_artists=True)
 
-        assert len(queries_normal) == 2
+        # کوئریِ آلبوم عمداً در حالتِ عادی هم هست: نامِ آلبوم در نسخه‌ی
+        # رسمیِ منتشرشده می‌آید و جستجو را دقیق‌تر می‌کند.
         assert "DORCCI LEAKS - Mard-e Tanha" in queries_normal
         assert "Dorcci - Mard-e Tanha" not in queries_normal
+        assert "DORCCI LEAKS - Mard-E Tanha - Mard-e Tanha" in queries_normal
 
         assert "Dorcci - Mard-e Tanha" in queries_fallback
         assert "DORCCI LEAKS - Mard-e Tanha" in queries_fallback
@@ -397,7 +407,7 @@ class TestDrmFallback:
 
         class FakeYTM:
             @staticmethod
-            def enabled():
+            def enabled(*_a, **_kw):
                 return True
 
             @staticmethod
@@ -438,7 +448,7 @@ class TestDrmFallback:
         monkeypatch.setattr(
             downloader,
             "_try_innertubex_download",
-            lambda t, vid, q, prog, out_dir, abort: mock_out,
+            lambda t, vid, q, prog, out_dir, abort, user_id="local": mock_out,
         )
 
         res = downloader.download(

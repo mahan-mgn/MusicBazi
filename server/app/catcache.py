@@ -148,15 +148,15 @@ def _parse(rows: list, model: type) -> list:
     return out
 
 
-def _library_tracks(query: str, limit: int) -> list[Track]:
+def _library_tracks(query: str, limit: int, user_id: str) -> list[Track]:
     """
-    ترک‌هایی که فایلشان روی دیسک است.
+    ترک‌هایی که فایلشان روی دیسک است و مالِ همین کاربر‌اند.
 
     آخر از همه می‌آیند ولی مهم‌ترین‌اند: تنها ردیف‌هایی از نتیجه‌ی آفلاین‌اند که
     دکمه‌ی پخششان قطعاً کار می‌کند.
     """
     try:
-        rows, _, _ = db.library(query, limit, 0)
+        rows, _, _ = db.library(query, limit, 0, user_id)
     except Exception:
         return []
     out: list[Track] = []
@@ -168,13 +168,16 @@ def _library_tracks(query: str, limit: int) -> list[Track]:
     return out
 
 
-def search(query: str) -> SearchResults:
+def search(query: str, user_id: str = "local") -> SearchResults:
     """
     جستجو در چیزهایی که قبلاً دیده شده‌اند.
 
     اول عینِ همان عبارت امتحان می‌شود: اگر کاربر دیروز همین را جستجو کرده،
     نتیجه‌ی امروزش باید دقیقاً همان چیدمان و همان ترتیب باشد، نه یک بازسازیِ
     تقریبی که «آن آهنگی که بالا بود» را جای دیگری می‌گذارد.
+
+    `user_id` فقط روی بخشِ کتابخانه اثر دارد: خودِ کشِ کاتالوگ (نتایجِ عمومی)
+    سراسری است، ولی «آهنگ‌هایی که *تو* داری» نباید از حسابِ دیگری بیاید.
     """
     key = _norm(query)
 
@@ -191,7 +194,7 @@ def search(query: str) -> SearchResults:
     result.playlists = _parse(db.search_entities("playlist", key, OFFLINE_LIMIT), Playlist)
 
     seen = {t.id for t in result.tracks}
-    for track in _library_tracks(key, OFFLINE_LIMIT):
+    for track in _library_tracks(key, OFFLINE_LIMIT, user_id):
         if track.id not in seen:
             seen.add(track.id)
             result.tracks.append(track)

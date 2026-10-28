@@ -30,6 +30,7 @@ interface IInnerTubeResolver {
         purpose: String = "playback",
         qualityStr: String? = null,
         refreshVisitor: Boolean = false,
+        cookie: String? = null,
     ): BridgeResolvedStream
 }
 
@@ -152,9 +153,14 @@ class InnerTubeService(
         purpose: String,
         qualityStr: String?,
         refreshVisitor: Boolean,
+        cookie: String?,
     ): BridgeResolvedStream {
         // Phase 1: تضمین تزریق Visitor Data معتبر پیش از درخواست استخراج
         visitorDataManager.ensureInjectedAsync(innerTube, refresh = refreshVisitor)
+
+        if (!cookie.isNullOrBlank()) {
+            innerTube.cookie = cookie
+        }
 
         val hints = ContentHints().withStreamCapabilities(
             allowHls = (purpose == "playback"),

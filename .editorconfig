@@ -1,0 +1,30 @@
+# EditorConfig — https://editorconfig.org
+#
+# Together with `.gitattributes` (`* text=auto eol=lf`) this keeps line endings
+# identical on Windows and Linux checkouts, which matters because CI runs the
+# backend on Ubuntu while development happens on Windows.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{ts,tsx,js,jsx,mjs,cjs,json,css,html,yml,yaml}]
+indent_size = 2
+
+[*.{py,kt,kts,java,gradle}]
+indent_size = 4
+
+[*.md]
+# Trailing spaces in Markdown are a hard line break — stripping them would
+# silently join lines.
+trim_trailing_whitespace = false
+
+[*.{sh,bash}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab

@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest a capability or an improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: Describe the situation you are in, not the solution you have in mind.
+      placeholder: When my internet drops, queued downloads stop and never resume.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like to happen. Alternatives you considered are welcome.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Catalog / search
+        - Playback / streaming
+        - Downloads / library
+        - Lyrics
+        - Android app
+        - Accounts / sign-in
+        - Deployment / Docker
+        - Telegram bot
+        - Something else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this must respect
+      description: The project has two hard constraints; tick the ones that apply.
+      options:
+        - label: Must keep working when international connectivity is down
+        - label: Must work on a phone-only Termux deployment (no C-extension builds beyond what already ships)

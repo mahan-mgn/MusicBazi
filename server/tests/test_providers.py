@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -204,7 +205,7 @@ class TestArtistPages:
             seen.append(f"deezer:{ident}")
             return detail("deezer")
 
-        async def spot(client, ident):
+        async def spot(client, ident, uid="local"):
             seen.append(f"spotify:{ident}")
             return detail("spotify")
 
@@ -215,7 +216,7 @@ class TestArtistPages:
         monkeypatch.setattr(itunes, "artist", apple)
         monkeypatch.setattr(deezer, "artist", deez)
         monkeypatch.setattr(spotify, "artist", spot)
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
         monkeypatch.setattr(ytdlp, "soundcloud_artist", cloud)
         return seen
 
@@ -237,7 +238,7 @@ class TestArtistPages:
     def test_spotify_without_a_key_yields_nothing_rather_than_a_broken_call(
         self, resolvers, monkeypatch
     ):
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
 
         assert asyncio.run(catalog.resolve_artist(None, "sp:artist:abc")) is None
         assert resolvers == []
@@ -274,7 +275,7 @@ class TestArtistTrackBackfill:
         """`resolve_ref` را می‌گیرد: هر آلبوم به‌اندازه‌ی trackCount ترک دارد."""
         asked: list[str] = []
 
-        async def fake(client, ref):
+        async def fake(client, ref, uid="local"):
             asked.append(ref)
             title = ref.rsplit("/", 1)[1]
             # سینگل‌ها یک‌ترکه‌اند و بقیه آلبومِ کاملِ دوازده‌ترکه
@@ -399,7 +400,7 @@ class TestArtistTrackBackfill:
         assert out.topTracks == [] and refs == []
 
     def test_a_dead_album_does_not_break_the_page(self, monkeypatch):
-        async def boom(client, ref):
+        async def boom(client, ref, uid="local"):
             raise RuntimeError("502")
 
         monkeypatch.setattr(catalog, "resolve_ref", boom)
@@ -705,7 +706,7 @@ class TestSpotifyArtistPage:
             return {}
 
         monkeypatch.setattr(spotify, "_get", fake_get)
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
 
         tracks = asyncio.run(spotify.artist_discography(None, "art1"))
         assert len(tracks) == 3
@@ -746,7 +747,7 @@ class TestSpotifyArtistPage:
             return {}
 
         monkeypatch.setattr(spotify, "_get", fake_get)
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
 
         tracks = asyncio.run(spotify.artist_discography(None, "art1"))
         assert len(tracks) == 2
@@ -760,17 +761,38 @@ class TestSpotifyArtistPage:
         from app import catalog
 
         called = []
-        async def fake_spot_discography(client, artist_id):
+        async def fake_spot_discography(client, artist_id, uid="local"):
             called.append(artist_id)
             return [_track("S1", "A", "spotify")]
 
         monkeypatch.setattr(spotify, "artist_discography", fake_spot_discography)
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
 
         tracks = asyncio.run(catalog.resolve_artist_discography(None, "sp:artist:art123"))
         assert called == ["art123"]
         assert len(tracks) == 1
         assert tracks[0].title == "S1"
+
+
+class TestReleaseTitleNormalization:
+    def test_ytdlp_normalizes_featured_artists(self):
+        from app.providers.ytdlp import _normalize_release_title
+
+        assert _normalize_release_title("Cheghad Goftam (feat. Emvd Emvi)") == "cheghad goftam"
+        assert _normalize_release_title("Cheghad Goftam") == "cheghad goftam"
+        assert _normalize_release_title("CATALAN (feat. Mr. Mp, MoreShahin & Loop Legend)") == "catalan"
+        assert _normalize_release_title("CATALAN") == "catalan"
+
+    def test_youtube_music_release_title_key_deduplicates_featuring(self):
+        from app.providers.youtube_music import _release_title_key
+
+        key_full = _release_title_key("CATALAN (feat. Mr. Mp, MoreShahin & Loop Legend)")
+        key_short = _release_title_key("CATALAN")
+        assert key_full == key_short == "catalan"
+
+        key_cheghad_full = _release_title_key("Cheghad Goftam (feat. Emvd Emvi)")
+        key_cheghad_short = _release_title_key("Cheghad Goftam")
+        assert key_cheghad_full == key_cheghad_short == "cheghad goftam"
 
 
 class TestInterleave:
@@ -884,9 +906,9 @@ class TestSearchFanout:
         monkeypatch.setattr(soundcloud, "search_albums", sc_albums)
         monkeypatch.setattr(soundcloud, "search_users", sc_users)
         # پیش‌فرضِ آزمون: هر دوی اختیاری‌ها روشن
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
         monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: False)
-        monkeypatch.setattr(youtube_music, "enabled", lambda: False)
+        monkeypatch.setattr(youtube_music, "enabled", lambda *_: False)
         monkeypatch.setattr(catalog, "AUDIO_SOURCES", ("youtube", "soundcloud"))
         return called
 
@@ -937,7 +959,7 @@ class TestSearchFanout:
         assert {a.title for a in albums} == {"EDGEBAR", "YOUNG MORVARID"}
 
     def test_spotify_is_skipped_without_a_key(self, providers, monkeypatch):
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
         out = asyncio.run(catalog.search(None, "q"))
         assert "spotify" not in providers
         assert [t.source for t in out.tracks] == ["apple", "soundcloud"]
@@ -1007,7 +1029,7 @@ class TestPlaylistSearch:
 
     def test_spotify_returns_nothing_without_a_key(self, monkeypatch):
         """اندپوینتِ پلی‌لیستِ اسپاتیفای بدون کلید اصلاً زده نمی‌شود، نه اینکه بخورد و بترکد."""
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
         monkeypatch.setattr(
             spotify,
             "_get",
@@ -1017,7 +1039,7 @@ class TestPlaylistSearch:
         assert asyncio.run(spotify.search_playlists(None, "sad songs")) == []
 
     def test_spotify_maps_playlist_rows(self, monkeypatch):
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
 
         async def fake_get(client, path, **params):
             assert params["type"] == "playlist"
@@ -1449,7 +1471,7 @@ class TestYouTubeSearch:
 
     def test_youtube_channel_extracts_releases_and_videos(self, monkeypatch):
         """صفحه کانال یوتیوب باید انتشارهای تب Releases را هم به‌عنوان Album بیاورد."""
-        def fake_tab(url, limit):
+        def fake_tab(url, limit, *a, **kw):
             if url.endswith("/releases"):
                 return {
                     "entries": [
@@ -1918,10 +1940,10 @@ class TestSearchAggregation:
         async def mock_deezer(client, q):
             return SearchResults(query=q, tracks=[_track("T_deezer", "A2", "deezer")])
 
-        async def mock_spotify(client, q):
+        async def mock_spotify(client, q, *a, **kw):
             return SearchResults(query=q, tracks=[_track("T_spotify", "A3", "spotify")])
 
-        async def mock_spotify_playlists(client, q):
+        async def mock_spotify_playlists(client, q, *a, **kw):
             return []
 
         async def mock_soundcloud(q):
@@ -1935,13 +1957,13 @@ class TestSearchAggregation:
 
         monkeypatch.setattr(itunes, "search", mock_apple)
         monkeypatch.setattr(deezer, "search", mock_deezer)
-        monkeypatch.setattr(spotify, "enabled", lambda: True)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: True)
         monkeypatch.setattr(spotify, "search", mock_spotify)
         monkeypatch.setattr(spotify, "search_playlists", mock_spotify_playlists)
         monkeypatch.setattr(catalog, "_soundcloud_search", mock_soundcloud)
         monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: True)
         monkeypatch.setattr(ytdlp, "youtube_search", mock_yt)
-        monkeypatch.setattr(youtube_music, "enabled", lambda: True)
+        monkeypatch.setattr(youtube_music, "enabled", lambda *_: True)
         monkeypatch.setattr(youtube_music, "search", mock_ytm)
 
         res = asyncio.run(catalog.search(None, "test"))
@@ -1965,11 +1987,11 @@ class TestSearchAggregation:
 
         monkeypatch.setattr(itunes, "search", mock_apple)
         monkeypatch.setattr(deezer, "search", mock_deezer)
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
-        monkeypatch.setattr(soundcloud, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
+        monkeypatch.setattr(soundcloud, "enabled", lambda *_: False)
         monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: True)
         monkeypatch.setattr(ytdlp, "youtube_search", broken_yt)
-        monkeypatch.setattr(youtube_music, "enabled", lambda: True)
+        monkeypatch.setattr(youtube_music, "enabled", lambda *_: True)
         monkeypatch.setattr(youtube_music, "search", broken_ytm)
 
         res = asyncio.run(catalog.search(None, "test"))
@@ -1992,11 +2014,11 @@ class TestSearchAggregation:
 
         monkeypatch.setattr(itunes, "search", fail_apple)
         monkeypatch.setattr(deezer, "search", fail_deezer)
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
-        monkeypatch.setattr(soundcloud, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
+        monkeypatch.setattr(soundcloud, "enabled", lambda *_: False)
         monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: True)
         monkeypatch.setattr(ytdlp, "youtube_search", fail_yt)
-        monkeypatch.setattr(youtube_music, "enabled", lambda: True)
+        monkeypatch.setattr(youtube_music, "enabled", lambda *_: True)
         monkeypatch.setattr(youtube_music, "search", fail_ytm)
 
         with pytest.raises(Exception):
@@ -2022,11 +2044,11 @@ class TestSearchAggregation:
 
         monkeypatch.setattr(itunes, "search", mock_apple)
         monkeypatch.setattr(deezer, "search", mock_deezer)
-        monkeypatch.setattr(spotify, "enabled", lambda: False)
-        monkeypatch.setattr(soundcloud, "enabled", lambda: False)
+        monkeypatch.setattr(spotify, "enabled", lambda *_: False)
+        monkeypatch.setattr(soundcloud, "enabled", lambda *_: False)
         monkeypatch.setattr(ytdlp, "youtube_enabled", lambda: False)
         monkeypatch.setattr(ytdlp, "youtube_search", tracked_yt)
-        monkeypatch.setattr(youtube_music, "enabled", lambda: False)
+        monkeypatch.setattr(youtube_music, "enabled", lambda *_: False)
         monkeypatch.setattr(youtube_music, "search", tracked_ytm)
 
         res = asyncio.run(catalog.search(None, "test"))
@@ -2111,6 +2133,56 @@ class TestPlaybackAndResolverCompatibility:
         assert res is not None
         assert "xyz123" in calls[0]
 
+    def test_ytm_album_browse_id_is_never_sent_to_ytdlp_as_a_video(self, monkeypatch):
+        """
+        `ytm:album:MPREb_…` شناسه‌ی ویدیو نیست؛ `watch?v=MPREb_…` همیشه مرده است
+        و yt-dlp را دنبال ویدیویی می‌فرستد که وجود ندارد و خطای گمراه‌کننده‌ی
+        «video unavailable» می‌دهد. اگر شاخه‌ی آلبوم جواب ندهد باید ۴۰۴ صادق
+        بدهد، نه یک درخواستِ بی‌معنی.
+        """
+        called = []
+
+        monkeypatch.setattr(youtube_music, "get_album", lambda _ident: None)
+        monkeypatch.setattr(ytdlp, "extract", lambda url: called.append(url) or None)
+
+        res = asyncio.run(catalog.resolve_ref(None, "ytm:album:MPREb_BbNQdNecMVa"))
+
+        assert res is None
+        # فقط مسیرِ `browse` مجاز است؛ `watch?v=MPREb_…` نباید ساخته شود
+        assert called == ["https://music.youtube.com/browse/MPREb_BbNQdNecMVa"]
+
+    def test_ytm_album_falls_back_to_browse_url_when_get_album_fails(self, monkeypatch):
+        """
+        `get_album` برای انتشارِ تازه گذرا شکست می‌خورد؛ مسیرِ `browse` یوتیوب
+        موزیک مستقل از آن است و باید امتحان شود.
+        """
+        called = []
+        fallback = AlbumDetail(
+            id="ytm:album:MPREb_BbNQdNecMVa",
+            title="LOL",
+            artist="Tlkhoon",
+            year=2025,
+            trackCount=1,
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/browse/MPREb_BbNQdNecMVa",
+            durationMs=1000,
+            tracks=[],
+        )
+
+        monkeypatch.setattr(youtube_music, "get_album", lambda _ident: None)
+
+        def mock_extract(url):
+            called.append(url)
+            return fallback
+
+        monkeypatch.setattr(ytdlp, "extract", mock_extract)
+
+        res = asyncio.run(catalog.resolve_ref(None, "ytm:album:MPREb_BbNQdNecMVa"))
+
+        assert res is not None
+        assert res.title == "LOL"
+        assert called == ["https://music.youtube.com/browse/MPREb_BbNQdNecMVa"]
+
     def test_artist_source_from_ref_recognizes_ytm(self):
         assert catalog._artist_source_from_ref("ytm:artist:UC123") == "youtube_music"
         assert catalog._artist_source_from_ref("yt:artist:UC123") == "youtube"
@@ -2141,10 +2213,10 @@ class TestPlaybackAndResolverCompatibility:
             ],
         )
 
-        async def fake_artist(client, ref):
+        async def fake_artist(client, ref, uid="local"):
             return mock_detail
 
-        async def fake_release(client, ref):
+        async def fake_release(client, ref, uid="local"):
             t = _track("Album Track", "The Weeknd", "youtube_music")
             return AlbumDetail(
                 id="ytm:album:alb1",
@@ -2198,10 +2270,10 @@ class TestPlaybackAndResolverCompatibility:
             ],
         )
 
-        async def fake_artist(client, ref):
+        async def fake_artist(client, ref, uid="local"):
             return mock_detail
 
-        async def fake_release(client, ref):
+        async def fake_release(client, ref, uid="local"):
             if "single1" in ref:
                 t = _track("Song 1", "Artist A", "apple")
                 t.album = "Song 1 - Single"
@@ -2255,10 +2327,10 @@ class TestPlaybackAndResolverCompatibility:
             ],
         )
 
-        async def fake_artist(client, ref):
+        async def fake_artist(client, ref, uid="local"):
             return mock_detail
 
-        async def fake_release(client, ref):
+        async def fake_release(client, ref, uid="local"):
             t1 = _track("Video 1", "Channel", "youtube")
             t1.album = "Album Release"
             t1.trackNumber = 1
@@ -2313,10 +2385,10 @@ class TestPlaybackAndResolverCompatibility:
             ],
         )
 
-        async def fake_artist(client, ref):
+        async def fake_artist(client, ref, uid="local"):
             return mock_detail
 
-        async def fake_release(client, ref):
+        async def fake_release(client, ref, uid="local"):
             if "s1" in ref:
                 t = _track("Hit Song", "Deezer Artist", "deezer")
                 t.album = "Hit Song - Single"
@@ -2382,10 +2454,10 @@ class TestPlaybackAndResolverCompatibility:
             ],
         )
 
-        async def fake_artist(client, ref):
+        async def fake_artist(client, ref, uid="local"):
             return mock_detail
 
-        async def fake_release(client, ref):
+        async def fake_release(client, ref, uid="local"):
             if "single1" in ref:
                 t = _track("FUCK MUSIC 1", "Mvshreghi", "soundcloud")
                 t.album = "FUCK MUSIC 1"
@@ -2468,5 +2540,30 @@ class TestPlaybackAndResolverCompatibility:
         assert res.title == "DO SE SALE"
         assert res.artworkUrl == "http://img/dose.jpg"
         assert res.tracks[0].source == "youtube"
+
+    def test_resolve_ref_deezer_track_url(self, monkeypatch):
+        mock_single = AlbumDetail(
+            id="deezer:track:3279339531",
+            title="Havasam",
+            artist="Tlkhoon",
+            year=2025,
+            trackCount=1,
+            artworkUrl="http://img/havasam.jpg",
+            source="deezer",
+            sourceUrl="https://www.deezer.com/track/3279339531",
+            durationMs=160000,
+            tracks=[],
+        )
+        monkeypatch.setattr(deezer, "track", AsyncMock(return_value=mock_single))
+
+        res = asyncio.run(catalog.resolve_ref(None, "https://www.deezer.com/track/3279339531"))
+        assert res is not None
+        assert res.source == "deezer"
+        assert res.title == "Havasam"
+        assert res.id == "deezer:track:3279339531"
+
+        res_internal = asyncio.run(catalog.resolve_ref(None, "deezer:track:3279339531"))
+        assert res_internal is not None
+        assert res_internal.title == "Havasam"
 
 

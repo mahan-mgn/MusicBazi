@@ -19,13 +19,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
 from app import stream_cache
 from app.models import Track
+from app.resolver import Candidate
 from app.stream.errors import (
     AllResolversFailedError,
     NetworkError,
@@ -121,13 +122,164 @@ class TestFeatureFlagGating:
         mock_resolver.resolve.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_non_youtube_source_skips_live_path(self, mock_resolver):
-        streamer = LivePlaybackStreamer(resolver=mock_resolver)
-        result = await streamer.stream_response(
-            youtube_track(source="spotify"), env=FLAG_ON
+    async def test_non_youtube_source_with_candidates_streams_live(self, mock_resolver):
+        mock_resolver.resolve.return_value = make_stream()
+        streamer = LivePlaybackStreamer(
+            resolver=mock_resolver,
+            http_transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=UPSTREAM_BODY)
+            ),
         )
-        assert result is None
-        mock_resolver.resolve.assert_not_called()
+        candidates = [
+            Candidate(
+                url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                title="t",
+                uploader="a",
+                duration_ms=1000,
+                score=95.0,
+                source="youtube",
+            )
+        ]
+        with patch("app.resolver.resolve", return_value=candidates):
+            result = await streamer.stream_response(
+                youtube_track(source="spotify"), env=FLAG_ON
+            )
+            assert result is not None
+            mock_resolver.resolve.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_youtube_source_without_candidates_skips_live_path(self, mock_resolver):
+        streamer = LivePlaybackStreamer(resolver=mock_resolver)
+        with patch("app.resolver.resolve", return_value=[]):
+            result = await streamer.stream_response(
+                youtube_track(source="spotify"), env=FLAG_ON
+            )
+            assert result is None
+            mock_resolver.resolve.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_canonical_override_soundcloud_bypasses_youtube_live_extraction(self, mock_resolver):
+        streamer = LivePlaybackStreamer(resolver=mock_resolver)
+        tr = Track(
+            id="sp:track:7oqDFVu8MUwZsRBpMXS1Hs",
+            title="Lychee Martini",
+            artist="Lithe",
+            durationMs=122_000,
+            source="spotify",
+            sourceUrl="https://open.spotify.com/track/7oqDFVu8MUwZsRBpMXS1Hs",
+        )
+        with patch("app.stream_cache._extract_direct_stream_info", return_value={"url": "https://cf-media.sndcdn.com/test.mp3", "ext": "mp3", "abr": 128}):
+            with patch.object(streamer, "_proxy", return_value="mock_proxy_response") as mock_proxy:
+                result = await streamer.stream_response(tr, env=FLAG_ON)
+                assert result == "mock_proxy_response"
+                mock_resolver.resolve.assert_not_called()
+                mock_proxy.assert_awaited_once()
+                stream_arg = mock_proxy.call_args[0][0]
+                assert stream_arg.source == "soundcloud"
+                assert stream_arg.url == "https://cf-media.sndcdn.com/test.mp3"
+
+    @pytest.mark.asyncio
+    async def test_tlkhoon_havasam_live_playback_streams_from_official_youtube_music(self, mock_resolver):
+        mock_resolver.resolve.return_value = make_stream("AK3KLv7MWno")
+        streamer = LivePlaybackStreamer(
+            resolver=mock_resolver,
+            http_transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=UPSTREAM_BODY)
+            ),
+        )
+        tr = Track(
+            id="sp:track:32xQkDh3INkWDqFYOdpZdP",
+            title="Havasam",
+            artist="Tlkhoon, Matin Fattahi",
+            durationMs=199_000,
+            source="spotify",
+            sourceUrl="https://open.spotify.com/track/32xQkDh3INkWDqFYOdpZdP",
+        )
+        result = await streamer.stream_response(tr, env=FLAG_ON)
+        assert result is not None
+        mock_resolver.resolve.assert_awaited_once()
+        assert mock_resolver.resolve.call_args[1]["video_id"] == "AK3KLv7MWno"
+
+    @pytest.mark.asyncio
+    async def test_tlkhoon_havasam_live_playback_streams_from_official_soundcloud(self, mock_resolver):
+        streamer = LivePlaybackStreamer(resolver=mock_resolver)
+        tr = Track(
+            id="sc:track:9999",
+            title="Havasam",
+            artist="Tlkhoon",
+            durationMs=199_000,
+            source="soundcloud",
+            sourceUrl="https://soundcloud.com/tlkhoon/havasam",
+        )
+        with patch("app.stream_cache._extract_direct_stream_info", return_value={"url": "https://cf-media.sndcdn.com/tlkhoon-havasam.mp3", "ext": "mp3", "abr": 128}):
+            with patch.object(streamer, "_proxy", return_value="mock_proxy_response") as mock_proxy:
+                result = await streamer.stream_response(tr, env=FLAG_ON)
+                assert result == "mock_proxy_response"
+                mock_resolver.resolve.assert_not_called()
+                mock_proxy.assert_awaited_once()
+                stream_arg = mock_proxy.call_args[0][0]
+                assert stream_arg.source == "soundcloud"
+                assert stream_arg.video_id == "https://soundcloud.com/tlkhoon/havasam"
+                assert stream_arg.url == "https://cf-media.sndcdn.com/tlkhoon-havasam.mp3"
+
+    @pytest.mark.asyncio
+    async def test_youtube_video_section_bypasses_studio_override_and_fallback(self, mock_resolver):
+        # شناسه‌ی واقعی ۱۱ کاراکتری — `extract_youtube_video_id` شناسه‌های کوتاه
+        # را برنمی‌دارد و تست با نام ساختگی هرگز مسیر مورد نظرش را نمی‌سنجید.
+        vid = "mvQw4w9WgXc"
+        mock_resolver.resolve.return_value = make_stream(vid)
+        streamer = LivePlaybackStreamer(
+            resolver=mock_resolver,
+            http_transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=UPSTREAM_BODY)
+            ),
+        )
+        # ویدیوی معمولی یوتیوب در بخش Videos (دارای عنوان حواسم)
+        tr = Track(
+            id=f"yt:track:{vid}",
+            title="Havasam (Official Music Video)",
+            artist="Tlkhoon",
+            durationMs=180_000,
+            source="youtube",
+            sourceUrl=f"https://www.youtube.com/watch?v={vid}",
+        )
+        result = await streamer.stream_response(tr, env=FLAG_ON)
+        assert result is not None
+        mock_resolver.resolve.assert_awaited_once()
+        assert mock_resolver.resolve.call_args[1]["video_id"] == vid
+
+    @pytest.mark.asyncio
+    async def test_live_playback_fallback_when_youtube_music_unplayable(self, mock_resolver):
+        from app.stream.errors import PermanentlyUnplayableError
+        mock_resolver.resolve.side_effect = PermanentlyUnplayableError(
+            message="Video unavailable in country", video_id="unplayable11"
+        )
+        streamer = LivePlaybackStreamer(resolver=mock_resolver)
+        tr = Track(
+            id="ytm:track:unplayable11",
+            title="Song",
+            artist="Artist",
+            durationMs=1000,
+            source="youtube_music",
+            sourceUrl="https://music.youtube.com/watch?v=unplayable11",
+        )
+        fallback_candidate = Candidate(
+            url="https://soundcloud.com/artist/song",
+            title="Song",
+            uploader="Artist",
+            duration_ms=1000,
+            score=90.0,
+            source="soundcloud",
+        )
+        with patch("app.resolver.resolve_fallback", return_value=[fallback_candidate]):
+            with patch("app.stream_cache._extract_direct_stream_info", return_value={"url": "https://sndcdn.com/fallback.mp3", "ext": "mp3", "abr": 128}):
+                with patch.object(streamer, "_proxy", return_value="fallback_proxy_response") as mock_proxy:
+                    result = await streamer.stream_response(tr, env=FLAG_ON)
+                    assert result == "fallback_proxy_response"
+                    mock_proxy.assert_awaited_once()
+                    stream_arg = mock_proxy.call_args[0][0]
+                    assert stream_arg.source == "soundcloud"
+                    assert stream_arg.url == "https://sndcdn.com/fallback.mp3"
 
 
 # ======================================================================
@@ -221,6 +373,40 @@ class TestLivePlayback:
         assert response.headers["accept-ranges"] == "bytes"
         body = b"".join([chunk async for chunk in response.body_iterator])
         assert body == UPSTREAM_BODY
+
+    @pytest.mark.asyncio
+    async def test_live_stream_caches_completed_audio_to_disk(
+        self, mock_resolver, tmp_path, monkeypatch
+    ):
+        cache_dir = tmp_path / "stream_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("app.config.STREAM_CACHE_DIR", cache_dir)
+
+        # کش فقط بدنه‌های بیش از ۱۰۲۴ بایت را commit می‌کند (محافظ در برابر
+        # قطعه‌های ناقص). `UPSTREAM_BODY` عمداً کوچک است، پس این تست بدنه‌ی
+        # خودش را می‌سازد.
+        payload = UPSTREAM_BODY * 100
+        vid = "cacheD11chr"  # شناسه‌ی ۱۱ کاراکتری؛ بیشتر از این بریده می‌شود
+        test_track = youtube_track(vid)
+        mock_resolver.resolve.return_value = make_stream(
+            video_id=vid,
+            content_length=len(payload),
+            mime_type="audio/webm",
+        )
+        streamer = LivePlaybackStreamer(
+            resolver=mock_resolver,
+            http_transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=payload)
+            ),
+        )
+        response = await streamer.stream_response(test_track, env=FLAG_ON)
+        assert response is not None
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        assert body == payload
+
+        cache_files = list(cache_dir.glob("str_*"))
+        assert len(cache_files) == 1
+        assert cache_files[0].read_bytes() == payload
 
     @pytest.mark.asyncio
     async def test_range_header_forwarded_and_206_passthrough(self, mock_resolver):

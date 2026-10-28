@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { dominantColor, peekArtworkColor } from '../lib/artColor'
 import type { AlbumDetail, ArtistDetail, Track } from '../lib/types'
 import { useDownloads } from '../store/downloads'
 import { usePlayer } from '../store/player'
@@ -23,6 +24,20 @@ window.ResizeObserver = MockObserver as unknown as typeof ResizeObserver
 HTMLCanvasElement.prototype.getContext = vi.fn(() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext
 window.HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined)
 window.HTMLMediaElement.prototype.pause = vi.fn()
+
+/*
+ * ماکِ جزئی، نه کامل: فقط کشِ رنگ و استخراج کنترل می‌شوند تا بتوان جابه‌جایی
+ * بین دو هنرمند را با استخراجِ معلق (pending) سنجید. کمکی‌های واقعیِ ماژول —
+ * مثل `clampLuminance` — از `actual` می‌آیند.
+ */
+vi.mock('../lib/artColor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/artColor')>()
+  return {
+    ...actual,
+    peekArtworkColor: vi.fn(() => null),
+    dominantColor: vi.fn(async () => null),
+  }
+})
 
 const createTrack = (id: string, title: string, albumTitle = 'Album 1'): Track => ({
   id,
@@ -85,6 +100,9 @@ describe('ArtistView', () => {
       index: 0,
       playing: false,
       shuffle: false,
+      repeat: 'off',
+      radio: false,
+      artistShuffleSession: null,
     })
     useDownloads.setState({
       jobs: [],
@@ -182,6 +200,104 @@ describe('ArtistView', () => {
     expect(container.textContent).toContain('نمایش کمتر')
   })
 
+  /*
+   * جستجو نباید بن‌بست بسازد.
+   *
+   * قبلاً دکمه‌ی «نمایش بیشتر» در حالتِ جستجو با `!cleanQ` پنهان می‌شد؛ نتیجه
+   * این بود که سرصفحه «(۷)» می‌گفت ولی فقط ۵ ردیف رندر می‌شد و هیچ راهی برای
+   * دیدنِ آن دو تای دیگر نبود.
+   */
+  it('keeps an expansion path while searching, so matches are not stranded', () => {
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={mockArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const searchInput = container.querySelector<HTMLInputElement>('input[type="text"]')
+    expect(searchInput).not.toBeNull()
+
+    // «a» تقریباً به همه‌ی عنوان‌ها می‌خورد، پس نتیجه بیشتر از ۵ می‌شود
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set
+      setter?.call(searchInput, 'a')
+      searchInput!.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const showMoreBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('نمایش بیشتر'),
+    )
+    expect(showMoreBtn).toBeDefined()
+
+    act(() => {
+      showMoreBtn?.click()
+    })
+    expect(container.textContent).toContain('نمایش کمتر')
+  })
+
+  /*
+   * جستجو در «آثار دیگران» نباید پیامِ «پیدا نشد» بدهد.
+   *
+   * `filteredAppearsOn` در `hasAnySearchResult` جا افتاده بود، پس صفحه‌ای با
+   * ۹۹۶ آلبومِ appearsOn برای عبارتِ «billion» هم‌زمان «اثری مطابق ... پیدا
+   * نشد» و دو نتیجه‌ی واقعی نشان می‌داد.
+   */
+  it('does not claim "nothing found" when appearsOn still has matches', () => {
+    const artistWithAppearsOn: ArtistDetail = {
+      ...mockArtist,
+      topTracks: [createTrack('1', 'Baraye')],
+      albums: [],
+      appearsOn: [
+        {
+          id: 'sp:album:billion',
+          title: 'Billion-Carat Hits',
+          artist: 'Various Artists',
+          year: 2026,
+          trackCount: 40,
+          artworkUrl: 'https://example.com/b.jpg',
+          source: 'spotify',
+          sourceUrl: 'https://open.spotify.com/album/billion',
+        },
+      ],
+    }
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={artistWithAppearsOn}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const searchInput = container.querySelector<HTMLInputElement>('input[type="text"]')
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set
+      setter?.call(searchInput, 'billion')
+      searchInput!.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    expect(container.textContent).toContain('Billion-Carat Hits')
+    expect(container.textContent).not.toContain('«billion» پیدا نشد')
+  })
+
   it('calls onOpenAlbum when album title in top tracks row is clicked', () => {
     const onOpenAlbum = vi.fn()
     act(() => {
@@ -209,7 +325,8 @@ describe('ArtistView', () => {
     expect(onOpenAlbum).toHaveBeenCalledWith(mockArtist.albums[0])
   })
 
-  it('triggers shuffle play on shuffle button click', () => {
+  it('triggers shuffle play on shuffle button click', async () => {
+    vi.spyOn(api, 'getArtistDiscography').mockResolvedValue(mockArtist.topTracks)
     act(() => {
       root.render(
         <ArtistView
@@ -226,12 +343,15 @@ describe('ArtistView', () => {
     const shuffleBtn = container.querySelector('button[aria-label="پخش تصادفی"]') as HTMLButtonElement
     expect(shuffleBtn).toBeDefined()
 
-    act(() => {
+    await act(async () => {
       shuffleBtn.click()
+      await Promise.resolve()
+      await Promise.resolve()
     })
 
     expect(usePlayer.getState().shuffle).toBe(true)
     expect(usePlayer.getState().queue.length).toBe(7)
+    expect(usePlayer.getState().artistShuffleSession).toEqual({ artistId: mockArtist.id })
   })
 
   it('renders Latest Release Spotlight card', () => {
@@ -1051,6 +1171,66 @@ describe('ArtistView', () => {
     expect(container.textContent).toContain('هیچ آلبومی برای این هنرمند در دسترس نیست.')
   })
 
+  it('lists a freshly released single first in Singles & EPs', async () => {
+    // یوتیوب‌موزیک روی ردیف‌های جستجو سال نمی‌دهد؛ انتشارِ تازه فقط با
+    // `releaseDate` شناخته می‌شود. بدونِ آن، تازه‌ترین اثر ته لیست می‌افتاد.
+    const artist: ArtistDetail = {
+      ...mockArtist,
+      source: 'youtube_music',
+      sourceUrl: 'https://music.youtube.com/channel/UCtlkhoon',
+      singles: [
+        {
+          id: 'ytm:album:older',
+          title: 'Older Song',
+          artist: 'Tlkhoon',
+          year: 2026,
+          trackCount: 1,
+          artworkUrl: null,
+          source: 'youtube_music',
+          sourceUrl: 'https://music.youtube.com/browse/older',
+          releaseType: 'single',
+          releaseDate: null,
+        },
+        {
+          id: 'ytm:album:lol',
+          title: 'LOL',
+          artist: 'Tlkhoon',
+          year: 2026,
+          trackCount: 1,
+          artworkUrl: null,
+          source: 'youtube_music',
+          sourceUrl: 'https://music.youtube.com/browse/lol',
+          releaseType: 'single',
+          releaseDate: '2026-10-17',
+        },
+      ],
+    }
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={artist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const singlesChip = Array.from(container.querySelectorAll('button')).find((b) =>
+      (b.textContent ?? '').includes('Singles & EPs'),
+    )
+    act(() => {
+      singlesChip?.click()
+    })
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('LOL')
+    expect(text.indexOf('LOL')).toBeLessThan(text.indexOf('Older Song'))
+  })
+
   it('matches Arabic and Persian letter variants in in-page search', () => {
     const persianArtist: ArtistDetail = {
       ...mockArtist,
@@ -1213,6 +1393,121 @@ describe('ArtistView', () => {
     expect(usePlayer.getState().queue.length).toBe(7)
 
     getAlbumSpy.mockRestore()
+  })
+
+  it('starts one complete, deduplicated shuffle session when clicked rapidly', async () => {
+    const extraTrack = createTrack('8', 'One More Song')
+    const discographySpy = vi.spyOn(api, 'getArtistDiscography').mockResolvedValue([
+      mockArtist.topTracks[0],
+      mockArtist.topTracks[0],
+      extraTrack,
+    ])
+
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={mockArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const shuffleButton = container.querySelector(
+      `button[aria-label="${useI18n.getState().t.shufflePlay}"]`,
+    ) as HTMLButtonElement
+    expect(shuffleButton).not.toBeNull()
+
+    await act(async () => {
+      shuffleButton.click()
+      shuffleButton.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(discographySpy).toHaveBeenCalledTimes(1)
+    const { queue, artistShuffleSession } = usePlayer.getState()
+    expect(queue).toHaveLength(8)
+    expect(new Set(queue.map((item) => item.track.id)).size).toBe(queue.length)
+    expect(queue.map((item) => item.track.id)).toContain(extraTrack.id)
+    expect(artistShuffleSession).toEqual({ artistId: mockArtist.id })
+  })
+
+  it('discards a pending shuffle if the user starts a different queue first', async () => {
+    let resolveDiscography!: (tracks: Track[]) => void
+    vi.spyOn(api, 'getArtistDiscography').mockImplementation(
+      () => new Promise((resolve) => (resolveDiscography = resolve)),
+    )
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={mockArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const shuffleButton = container.querySelector(
+      `button[aria-label="${useI18n.getState().t.shufflePlay}"]`,
+    ) as HTMLButtonElement
+    act(() => shuffleButton.click())
+
+    const manualTrack = createTrack('manual', 'Manual Selection')
+    act(() => {
+      usePlayer.getState().play([{ id: 'manual', track: manualTrack, streamUrl: '/manual' }], 0)
+    })
+
+    await act(async () => {
+      resolveDiscography([createTrack('8', 'Loaded Later')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(usePlayer.getState().queue.map((item) => item.track.id)).toEqual([manualTrack.id])
+    expect(usePlayer.getState().artistShuffleSession).toBeNull()
+  })
+
+  it('does not let an older Play All expansion append into the new shuffle session', async () => {
+    let resolveDiscography!: (tracks: Track[]) => void
+    vi.spyOn(api, 'getArtistDiscography').mockImplementation(
+      () => new Promise((resolve) => (resolveDiscography = resolve)),
+    )
+    act(() => {
+      root.render(
+        <ArtistView
+          artist={mockArtist}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+          onOpenAlbum={vi.fn()}
+          onOpenPlaylist={vi.fn()}
+          onBack={vi.fn()}
+        />,
+      )
+    })
+
+    const playAllButton = container.querySelector('button[aria-label="پخش همه"]') as HTMLButtonElement
+    const shuffleButton = container.querySelector(
+      `button[aria-label="${useI18n.getState().t.shufflePlay}"]`,
+    ) as HTMLButtonElement
+    act(() => playAllButton.click())
+    expect(usePlayer.getState().queue).toHaveLength(7)
+    act(() => shuffleButton.click())
+
+    await act(async () => {
+      resolveDiscography([...mockArtist.topTracks, createTrack('8', 'One More Song')])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    const { queue, artistShuffleSession } = usePlayer.getState()
+    expect(queue).toHaveLength(8)
+    expect(new Set(queue.map((item) => item.track.id)).size).toBe(queue.length)
+    expect(artistShuffleSession).toEqual({ artistId: mockArtist.id })
   })
 
   it('expands background discography for tracks without artistId or featuring artists', async () => {
@@ -2190,6 +2485,183 @@ describe('ArtistView', () => {
       expect(container.querySelector('.group\\/avatar')).not.toBeNull()
       const avatarImg = container.querySelector('img[src="https://yt3.googleusercontent.com/avatar=s544-c"]')
       expect(avatarImg).not.toBeNull()
+    })
+  })
+
+  /*
+   * تازه‌سازیِ پس‌زمینه‌ی `App` payloadِ آرتیست را سرِ هر ورود دوباره می‌گیرد و
+   * اگر داده عوض شده باشد همانجا جایگزین می‌کند. این‌ها مرزِ آن تازه‌سازی‌اند:
+   * انتشارِ تازه باید دیسکوگرافیِ لودشده را دور بریزد، ولی تغییرِ کاور نه —
+   * وگرنه هر تازه‌سازیِ بی‌اثر، دانلودِ دوباره‌ی کلِ دیسکوگرافی را به راه
+   * می‌انداخت.
+   */
+  describe('release signature invalidation', () => {
+    const renderArtist = (artist: ArtistDetail) => {
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={artist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+    }
+
+    const loadDiscography = async () => {
+      /*
+       * پس از اولین پخش، دکمه‌ی هیرو به «توقف» تبدیل می‌شود و `querySelector`
+       * دکمه‌ی «پخش همه»ی بخش دیگری را می‌گیرد. صف را خالی می‌کنیم تا دکمه به
+       * حالت اول برگردد و کلیک بعدی همان مسیرِ بارگذاریِ دیسکوگرافی را برود.
+       */
+      act(() => {
+        usePlayer.setState({ queue: [], index: 0, playing: false })
+      })
+      const playAll = container.querySelector(
+        `button[aria-label="${useI18n.getState().t.playAll}"]`,
+      ) as HTMLButtonElement
+      expect(playAll).not.toBeNull()
+      await act(async () => {
+        playAll.click()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+    }
+
+    it('reloads the discography when a release is added', async () => {
+      const spy = vi
+        .spyOn(api, 'getArtistDiscography')
+        .mockResolvedValue([...mockArtist.topTracks])
+
+      renderArtist(mockArtist)
+      await loadDiscography()
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      // payloadِ تازه با شناسه‌ی یکسان ولی یک آلبومِ تازه — دقیقاً همان چیزی
+      // که `App` بعد از تازه‌سازیِ پس‌زمینه تحویل می‌دهد
+      renderArtist({
+        ...mockArtist,
+        albums: [
+          ...mockArtist.albums,
+          {
+            id: 'sp:album:new',
+            title: 'Brand New',
+            artist: 'Shervin Hajipour',
+            year: 2025,
+            trackCount: 3,
+            artworkUrl: 'https://example.com/new.jpg',
+            source: 'spotify',
+            sourceUrl: 'https://open.spotify.com/album/new',
+          },
+        ],
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      await loadDiscography()
+
+      expect(spy).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps the loaded discography when only artwork changed', async () => {
+      const spy = vi
+        .spyOn(api, 'getArtistDiscography')
+        .mockResolvedValue([...mockArtist.topTracks])
+
+      renderArtist(mockArtist)
+      await loadDiscography()
+      expect(spy).toHaveBeenCalledTimes(1)
+
+      renderArtist({ ...mockArtist, artworkUrl: 'https://example.com/new-avatar.jpg' })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      await loadDiscography()
+
+      // هنوز یک بار: دیسکوگرافی دور ریخته نشد و از `allTracks` خوانده شد
+      expect(spy).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  /*
+   * تمِ بر پایه‌ی تصویر.
+   *
+   * مالکیتِ توکن‌ها عوض شده: پس‌زمینه‌ی تمام‌صفحه در شل می‌نشیند تا ستون‌های
+   * کناریِ `max-w-5xl` و کفِ صفحه را هم بگیرد. این ویو دیگر تم نمی‌سازد؛ فقط
+   * مصرف‌کننده‌ی متغیرهایی است که با `@property … inherits: true` از شل به
+   * این‌جا می‌رسند.
+   *
+   * رفتارِ «نگه‌داشتنِ رنگِ هنرمندِ قبلی تا رسیدنِ رنگِ تازه» — که مهم‌ترین
+   * سنجه‌ی این صفحه بود — حالا در تستِ خودِ هوک سنجیده می‌شود
+   * (`lib/useArtworkTheme.dom.test.tsx`)، چون مسیرِ گرم/سرد و لغوِ نتیجه‌ی
+   * دیررس همان‌جاست.
+   */
+  describe('artwork theme', () => {
+    const renderArtist = (artist: ArtistDetail) => {
+      act(() => {
+        root.render(
+          <ArtistView
+            artist={artist}
+            playingId={null}
+            onTogglePlay={vi.fn()}
+            onOpenAlbum={vi.fn()}
+            onOpenPlaylist={vi.fn()}
+            onBack={vi.fn()}
+          />,
+        )
+      })
+    }
+
+    beforeEach(() => {
+      vi.mocked(peekArtworkColor).mockReturnValue(null)
+      vi.mocked(dominantColor).mockResolvedValue(null)
+    })
+
+    afterEach(() => {
+      vi.mocked(peekArtworkColor).mockReturnValue(null)
+      vi.mocked(dominantColor).mockResolvedValue(null)
+    })
+
+    /*
+     * قفلِ «یک منبعِ حقیقت» — همان دلیلی که در AlbumView.dom.test.tsx توضیح
+     * داده شده: اگر ویو هم توکن بگذارد، دو گذارِ موازی روی یک رنگ می‌افتد و
+     * تمِ این صفحه روی صفحه‌ی بعدی باقی می‌ماند.
+     */
+    it('owns no theme tokens of its own; the shell does', () => {
+      renderArtist(mockArtist)
+
+      const viewRoot = container.querySelector<HTMLElement>('.tint-page')
+      expect(viewRoot).not.toBeNull()
+      for (const token of ['--tint-r', '--page-r', '--mesh1-r', '--mesh3-b']) {
+        expect((viewRoot as HTMLElement).style.getPropertyValue(token)).toBe('')
+      }
+    })
+
+    it('keeps the hero reading the inherited tokens and lays the text guard over it', () => {
+      renderArtist(mockArtist)
+
+      /*
+       * گرادیانِ هیرو باید *خواننده‌ی* متغیرها بماند؛ وگرنه با انتقالِ تم به
+       * شل، هیرو رنگِ ثابتِ قدیمی می‌گرفت و دیگر با کاور عوض نمی‌شد.
+       */
+      const hero = container.querySelector<HTMLElement>('.tint-text-guard')?.parentElement
+      expect(hero).not.toBeNull()
+      const bg = (hero as HTMLElement).style.background
+      expect(bg).toContain('var(--tint-r)')
+      expect(bg).not.toMatch(/rgb\(\d+,\s*\d+,\s*\d+/)
+
+      const guard = container.querySelector('.tint-text-guard')
+      expect(guard).not.toBeNull()
+      expect(guard?.getAttribute('aria-hidden')).toBe('true')
+    })
+
+    it('leaves the full-page background layer to the shell', () => {
+      renderArtist(mockArtist)
+      // لایه‌ی تمام‌صفحه این‌جا نیست؛ اگر کسی دوباره اضافه‌اش کند، دوتا می‌شود
+      expect(container.querySelector('.page-tint')).toBeNull()
     })
   })
 })

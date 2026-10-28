@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from app.lyrics.manager import LyricsManager
+from app import config
 from app.lyrics.models import Lyrics
 from app.lyrics.registry import ProviderEntry, ProviderRegistry
 from app.models import Track
@@ -178,7 +179,7 @@ class TestAvailability:
                 ProviderEntry("genius", genius_should_not_run, genius.enabled),
             ),
         )
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
 
         manager = LyricsManager()
 
@@ -324,7 +325,7 @@ class TestNegativeCache:
         assert manager.fetch(_track()) is None
         now[0] += 1
         # کشِ منفی هست ولی نتیجه‌ی موفقِ بعدی باید آن را پاک کند
-        manager.forget("track-1")
+        manager.forget(("local", "track-1"))
         assert manager.fetch(_track()).plain == "late"
 
     def test_the_cache_is_per_track(self):

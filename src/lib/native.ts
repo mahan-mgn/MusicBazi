@@ -146,6 +146,7 @@ export interface AudioDiagnostics {
 
 interface AudioEnginePlugin {
   play(options: NativeAudioStreamOptions): Promise<void>
+  setNext(options: NativeAudioStreamOptions | { url: string }): Promise<void>
   pause(): Promise<void>
   resume(): Promise<void>
   stop(): Promise<void>
@@ -184,6 +185,19 @@ const AudioEngine = registerPlugin<AudioEnginePlugin>('AudioEngine')
 export async function nativePlay(options: NativeAudioStreamOptions): Promise<void> {
   if (!isNativeApp()) return
   await AudioEngine.play(options)
+}
+
+export async function nativeSetNext(options: NativeAudioStreamOptions | null): Promise<void> {
+  if (!isNativeApp()) return
+  try {
+    if (!options) {
+      await AudioEngine.setNext({ url: '' })
+    } else {
+      await AudioEngine.setNext(options)
+    }
+  } catch (err) {
+    console.warn('[native] setNext failed:', err)
+  }
 }
 
 export async function nativePause(): Promise<void> {

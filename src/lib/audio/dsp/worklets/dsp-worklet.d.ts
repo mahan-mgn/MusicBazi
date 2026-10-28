@@ -29,8 +29,21 @@ export interface WorkletLoudnessInstance {
   process(samples: Float32Array, frameCount: number, channelCount: number): void
 }
 
+export interface WorkletTransitionFilterInstance {
+  setCutoffs(lowPassHz: number, highPassHz: number): void
+  open(): void
+  setEcho(delaySeconds: number, send: number, dry: number): void
+  parkEcho(): void
+  isFiltering: boolean
+  configure(sampleRate: number, channelCount: number): void
+  process(samples: Float32Array, frameCount: number, channelCount: number): void
+  flush(): void
+  reset(): void
+}
+
 export interface DSPExposed {
   Equalizer: { new (): WorkletEqualizerInstance }
   Spatializer: { new (enabled: boolean): WorkletSpatializerInstance }
   Loudness: { new (): WorkletLoudnessInstance }
+  TransitionFilter: { new (): WorkletTransitionFilterInstance }
 }

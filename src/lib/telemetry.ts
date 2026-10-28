@@ -25,6 +25,23 @@ const MAX_SENDS = 12
 let sent = 0
 let installed = false
 
+/**
+ * رضایتِ کاربر به فرستادنِ گزارش.
+ *
+ * پیش‌فرض روشن است، ولی این کلید باید *واقعاً* خاموش کند نه فقط UI را عوض
+ * کند؛ پس هر مسیرِ ارسال — از جمله مسیرِ مستقلِ `ErrorBoundary` که خودش
+ * `fetch` می‌زند — از همین یک پرچم می‌پرسد.
+ */
+let enabled = true
+
+export function setErrorReportingEnabled(value: boolean): void {
+  enabled = value
+}
+
+export function isErrorReportingEnabled(): boolean {
+  return enabled
+}
+
 interface Payload {
   kind: string
   message: string
@@ -35,7 +52,7 @@ interface Payload {
 }
 
 function send(payload: Payload): void {
-  if (sent >= MAX_SENDS || !serverBase()) return
+  if (!enabled || sent >= MAX_SENDS || !serverBase()) return
   sent++
   // `keepalive` تا اگر اپ همان لحظه بسته شد، درخواستِ آخر هم برسد — وگرنه
   // مهم‌ترین خط (همان که اپ را کشت) گم می‌شود

@@ -1,4 +1,4 @@
-import { IdentifyUnavailable } from '../types'
+import { AuthRequired, IdentifyUnavailable } from '../types'
 import type {
   AlbumDetail,
   DownloadProgress,
@@ -309,5 +309,47 @@ export const mockApi: MusicApi = {
 
   async prefetchStream() {
     return false
+  },
+
+  // ---------- حساب کاربری ----------
+  //
+  // مود دمو سرور ندارد، پس نه ورودی هست و نه حسابی. `providers` هر دو راه را
+  // خاموش می‌گوید تا صفحه‌ی ورود دکمه‌ی بی‌اثر نشان ندهد؛ بقیه عمداً خطا
+  // می‌دهند تا اگر جایی صدا زده شدند، جای اشتباه لو برود.
+
+  async authProviders() {
+    return { google: false, googleReason: 'not_configured' as const }
+  },
+
+  async authMe(): Promise<never> {
+    throw new AuthRequired('در مود دمو حساب کاربری وجود ندارد.')
+  },
+
+  async authRegister(): Promise<never> {
+    throw new Error('در مود دمو حساب کاربری وجود ندارد.')
+  },
+
+  async authLogin(): Promise<never> {
+    throw new Error('در مود دمو حساب کاربری وجود ندارد.')
+  },
+
+  async authLogout() {
+    // بی‌اثر — چیزی برای خروج نیست
+  },
+
+  async authUpdateProfile(): Promise<never> {
+    throw new Error('در مود دمو حساب کاربری وجود ندارد.')
+  },
+
+  async authMediaToken(): Promise<never> {
+    throw new AuthRequired('در مود دمو حساب کاربری وجود ندارد.')
+  },
+
+  async authUploadAvatar(): Promise<never> {
+    throw new Error('در مود دمو حساب کاربری وجود ندارد.')
+  },
+
+  async authRemoveAvatar(): Promise<never> {
+    throw new Error('در مود دمو حساب کاربری وجود ندارد.')
   },
 }

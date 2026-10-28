@@ -30,12 +30,12 @@
       "selectable": false,
       "status": "needs_setup",
       "terms_note": "Terms prohibit scraping/automated use. Manual selection only.",
-      "setup_hint": "Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment.",
+      "setup_hint": "Add your Genius key in Settings → Setup.",
       "experimental": false,
       "last_outcome": "never_tried",
       "last_error_kind": null,
       "http_status": null,
-      "unavailable_reason": "Set MUSICBAZI_GENIUS_ACCESS_TOKEN in the server environment."
+      "unavailable_reason": "Add your Genius key in Settings → Setup."
     },
     {
       "id": "lyricsplus",
@@ -180,12 +180,12 @@
       "selectable": false,
       "status": "needs_setup",
       "terms_note": "Official API only; synchronised text needs a commercial plan.",
-      "setup_hint": "Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment.",
+      "setup_hint": "Server-side only: set MUSICBAZI_MUSIXMATCH_API_KEY for the operator.",
       "experimental": false,
       "last_outcome": "never_tried",
       "last_error_kind": null,
       "http_status": null,
-      "unavailable_reason": "Set MUSICBAZI_MUSIXMATCH_API_KEY in the server environment."
+      "unavailable_reason": "Server-side only: set MUSICBAZI_MUSIXMATCH_API_KEY for the operator."
     },
     {
       "id": "kugou",

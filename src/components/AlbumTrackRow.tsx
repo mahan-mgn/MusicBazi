@@ -1,4 +1,4 @@
-import { api } from '../lib/api'
+import { useEffect, useRef } from 'react'
 import {
   cleanArtist,
   digits,
@@ -18,6 +18,7 @@ import { useToasts } from '../store/toasts'
 import { toPlayItem } from '../lib/stream'
 import { useRowSwipe } from '../lib/useRowSwipe'
 import { canSaveToDevice, haptic, saveToDevice } from '../lib/native'
+import { prewarmTrack } from '../lib/prewarm'
 import LikeHeart from './LikeHeart'
 import SendToTelegram from './SendToTelegram'
 import {
@@ -109,6 +110,32 @@ export default function AlbumTrackRow({
     useToasts.getState().push(t.queueAdded(track.title), 'info')
   }
 
+  const hoverTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+    }
+  }, [])
+
+  const handleMouseEnter = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+    hoverTimer.current = window.setTimeout(() => {
+      prewarmTrack(track, quality)
+    }, 60)
+  }
+
+  const handleMouseLeave = () => {
+    if (hoverTimer.current) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }
+
+  const handlePointerDown = () => {
+    prewarmTrack(track, quality)
+  }
+
   const rowRef = useRowSwipe<HTMLDivElement>({
     onStartToEnd: handleSwipeToQueue,
     onEndToStart: handleSwipeToQueue,
@@ -118,9 +145,9 @@ export default function AlbumTrackRow({
   return (
     <div
       ref={rowRef}
-      onMouseEnter={() => {
-        if (!job) void api.prefetchStream?.(track)
-      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onPointerDown={handlePointerDown}
       className={`group relative flex items-center gap-2 overflow-hidden rounded-xl px-2.5 py-2.5 transition sm:gap-3 ${
         selected
           ? 'bg-accent-dim'
@@ -160,6 +187,7 @@ export default function AlbumTrackRow({
       {/* ستون شماره / دکمه پخش */}
       <button
         onClick={() => onTogglePlay(track)}
+        onFocus={() => prewarmTrack(track, quality)}
         aria-label={playing ? t.pause : t.play}
         title={playing ? t.pause : t.play}
         className="relative grid size-7 shrink-0 place-items-center rounded-lg text-muted-2 transition hover:bg-white/5 hover:text-fg"
@@ -192,6 +220,7 @@ export default function AlbumTrackRow({
           <button
             type="button"
             onClick={() => onTogglePlay(track)}
+            onFocus={() => prewarmTrack(track, quality)}
             className="bidi truncate text-start text-sm font-medium transition-colors hover:text-accent"
           >
             <span

@@ -28,7 +28,9 @@ from pathlib import Path
 
 import httpx
 
-from .config import ACOUSTID_KEY, FFMPEG_BIN, FPCALC, PROXY
+from . import credentials
+from .config import FFMPEG_BIN, FPCALC, PROXY
+from .db import GUEST_ID
 from .providers import audd
 
 LOOKUP_URL = "https://api.acoustid.org/v2/lookup"
@@ -62,27 +64,28 @@ class Match:
     duration_ms: int = 0
 
 
-def acoustid_available() -> bool:
-    return bool(ACOUSTID_KEY and FPCALC)
+def acoustid_available(uid: str = GUEST_ID) -> bool:
+    return bool(credentials.acoustid_key(uid) and FPCALC)
 
 
-def available() -> bool:
-    return audd.enabled() or acoustid_available()
+def available(uid: str = GUEST_ID) -> bool:
+    return audd.enabled(uid) or acoustid_available(uid)
 
 
-def missing() -> str:
+def missing(uid: str = GUEST_ID) -> str:
     """
     چرا شناسایی خاموش است — به زبانی که مستقیم به کاربر نشان داده می‌شود.
     رشته‌ی خالی یعنی چیزی کم نیست.
     """
-    if available():
+    if available(uid):
         return ""
-    if ACOUSTID_KEY and not FPCALC:
+    has_acoustid = credentials.acoustid_key(uid) is not None
+    if has_acoustid and not FPCALC:
         return (
             "شناسایی صوتی خاموش است: `fpcalc` (از بسته‌ی Chromaprint) روی این سیستم "
             "پیدا نشد. نصبش کن یا مسیرش را در MUSICBAZI_FPCALC بگذار."
         )
-    if FPCALC and not ACOUSTID_KEY:
+    if FPCALC and not has_acoustid:
         return "شناسایی صوتی خاموش است: MUSICBAZI_ACOUSTID_KEY تنظیم نشده."
     return (
         "شناسایی صوتی تنظیم نشده. برای فایلِ کامل: `fpcalc` به‌علاوه‌ی "
@@ -204,8 +207,11 @@ _ACOUSTID_HINTS = {
 }
 
 
-def _by_acoustid(path: Path, fp: tuple[int, str] | None = None) -> list[Match]:
-    if not acoustid_available():
+def _by_acoustid(
+    path: Path, fp: tuple[int, str] | None = None, uid: str = GUEST_ID
+) -> list[Match]:
+    key = credentials.acoustid_key(uid)
+    if not key or not FPCALC:
         return []
 
     # صدازننده معمولاً از قبل فینگرپرینت را گرفته (برای تصمیمِ ترتیب)؛ دوباره
@@ -220,7 +226,7 @@ def _by_acoustid(path: Path, fp: tuple[int, str] | None = None) -> list[Match]:
         res = httpx.post(
             LOOKUP_URL,
             data={
-                "client": ACOUSTID_KEY,
+                "client": key,
                 "duration": duration,
                 "fingerprint": value,
                 "meta": "recordings",
@@ -247,9 +253,9 @@ def _by_acoustid(path: Path, fp: tuple[int, str] | None = None) -> list[Match]:
 LONG_ENOUGH_SECONDS = 60
 
 
-def _by_audd(path: Path) -> list[Match]:
+def _by_audd(path: Path, uid: str = GUEST_ID) -> list[Match]:
     try:
-        found = audd.recognize(path)
+        found = audd.recognize(path, uid)
     except audd.AuddError as exc:
         raise ServiceError(str(exc)) from exc
     if found is None:
@@ -257,7 +263,7 @@ def _by_audd(path: Path) -> list[Match]:
     return [Match(title=found.title, artist=found.artist, score=None)]
 
 
-def identify(path: Path) -> list[Match]:
+def identify(path: Path, uid: str = GUEST_ID) -> list[Match]:
     """
     حدس‌های ممکن برای این فایل صوتی، مرتب‌شده از مطمئن‌ترین.
     لیست خالی یعنی شناخته نشد. بلاک‌کننده است — در thread صدا زده شود.
@@ -272,13 +278,13 @@ def identify(path: Path) -> list[Match]:
     اگر مسیری که *تنظیم شده* درخواست را رد کند `ServiceError` بالا می‌رود —
     ولی وقتی مسیرِ دیگری جواب داده، ردِ آن یکی اهمیتی ندارد و بی‌صدا رد می‌شود.
     """
-    fp = fingerprint(path) if acoustid_available() else None
+    fp = fingerprint(path) if acoustid_available(uid) else None
     long_file = fp is not None and fp[0] >= LONG_ENOUGH_SECONDS
 
     steps = (
-        [lambda: _by_acoustid(path, fp), lambda: _by_audd(path)]
+        [lambda: _by_acoustid(path, fp, uid), lambda: _by_audd(path, uid)]
         if long_file
-        else [lambda: _by_audd(path), lambda: _by_acoustid(path, fp)]
+        else [lambda: _by_audd(path, uid), lambda: _by_acoustid(path, fp, uid)]
     )
 
     problem: ServiceError | None = None

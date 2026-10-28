@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { EQ_BANDS, EQ_PRESETS, gainFromDb, MAX_BOOST_DB } from './audioEngine'
+import {
+  EQ_BANDS,
+  EQ_PRESETS,
+  gainFromDb,
+  MAX_BOOST_DB,
+  makeEqualPowerFadeInCurve,
+  makeEqualPowerFadeOutCurve,
+} from './audioEngine'
 
 /**
  * خودِ موتور به Web Audio و DOM نیاز دارد و اینجا تست نمی‌شود؛ چیزی که تست
@@ -66,5 +73,29 @@ describe('تقویتِ سراسری', () => {
   it('تقویتِ صفر چیزی را عوض نمی‌کند', () => {
     expect(gainFromDb(0)).toBe(1)
     expect(gainFromDb(-2) * gainFromDb(0)).toBeCloseTo(gainFromDb(-2))
+  })
+})
+
+describe('منحنی‌های کراس‌فید توان-برابر (Equal-Power Curves)', () => {
+  it('در تمام نقاط منحنی، مجموع توان دو سیگنال برابر با ۱ است (بدون افت دسی‌بل)', () => {
+    const fadeOut = makeEqualPowerFadeOutCurve(64)
+    const fadeIn = makeEqualPowerFadeInCurve(64)
+
+    expect(fadeOut.length).toBe(64)
+    expect(fadeIn.length).toBe(64)
+
+    // در ابتدا: خروجی کامل (1.0)، ورودی صفر
+    expect(fadeOut[0]).toBeCloseTo(1.0, 4)
+    expect(fadeIn[0]).toBeCloseTo(0.0, 4)
+
+    // در انتها: خروجی صفر، ورودی کامل (1.0)
+    expect(fadeOut[63]).toBeCloseTo(0.0, 4)
+    expect(fadeIn[63]).toBeCloseTo(1.0, 4)
+
+    // در تمام ۶۴ نقطه: مجموع مربعات (توان آکوستیک) باید دقیقاً ۱ باشد
+    for (let i = 0; i < 64; i++) {
+      const power = fadeOut[i] * fadeOut[i] + fadeIn[i] * fadeIn[i]
+      expect(power).toBeCloseTo(1.0, 4)
+    }
   })
 })

@@ -83,11 +83,22 @@ class LyricsProvider(Protocol):
     ) -> Lyrics | None: ...
 
 
-StrictFetchFn = Callable[[str, str, str | None, int], Lyrics | None]
+StrictFetchFn = Callable[..., Lyrics | None]
 
 
-FetchFn = Callable[[str, str, str | None, int], Lyrics | None]
-EnabledFn = Callable[[], bool]
+FetchFn = Callable[..., Lyrics | None]
+EnabledFn = Callable[..., bool]
+
+def _call_enabled(fn: "EnabledFn", uid: str) -> bool:
+    """
+    Providerهای بی‌کلید (`enabled()` بدونِ پارامتر) با Providerهای شخصی
+    (`enabled(uid)`) در یک رجیستری کنارِ هم‌اند. این‌جا تفاوتشان پوشانده
+    می‌شود تا هر فراخوان مجبور نباشد امضا را بررسی کند.
+    """
+    try:
+        return bool(fn(uid))
+    except TypeError:
+        return bool(fn())
 
 
 @dataclass(frozen=True)
@@ -131,7 +142,13 @@ class ProviderEntry:
         """نسخه‌ی strict، یا `fetch` عمومی اگر Provider نسخه‌ی strict ندارد."""
         return self.fetch_strict or self.fetch
 
-    def is_available(self) -> bool:
+    def needs_key(self, uid: str) -> bool:
+        """آیا Provider برای این کاربر کلید/پیش‌نیازِ نداشته دارد؟"""
+        if self.enabled is None:
+            return False
+        return not _call_enabled(self.enabled, uid)
+
+    def is_available(self, uid: str = "local") -> bool:
         """
         هم کلیدِ دستی/پیش‌فرض روشن است، هم Provider خودش آماده است.
 
@@ -141,7 +158,7 @@ class ProviderEntry:
         """
         if not lyrics_provider_enabled(self.name, default=self.default_enabled):
             return False
-        return self.enabled() if self.enabled is not None else True
+        return _call_enabled(self.enabled, uid) if self.enabled is not None else True
 
 
 class CircuitBreaker:
@@ -245,7 +262,7 @@ class ProviderRegistry:
             return False
         return self.breaker.is_open(name)
 
-    def available(self) -> list[ProviderEntry]:
+    def available(self, uid: str = "local") -> list[ProviderEntry]:
         """
         Providerهایی که همین حالا در **زنجیرهٔ خودکار** صدا زده می‌شوند.
 
@@ -264,7 +281,7 @@ class ProviderRegistry:
         return [
             self._by_name[name]
             for name in self._order
-            if self._by_name[name].is_available()
+            if self._by_name[name].is_available(uid)
             and lyrics_auto_enabled(name)
             and not self.is_evicted(name)
         ]
@@ -272,7 +289,7 @@ class ProviderRegistry:
     def get(self, name: str) -> ProviderEntry | None:
         return self._by_name.get(name)
 
-    def is_selectable(self, name: str) -> bool:
+    def is_selectable(self, name: str, uid: str = "local") -> bool:
         """
         آیا این Provider برای انتخابِ دستی در دسترس است؟
 
@@ -293,4 +310,4 @@ class ProviderRegistry:
         # روشن؛ خودِ مقدارِ پیش‌فرضِ زنجیره اینجا نقشی ندارد.
         if not lyrics_provider_enabled(name, default=True):
             return False
-        return entry.enabled() if entry.enabled is not None else True
+        return _call_enabled(entry.enabled, uid) if entry.enabled is not None else True

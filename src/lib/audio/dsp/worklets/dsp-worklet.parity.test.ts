@@ -4,6 +4,7 @@ import workletCode from './dsp-worklet.js?raw'
 import { Equalizer as TsEqualizer } from '../Equalizer'
 import { Spatializer as TsSpatializer } from '../Spatializer'
 import { Loudness as TsLoudness } from '../Loudness'
+import { TransitionFilter as TsTransitionFilter } from '../TransitionFilter'
 import { manualCurve } from '../EqCurve'
 import type { DSPExposed } from './dsp-worklet.d'
 
@@ -117,8 +118,31 @@ describe('هم‌ارزی پوستهٔ ورک‌لت با کلاس‌های Type
     expect(maxAbsDiff(tsBlock.samples, jsSamples)).toBeLessThan(1e-9)
   })
 
+  it('TransitionFilter: فیلتر پایین‌گذر، بالاگذر و اکو — خروجی بیت‌به‌بیت یکسان', () => {
+    const dsp = loadWorkletDSP()
+    const ts = new TsTransitionFilter()
+    ts.configure(SAMPLE_RATE, 2)
+    ts.setCutoffs(4000, 150)
+    ts.setEcho(0.2, 0.4, 0.8)
+
+    const js = new dsp.TransitionFilter()
+    js.configure(SAMPLE_RATE, 2)
+    js.setCutoffs(4000, 150)
+    js.setEcho(0.2, 0.4, 0.8)
+
+    const signal = sineStereo(800, 4096, 0.5)
+    const tsBlock = { samples: Float32Array.from(signal), frameCount: 4096, channelCount: 2 }
+    const jsSamples = Float32Array.from(signal)
+
+    ts.process(tsBlock)
+    js.process(jsSamples, 4096, 2)
+
+    expect(maxAbsDiff(tsBlock.samples, jsSamples)).toBeLessThan(1e-7)
+  })
+
   it('فایل ورک‌لت import ندارد — افزودن import همان لحظه addModule را در ساخت می‌شکند', () => {
     expect(workletCode).not.toMatch(/^\s*import\s/m)
+    expect(workletCode).toContain("registerProcessor('mb-dsp-chain'")
     expect(workletCode).toContain("registerProcessor('mb-equalizer'")
     expect(workletCode).toContain("registerProcessor('mb-spatial'")
     expect(workletCode).toContain("registerProcessor('mb-loudness'")

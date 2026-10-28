@@ -137,16 +137,18 @@ class LyricsSources:
         self._manager = manager or lyrics_manager
         self._miss_ttl_s = miss_ttl_s
         self._clock = clock
-        self._cache: dict[tuple[str, str], _Entry] = {}
-        self._errors: dict[tuple[str, str], str] = {}
+        # کلید `(uid, track_id, name)` — کش در حافظه مشترک است و "کاربر X متن
+        # ندارد" نباید برای کاربر Y هم صادق باشد.
+        self._cache: dict[tuple[str, str, str], _Entry] = {}
+        self._errors: dict[tuple[str, str, str], str] = {}
         # کدِ HTTPِ آخرین خطا، برای نمایشِ «HTTP 502» بدونِ لو دادنِ جزئیات
-        self._error_status: dict[tuple[str, str], int | None] = {}
+        self._error_status: dict[tuple[str, str, str], int | None] = {}
         self._lock = asyncio.Lock()
-        self._pending: dict[tuple[str, str], asyncio.Task] = {}
+        self._pending: dict[tuple[str, str, str], asyncio.Task] = {}
 
     # ------------------------------------------------------------ فهرست
 
-    def list_sources(self, track: Track) -> list[dict]:
+    def list_sources(self, track: Track, uid: str = "local") -> list[dict]:
         """
         متادیتای هر Provider ثبت‌شده + وضعیتِ کشِ آن برای این آهنگ.
 
@@ -155,8 +157,8 @@ class LyricsSources:
         """
         out: list[dict] = []
         for entry in self._ordered_entries():
-            key = (track.id, entry.name)
-            selectable = self._selectable(entry)
+            key = (uid, track.id, entry.name)
+            selectable = self._selectable(entry, uid)
             out.append(
                 {
                     "id": entry.name,
@@ -179,16 +181,16 @@ class LyricsSources:
             )
         return out
 
-    def _reason_of(self, entry: ProviderEntry) -> str:
+    def _reason_of(self, entry: ProviderEntry, uid: str = "local") -> str:
         """متنِ *نمایشی* برای ردیفِ غیرقابلِ‌انتخاب (می‌تواند راهنمای راه‌اندازی باشد)."""
         if entry.blocked_reason:
             return entry.blocked_reason
-        if entry.enabled is not None and not entry.enabled():
+        if entry.needs_key(uid):
             return entry.setup_hint or "needs_setup"
         return "disabled"
 
     @staticmethod
-    def _code_of(entry: ProviderEntry) -> str:
+    def _code_of(entry: ProviderEntry, uid: str = "local") -> str:
         """
         کدِ *ماشین‌خوانِ* علتِ غیرقابلِ‌انتخاب بودن — جدا از متنِ نمایشی.
 
@@ -198,7 +200,7 @@ class LyricsSources:
         """
         if entry.blocked_reason:
             return "blocked"
-        if entry.enabled is not None and not entry.enabled():
+        if entry.needs_key(uid):
             return "needs_setup"
         return "disabled"
 
@@ -223,10 +225,12 @@ class LyricsSources:
         ]
         return live + self._blocked_entries()
 
-    def _in_auto_chain(self, entry: ProviderEntry) -> bool:
-        return any(e.name == entry.name for e in self._manager.registry.available())
+    def _in_auto_chain(self, entry: ProviderEntry, uid: str = "local") -> bool:
+        return any(
+            e.name == entry.name for e in self._manager.registry.available(uid)
+        )
 
-    def _selectable(self, entry: ProviderEntry) -> bool:
+    def _selectable(self, entry: ProviderEntry, uid: str = "local") -> bool:
         """
         قابلِ‌انتخابِ دستی؟
 
@@ -235,9 +239,9 @@ class LyricsSources:
         """
         if entry.blocked_reason:
             return False
-        return self._manager.registry.is_selectable(entry.name)
+        return self._manager.registry.is_selectable(entry.name, uid)
 
-    def _status_of(self, entry: ProviderEntry, key: tuple[str, str]) -> str:
+    def _status_of(self, entry: ProviderEntry, key: tuple[str, str, str]) -> str:
         if entry.blocked_reason:
             return STATUS_BLOCKED
         if not self._selectable(entry):
@@ -255,7 +259,7 @@ class LyricsSources:
             return STATUS_ERROR
         return STATUS_AVAILABLE
 
-    def _last_outcome(self, entry: ProviderEntry, key: tuple[str, str]) -> str:
+    def _last_outcome(self, entry: ProviderEntry, key: tuple[str, str, str]) -> str:
         """
         آخرین نتیجهٔ شناخته‌شدهٔ این منبع برای این آهنگ — بدونِ هیچ درخواستی.
 
@@ -272,15 +276,17 @@ class LyricsSources:
             return "error"
         return "never_tried"
 
-    def _last_error_kind(self, key: tuple[str, str]) -> str | None:
+    def _last_error_kind(self, key: tuple[str, str, str]) -> str | None:
         return self._errors.get(key)
 
-    def _last_http_status(self, key: tuple[str, str]) -> int | None:
+    def _last_http_status(self, key: tuple[str, str, str]) -> int | None:
         return self._error_status.get(key)
 
     # ------------------------------------------------------------ واکشی
 
-    async def fetch_from(self, name: str, track: Track, *, force: bool = False) -> SourceResult:
+    async def fetch_from(
+        self, name: str, track: Track, uid: str = "local", *, force: bool = False
+    ) -> SourceResult:
         """
         فقط همین Provider را صدا بزن.
 
@@ -294,10 +300,10 @@ class LyricsSources:
             if self._is_blocked_name(name):
                 return SourceResult(provider=name, lyrics=None, error="blocked")
             return SourceResult(provider=name, lyrics=None, error="unknown-provider")
-        if not self._selectable(entry):
-            return SourceResult(provider=name, lyrics=None, error=self._code_of(entry))
+        if not self._selectable(entry, uid):
+            return SourceResult(provider=name, lyrics=None, error=self._code_of(entry, uid))
 
-        key = (track.id, name)
+        key = (uid, track.id, name)
         if force:
             self._cache.pop(key, None)
             self._errors.pop(key, None)
@@ -312,7 +318,7 @@ class LyricsSources:
                     return SourceResult(provider=name, lyrics=cached.value)
             task = self._pending.get(key)
             if task is None:
-                task = asyncio.create_task(asyncio.to_thread(self._run, entry, track))
+                task = asyncio.create_task(asyncio.to_thread(self._run, entry, track, uid))
                 self._pending[key] = task
 
         try:
@@ -323,13 +329,13 @@ class LyricsSources:
                     self._pending.pop(key, None)
         return result
 
-    def _run(self, entry: ProviderEntry, track: Track) -> SourceResult:
+    def _run(self, entry: ProviderEntry, track: Track, uid: str = "local") -> SourceResult:
         """کارِ بلاک‌کننده‌ی شبکه — در thread جدا."""
-        key = (track.id, entry.name)
+        key = (uid, track.id, entry.name)
         try:
             from .manager import _invoke
 
-            found = _invoke(entry.strict(), track)
+            found = _invoke(entry.strict(), track, uid)
         except ProviderError as exc:
             # خطا کش نمی‌شود؛ فقط برای نمایشِ وضعیت نگه داشته می‌شود.
             self._errors[key] = _error_kind_of(exc.kind, exc.status)
@@ -359,7 +365,7 @@ class LyricsSources:
 
     # ------------------------------------------------------------ تکراری
 
-    def duplicate_of(self, name: str, track: Track, other: str) -> bool:
+    def duplicate_of(self, name: str, track: Track, other: str, uid: str = "local") -> bool:
         """
         آیا نتیجه‌ی این Provider با نتیجه‌ی Providerِ دیگری یکی است؟
 
@@ -369,14 +375,14 @@ class LyricsSources:
 
         فقط از کشِ حافظه می‌خواند؛ هیچ درخواستی نمی‌زند.
         """
-        left = self._cached_text(name, track)
-        right = self._cached_text(other, track)
+        left = self._cached_text(name, track, uid)
+        right = self._cached_text(other, track, uid)
         if left is None or right is None:
             return False
         return content_fingerprint(left) == content_fingerprint(right)
 
-    def _cached_text(self, name: str, track: Track) -> str | None:
-        entry = self._cache.get((track.id, name))
+    def _cached_text(self, name: str, track: Track, uid: str = "local") -> str | None:
+        entry = self._cache.get((uid, track.id, name))
         if entry is None or entry.value is None:
             return None
         return entry.value.plain or entry.value.synced
@@ -385,9 +391,13 @@ class LyricsSources:
 
     def forget(self, track_id: str, name: str | None = None) -> None:
         """کشِ یک آهنگ (یا یک Providerِ آن) را دور بریز."""
-        for key in [k for k in self._cache if k[0] == track_id and (name is None or k[1] == name)]:
+        for key in [
+            k for k in self._cache if k[1] == track_id and (name is None or k[2] == name)
+        ]:
             self._cache.pop(key, None)
-        for key in [k for k in self._errors if k[0] == track_id and (name is None or k[1] == name)]:
+        for key in [
+            k for k in self._errors if k[1] == track_id and (name is None or k[2] == name)
+        ]:
             self._errors.pop(key, None)
             self._error_status.pop(key, None)
 

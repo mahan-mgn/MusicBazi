@@ -37,8 +37,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import os
+from pathlib import Path
 import re
-from typing import Any, AsyncIterator
+import threading
+import time
+from typing import Any, AsyncIterator, Callable
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -112,6 +116,114 @@ def extract_youtube_video_id(track: Track) -> str | None:
     if _YT_BARE_ID.match(candidate_id):
         return candidate_id
     return None
+
+
+def extract_video_id_from_url(url: str) -> str | None:
+    """استخراج شناسه ۱۱ رقمی یوتیوب از هر لینک وب."""
+    if not url:
+        return None
+    s = url.strip()
+    for pattern in _YT_ID_PATTERNS:
+        match = pattern.search(s)
+        if match:
+            return match.group(1)
+    if _YT_BARE_ID.match(s):
+        return s
+    return None
+
+
+class CacheFileWriter:
+    """ذخیره‌سازی هم‌زمان چانک‌های استریم روی دیسک (Cache-as-you-stream)."""
+
+    def __init__(self, tmp_path: Path, final_path: Path, expected_size: int | None):
+        self.tmp_path = tmp_path
+        self.final_path = final_path
+        self.expected_size = expected_size
+        self.written = 0
+        self._file = None
+        self._committed = False
+        try:
+            self._file = open(self.tmp_path, "wb")
+        except Exception as exc:
+            log.warning("عدم امکان ایجاد فایل موقت کش استریم: %s", exc)
+            self._file = None
+
+    def write(self, chunk: bytes) -> None:
+        if self._file and not self._committed:
+            try:
+                self._file.write(chunk)
+                self.written += len(chunk)
+            except Exception as exc:
+                log.warning("خطا در نوشتن چانک کش استریم: %s", exc)
+                self.close(commit=False)
+
+    def close(self, commit: bool = True) -> None:
+        if self._file:
+            try:
+                self._file.flush()
+                self._file.close()
+            except Exception:
+                pass
+            self._file = None
+            if (
+                commit
+                and not self._committed
+                and self.written > 1024
+                and (self.expected_size is None or self.written >= self.expected_size)
+            ):
+                self._committed = True
+                try:
+                    self.tmp_path.replace(self.final_path)
+                    try:
+                        from .. import stream_cache
+                        stream_cache.note_file_written(self.final_path)
+                    except Exception:
+                        pass
+                    log.info(
+                        "استریم صوتی با موفقیت در کش دیسک ذخیره شد: %s (%d بایت)",
+                        self.final_path.name,
+                        self.written,
+                    )
+                    return
+                except Exception as exc:
+                    log.warning("خطا در نهایی‌سازی فایل کش استریم: %s", exc)
+            self.tmp_path.unlink(missing_ok=True)
+
+
+def _create_cache_writer(
+    track: Track | None,
+    quality: str | None,
+    media_type: str,
+    total_length: int | None,
+) -> CacheFileWriter | None:
+    if track is None:
+        return None
+    try:
+        from .. import stream_cache
+        from ..config import STREAM_CACHE_DIR
+
+        cache_key = stream_cache.cache_key_for(track.id, quality=quality)
+        cached = stream_cache._find_cached_audio(cache_key)
+        if cached and cached.exists():
+            return None
+
+        STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        ext = "m4a"
+        if "mpeg" in media_type or "mp3" in media_type:
+            ext = "mp3"
+        elif "ogg" in media_type or "opus" in media_type:
+            ext = "opus"
+        elif "webm" in media_type:
+            ext = "webm"
+        elif "flac" in media_type:
+            ext = "flac"
+
+        tmp_path = STREAM_CACHE_DIR / f"{cache_key}.{time.time_ns()}.tmp"
+        final_path = STREAM_CACHE_DIR / f"{cache_key}.{ext}"
+        return CacheFileWriter(tmp_path, final_path, total_length)
+    except Exception as exc:
+        log.warning("خطا در آماده‌سازی کش استریم: %s", exc)
+        return None
 
 
 # پنجره بازه محدود جهت جلوگیری از محدودسازی سرعت توسط CDN گوگل‌ویدیو (512 KiB)
@@ -246,6 +358,88 @@ class PlaybackStreamAdapter:
         }
 
 
+class ResolvedURLCache:
+    """
+    کشِ کوتاه‌مدتِ URLِ استریمِ رزولوشن‌شده (درون‌حافظه، بدون دوام).
+
+    هر پلی که کش بخورد یک دور رزولوشن InnerTubeX/yt-dlp کمتر می‌خورد — همین
+    دور، فاصله‌ی محسوسِ بینِ «زدن روی ترک» و «شنیدن صدا» است.
+
+    قاعده‌ی امنیتی همان قاعده‌ی `ResolvedStream` است: URL فقط در حافظه‌ی همین
+    پروسه می‌ماند؛ نه در DB، نه در log، نه در متنِ خطا. `__repr__` هم ندارد.
+    """
+
+    # فاصله‌ی امنِ بیشتر از skew پیش‌فرض (۳۰ ثانیه): این URL باید کلِ یک
+    # دانلودِ چانک‌چانک را زنده بماند، نه فقط اولین درخواست را.
+    EXPIRY_SKEW_SECONDS = 60
+
+    def __init__(
+        self,
+        ttl_seconds: float,
+        max_entries: int = 256,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        self.ttl_seconds = float(ttl_seconds)
+        self.max_entries = max(1, int(max_entries))
+        self._clock = clock
+        self._entries: dict[tuple[str, str, str], tuple[ResolvedStream, float]] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def key(video_id: str, quality: str | None, user_id: str) -> tuple[str, str, str]:
+        return (video_id, quality or "", user_id or "local")
+
+    def enabled(self) -> bool:
+        return self.ttl_seconds > 0
+
+    def get(self, key: tuple[str, str, str]) -> ResolvedStream | None:
+        if not self.enabled():
+            return None
+        now = self._clock()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            stream, stored_at = entry
+            if now - stored_at >= self.ttl_seconds or stream.is_expired(
+                self.EXPIRY_SKEW_SECONDS, now=now
+            ):
+                del self._entries[key]
+                return None
+            return stream
+
+    def put(self, key: tuple[str, str, str], stream: ResolvedStream) -> None:
+        if not self.enabled() or stream.is_expired(
+            self.EXPIRY_SKEW_SECONDS, now=self._clock()
+        ):
+            return
+        now = self._clock()
+        with self._lock:
+            self._entries[key] = (stream, now)
+            if len(self._entries) <= self.max_entries:
+                return
+            # اول منقضی‌ها؛ اگر باز هم سرریز بود، قدیمی‌ترین‌ها
+            stale = [
+                k
+                for k, (s, ts) in self._entries.items()
+                if now - ts >= self.ttl_seconds or s.is_expired(self.EXPIRY_SKEW_SECONDS, now=now)
+            ]
+            for k in stale:
+                self._entries.pop(k, None)
+            if len(self._entries) > self.max_entries:
+                ordered = sorted(self._entries.items(), key=lambda kv: kv[1][1])
+                for k, _ in ordered[: len(self._entries) - self.max_entries]:
+                    self._entries.pop(k, None)
+
+    def drop(self, key: tuple[str, str, str]) -> None:
+        with self._lock:
+            self._entries.pop(key, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
 class LivePlaybackStreamer:
     """
     پروکسی live استریم یوتیوب با قرارداد Range سازگار با FileResponse فعلی.
@@ -258,6 +452,7 @@ class LivePlaybackStreamer:
         recovery: StreamRecovery | None = None,
         http_transport: httpx.AsyncBaseTransport | None = None,
         adapter: PlaybackStreamAdapter | None = None,
+        resolved_cache_ttl: float | None = None,
     ) -> None:
         self.resolver = resolver or YouTubeStreamResolver()
         # recovery باید از همان resolver instance عبور کند تا Client Health فاز ۷
@@ -270,10 +465,38 @@ class LivePlaybackStreamer:
         self.hls = HlsProxyController(
             recovery=self.recovery, http_transport=http_transport
         )
+        if resolved_cache_ttl is None:
+            from ..config import RESOLVED_URL_CACHE_MAX, RESOLVED_URL_CACHE_TTL
+
+            resolved_cache_ttl = RESOLVED_URL_CACHE_TTL
+            max_entries = RESOLVED_URL_CACHE_MAX
+        else:
+            max_entries = 256
+        self._resolved = ResolvedURLCache(resolved_cache_ttl, max_entries=max_entries)
+        # کلاینتِ اشتراکی برای پروکسی: باز کردن و بستنِ مکرر TCP+TLS برای هر
+        # رکوئست و هر چانک صوتی تاخیر چشمگیر ایجاد می‌کرد. با استفاده از connection pool
+        # اشتراکی، ارتباطات برقرار می‌مانند و اسکراب یا پخش آهنگ بعدی فوری می‌شود.
+        self._client: httpx.AsyncClient | None = None
         # single-flight درون-پردازشی (فاز ۱۲): چند consumer هم‌زمان برای یک ویدیو
         # فقط یک resolve اشتراکی ایجاد می‌کنند — قفل سبک asyncio، بدون infra
-        self._inflight: dict[str, asyncio.Task] = {}
+        self._inflight: dict[tuple[str, str], asyncio.Task] = {}
         self._inflight_lock = asyncio.Lock()
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
+                limits=httpx.Limits(max_connections=64, max_keepalive_connections=16),
+                follow_redirects=True,
+                transport=self._http_transport,
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        """بستن ایمن کلاینت اشتراکی هنگام متوقف شدن اپلیکیشن."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     # -------------------------------------------------------------
     # API
@@ -281,6 +504,7 @@ class LivePlaybackStreamer:
 
     def on_session_changed(self) -> None:
         """انتقال رویداد تغییر نشست به رزولور (نشست‌های فعال HLS مختل نمی‌شوند)."""
+        self._resolved.clear()
         self.resolver.on_session_changed()
 
     async def stream_response(
@@ -289,6 +513,7 @@ class LivePlaybackStreamer:
         range_header: str | None = None,
         quality: str | None = None,
         env: dict[str, str] | None = None,
+        user_id: str = "local",
     ) -> Response | None:
         """
         اگر flag روشن و video_id قابل استخراج بود، Response (یا StreamingResponse) برمی‌گرداند؛
@@ -298,11 +523,99 @@ class LivePlaybackStreamer:
         """
         if not is_stream_v2_enabled(env):
             return None
-        video_id = extract_youtube_video_id(track)
+        from .. import resolver
+
+        is_yt_video = resolver.is_youtube_video(track)
+        if is_yt_video:
+            # بخش Videos یوتیوب: دقیقاً صدای همان ویدیو بدون اورراید یا تغییر منبع
+            video_id = extract_youtube_video_id(track)
+            candidates = []
+        else:
+            override = resolver._canonical_override(track)
+            if override:
+                if override.source in ("youtube", "youtube_music"):
+                    video_id = extract_video_id_from_url(override.url)
+                else:
+                    video_id = None
+                candidates = [override]
+            else:
+                video_id = extract_youtube_video_id(track)
+                candidates = []
+
+        if not video_id:
+            try:
+                if not candidates:
+                    # جست‌وجوی کاندیدا در yt-dlp است و همگام — روی event loop
+                    # نمی‌نشیند، وگرنه هر پلی همه‌ی استریم‌های هم‌زمان را متوقف می‌کند.
+                    candidates = await asyncio.to_thread(
+                        resolver.resolve,
+                        track,
+                        user_id=user_id,
+                        use_cache=True,
+                        sources=("youtube_music", "youtube", "soundcloud"),
+                    )
+                    for c in candidates:
+                        if c.source in ("youtube", "youtube_music"):
+                            vid = extract_video_id_from_url(c.url)
+                            if vid:
+                                video_id = vid
+                                break
+                if not video_id:
+                    for c in candidates:
+                        if c.source == "soundcloud":
+                            from .. import stream_cache
+                            direct_info = await asyncio.to_thread(
+                                stream_cache._extract_direct_stream_info,
+                                c.url,
+                                quality=quality,
+                                user_id=user_id,
+                            )
+                            if direct_info and direct_info.get("url"):
+                                from .models import EXT_TO_MIME
+                                ext = direct_info.get("ext") or "mp3"
+                                mime = EXT_TO_MIME.get(f".{ext}", "audio/mpeg")
+                                sc_stream = ResolvedStream(
+                                    source="soundcloud",
+                                    video_id=c.url,
+                                    url=direct_info["url"],
+                                    mime_type=mime,
+                                    codec=direct_info.get("acodec") or "mp3",
+                                    bitrate=int(direct_info.get("abr") or 128) * 1000,
+                                    content_length=direct_info.get("filesize"),
+                                    headers=direct_info.get("http_headers") or {},
+                                    stream_type="PROGRESSIVE",
+                                )
+                                return await self._proxy(
+                                    sc_stream, range_header, track=track, quality=quality
+                                )
+            except Exception as exc:
+                log.warning("failed to resolve candidates for live stream: %s", exc)
+                return None
+
         if not video_id:
             return None
 
-        stream = await self._resolve_shared(video_id, purpose="playback", quality=quality)
+        try:
+            stream = await self._resolve_shared(
+                video_id, purpose="playback", quality=quality, user_id=user_id
+            )
+        except Exception as exc:
+            if not is_yt_video:
+                log.warning(
+                    "primary resolution for video %s failed: %s — trying live fallback",
+                    video_id,
+                    exc,
+                )
+                fallback = await self._resolve_live_fallback(
+                    track,
+                    failed_video_id=video_id,
+                    range_header=range_header,
+                    quality=quality,
+                    user_id=user_id,
+                )
+                if fallback is not None:
+                    return fallback
+            raise
 
         if stream.stream_type == "HLS":
             # فاز ۱۴: proxy سمت سرور HLS — manifest بازنویسی‌شده به client می‌رود
@@ -321,6 +634,12 @@ class LivePlaybackStreamer:
                 return None
             except _UpstreamRejected as rejected:
                 if rejected.status_code not in (403, 410):
+                    if not is_yt_video:
+                        fallback = await self._resolve_live_fallback(
+                            track, failed_video_id=video_id, range_header=range_header, quality=quality, user_id=user_id
+                        )
+                        if fallback is not None:
+                            return fallback
                     raise classify_runtime_failure(
                         http_status=rejected.status_code, video_id=video_id
                     ) from rejected
@@ -344,31 +663,55 @@ class LivePlaybackStreamer:
                     except Exception as exc:
                         log.warning("failed to report hls stream refusal to bridge: %s", exc)
 
+                # URLِ کش‌شده منقضی شده — قبل از recovery دورش می‌اندازیم تا
+                # «دقیقاً یک بار رزولوشن مجدد» حفظ شود و URL کهنه دوباره ننشیند.
+                cache_key = self._resolved.key(video_id, quality, user_id)
+                self._resolved.drop(cache_key)
                 fresh = await self.hls.recover_session(
                     session, rejected.status_code, allow_type_change=True
                 )
+                if fresh is not None:
+                    self._resolved.put(cache_key, fresh)
                 if fresh is not None and fresh.stream_type != "HLS":
                     # بازیابی به progressive رسید → همان پروکسی progressive
                     log.info(
                         "hls recovery switched to progressive [vid=%s]", video_id
                     )
-                    return await self._proxy(fresh, range_header)
+                    return await self._proxy(fresh, range_header, track=track, quality=quality)
                 if fresh is not None:
                     try:
                         return await self.hls.load_manifest_response(session)
                     except _UpstreamRejected as second:
+                        if not is_yt_video:
+                            fallback = await self._resolve_live_fallback(
+                                track, failed_video_id=video_id, range_header=range_header, quality=quality, user_id=user_id
+                            )
+                            if fallback is not None:
+                                return fallback
                         raise classify_runtime_failure(
                             http_status=second.status_code, video_id=video_id
                         ) from second
                 # بودجه recovery تمام (recovery_used) → classified → legacy
+                if not is_yt_video:
+                    fallback = await self._resolve_live_fallback(
+                        track, failed_video_id=video_id, range_header=range_header, quality=quality, user_id=user_id
+                    )
+                    if fallback is not None:
+                        return fallback
                 raise classify_runtime_failure(
                     http_status=rejected.status_code, video_id=video_id
                 )
 
         try:
-            return await self._proxy(stream, range_header)
+            return await self._proxy(stream, range_header, track=track, quality=quality)
         except _UpstreamRejected as rejected:
             if rejected.status_code not in _EXPIRATION_EVIDENCE_STATUSES:
+                if not is_yt_video:
+                    fallback = await self._resolve_live_fallback(
+                        track, failed_video_id=video_id, range_header=range_header, quality=quality, user_id=user_id
+                    )
+                    if fallback is not None:
+                        return fallback
                 # بند ۹: بدون evidence انقضا، recovery انجام نمی‌شود
                 raise classify_runtime_failure(
                     http_status=rejected.status_code, video_id=video_id
@@ -393,51 +736,204 @@ class LivePlaybackStreamer:
                 except Exception as exc:
                     log.warning("failed to report stream refusal to bridge: %s", exc)
 
+            # مثل شاخه‌ی HLS: URL کهنه اول از کش می‌رود، بعد recovery، و
+            # نتیجه‌ی تازه زیر همان کلید (همراه user_id) برمی‌گردد.
+            cache_key = self._resolved.key(video_id, quality, user_id)
+            self._resolved.drop(cache_key)
             fresh = await self.recovery.recover_from_runtime_failure(
                 video_id,
                 http_status=rejected.status_code,
                 purpose="playback",
                 quality=quality,
             )
+            self._resolved.put(cache_key, fresh)
             try:
                 # بودجه فاز ۸: دقیقاً یک تلاش مجدد؛ شکست دوباره بدون loop به بالا می‌رود
-                return await self._proxy(fresh, range_header)
+                return await self._proxy(fresh, range_header, track=track, quality=quality)
             except _UpstreamRejected as second:
+                if not is_yt_video:
+                    fallback = await self._resolve_live_fallback(
+                        track, failed_video_id=video_id, range_header=range_header, quality=quality, user_id=user_id
+                    )
+                    if fallback is not None:
+                        return fallback
                 raise StreamRecoverySafe(rejected=second.status_code, video_id=video_id) from second
 
-    # ------------------------------------------------------------------
+    async def warm(
+        self,
+        track: Track,
+        quality: str | None = None,
+        user_id: str = "local",
+    ) -> bool:
+        """
+        گرم‌کردنِ کشِ استریم برای ترک‌های آینده‌ی صف (بدون دانلود کل فایل).
+        فقط مرحله‌ی استخراج/رزولوشن URL را انجام می‌دهد تا وقتی نوبت پخش شد،
+        آهنگ فوراً و بدون تاخیر از CDN خوانده شود.
+        """
+        if not is_stream_v2_enabled():
+            return False
+        from .. import resolver
+
+        video_id = extract_youtube_video_id(track)
+        if not video_id:
+            override = resolver._canonical_override(track)
+            if override and override.source in ("youtube", "youtube_music"):
+                video_id = extract_video_id_from_url(override.url)
+            else:
+                try:
+                    candidates = await asyncio.to_thread(
+                        resolver.resolve,
+                        track,
+                        user_id=user_id,
+                        use_cache=True,
+                        sources=("youtube_music", "youtube", "soundcloud"),
+                    )
+                    for c in candidates:
+                        if c.source in ("youtube", "youtube_music"):
+                            vid = extract_video_id_from_url(c.url)
+                            if vid:
+                                video_id = vid
+                                break
+                except Exception as exc:
+                    log.warning("warm candidate resolution failed for %s: %s", track.id, exc)
+                    return False
+
+        if not video_id:
+            return False
+        try:
+            await self._resolve_shared(
+                video_id=video_id,
+                purpose="playback",
+                quality=quality,
+                user_id=user_id,
+            )
+            return True
+        except Exception as exc:
+            log.warning("stream warm failed for track %s: %s", track.id, exc.__class__.__name__)
+            return False
+
+    # -------------------------------------------------------------
     # مسیر داخلی
     # ------------------------------------------------------------------
 
-    async def _resolve_shared(self, video_id: str, purpose: str, quality: str | None) -> ResolvedStream:
+    async def _resolve_shared(
+        self, video_id: str, purpose: str, quality: str | None, user_id: str = "local"
+    ) -> ResolvedStream:
         """
         resolve با single-flight per video_id: درخواست‌های هم‌زمان نتیجه یک
         Task مشترک را می‌گیرند (فاز ۱۲، §۴). اگر caller غیرمالک کنسل شود،
         resolve برای بقیه ادامه می‌یابد (asyncio.shield).
         """
+        # کلید شاملِ کاربر است: استخراج با کوکیِ او انجام می‌شود و نتیجه‌ی یک
+        # حساب نباید به درخواستِ حسابِ دیگر وصل شود.
+        cache_key = self._resolved.key(video_id, quality, user_id)
+        cached = self._resolved.get(cache_key)
+        if cached is not None:
+            return cached
+        slot = (video_id, user_id)
         async with self._inflight_lock:
-            task = self._inflight.get(video_id)
+            task = self._inflight.get(slot)
             owner = task is None
             if owner:
                 task = asyncio.ensure_future(
                     self.resolver.resolve(
-                        video_id=video_id, purpose=purpose, quality=quality
+                        video_id=video_id,
+                        purpose=purpose,
+                        quality=quality,
+                        user_id=user_id,
                     )
                 )
-                self._inflight[video_id] = task
+                self._inflight[slot] = task
         try:
-            return await asyncio.shield(task)
+            stream = await asyncio.shield(task)
         finally:
             if owner:
                 async with self._inflight_lock:
-                    if self._inflight.get(video_id) is task:
-                        del self._inflight[video_id]
+                    if self._inflight.get(slot) is task:
+                        del self._inflight[slot]
+        if owner:
+            self._resolved.put(cache_key, stream)
+        return stream
+
+    async def _resolve_live_fallback(
+        self,
+        track: Track,
+        failed_video_id: str | None = None,
+        range_header: str | None = None,
+        quality: str | None = None,
+        user_id: str = "local",
+    ) -> Response | None:
+        """
+        فال‌بک چندمنبعی بلادرنگ: اگر ویدیوی اصلی یوتیوب ناموفق شد (DRM، خطای بات‌چک، مسدودیت)،
+        سایر منابع (SoundCloud و ویدیوهای جایگزین یوتیوب) را جستجو و بلادرنگ استریم می‌کند.
+        """
+        try:
+            from .. import resolver, stream_cache
+            from .models import EXT_TO_MIME
+
+            tried: set[str] = {"youtube_music"} if track.source == "youtube_music" else {"youtube"}
+            candidates = await asyncio.to_thread(
+                resolver.resolve_fallback, track, frozenset(tried), user_id
+            )
+            for c in candidates:
+                if c.source == "soundcloud":
+                    direct_info = await asyncio.to_thread(
+                        stream_cache._extract_direct_stream_info,
+                        c.url,
+                        quality=quality,
+                        user_id=user_id,
+                    )
+                    if direct_info and direct_info.get("url"):
+                        ext = direct_info.get("ext") or "mp3"
+                        mime = EXT_TO_MIME.get(f".{ext}", "audio/mpeg")
+                        sc_stream = ResolvedStream(
+                            source="soundcloud",
+                            video_id=c.url,
+                            url=direct_info["url"],
+                            mime_type=mime,
+                            codec=direct_info.get("acodec") or "mp3",
+                            bitrate=int(direct_info.get("abr") or 128) * 1000,
+                            content_length=direct_info.get("filesize"),
+                            headers=direct_info.get("http_headers") or {},
+                            stream_type="PROGRESSIVE",
+                        )
+                        log.info(
+                            "live playback fallback engaged [failed_vid=%s, fallback_source=soundcloud, url=%s]",
+                            failed_video_id,
+                            c.url,
+                        )
+                        return await self._proxy(
+                            sc_stream, range_header, track=track, quality=quality
+                        )
+                elif c.source in ("youtube", "youtube_music"):
+                    alt_vid = extract_video_id_from_url(c.url)
+                    if alt_vid and alt_vid != failed_video_id:
+                        try:
+                            alt_stream = await self._resolve_shared(
+                                alt_vid, purpose="playback", quality=quality, user_id=user_id
+                            )
+                            if alt_stream.stream_type != "HLS":
+                                log.info(
+                                    "live playback fallback engaged [failed_vid=%s, fallback_vid=%s]",
+                                    failed_video_id,
+                                    alt_vid,
+                                )
+                                return await self._proxy(
+                                    alt_stream, range_header, track=track, quality=quality
+                                )
+                        except Exception:
+                            continue
+        except Exception as exc:
+            log.warning("live playback fallback failed for track %s: %s", track.id, exc)
+        return None
 
     async def _proxy(
         self,
         stream: ResolvedStream,
         range_header: str | None,
         bounded_chunk_size: int = DEFAULT_BOUNDED_CHUNK_SIZE,
+        track: Track | None = None,
+        quality: str | None = None,
     ) -> Response:
         total_length = extract_content_length(stream)
         range_spec = parse_range_spec(range_header, total_length)
@@ -460,11 +956,7 @@ class LivePlaybackStreamer:
 
         base_headers = self.adapter.upstream_request_headers(stream)
 
-        client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
-            follow_redirects=True,
-            transport=self._http_transport,
-        )
+        client = self._get_client()
 
         media_type = self.adapter.response_media_type(
             stream, fallback="audio/mpeg"
@@ -480,6 +972,9 @@ class LivePlaybackStreamer:
             ),
         }
 
+        can_cache = (range_spec is None or range_spec.start == 0)
+        cache_writer = _create_cache_writer(track, quality, media_type, total_length) if can_cache else None
+
         # -------------------------------------------------------------
         # حالت اول: کلاینت درخواست Range معتبر فرستاده است (206 Partial Content)
         # -------------------------------------------------------------
@@ -494,15 +989,17 @@ class LivePlaybackStreamer:
                 request = client.build_request("GET", stream.url, headers=req_headers)
                 response = await client.send(request, stream=True)
             except httpx.RequestError:
-                await client.aclose()
+                if cache_writer:
+                    cache_writer.close(commit=False)
                 raise NetworkError(
                     message="Upstream stream connection failed", video_id=stream.video_id
                 )
 
             if response.status_code >= 400:
                 status = response.status_code
+                if cache_writer:
+                    cache_writer.close(commit=False)
                 await response.aclose()
-                await client.aclose()
                 raise _UpstreamRejected(status)
 
             # اگر سرور بالادست Range را رعایت کرد و 206 داد
@@ -524,8 +1021,22 @@ class LivePlaybackStreamer:
                     )
 
                 async def _close_206() -> None:
+                    if cache_writer:
+                        cache_writer.close(commit=False)
                     await response.aclose()
-                    await client.aclose()
+
+                async def _stream_206() -> AsyncIterator[bytes]:
+                    try:
+                        async for chunk in response.aiter_bytes(_PROXY_CHUNK_SIZE):
+                            if cache_writer:
+                                cache_writer.write(chunk)
+                            yield chunk
+                        if cache_writer:
+                            cache_writer.close(commit=True)
+                    except Exception:
+                        if cache_writer:
+                            cache_writer.close(commit=False)
+                        raise
 
                 log.info(
                     "live playback streaming 206 [vid=%s, mime=%s, codec=%s, bitrate=%s]",
@@ -535,7 +1046,7 @@ class LivePlaybackStreamer:
                     stream.bitrate,
                 )
                 return StreamingResponse(
-                    response.aiter_bytes(_PROXY_CHUNK_SIZE),
+                    _stream_206(),
                     status_code=206,
                     media_type=media_type,
                     headers=response_headers,
@@ -587,15 +1098,22 @@ class LivePlaybackStreamer:
                                 if remaining <= 0:
                                     break
                                 to_send = chunk[:remaining]
+                                if cache_writer and target_start == 0:
+                                    cache_writer.write(to_send)
                                 yield to_send
                                 bytes_yielded += len(to_send)
                                 if bytes_yielded >= bytes_needed:
                                     break
                             else:
+                                if cache_writer and target_start == 0:
+                                    cache_writer.write(chunk)
                                 yield chunk
+                        if cache_writer and target_start == 0:
+                            cache_writer.close(commit=True)
                     finally:
+                        if cache_writer:
+                            cache_writer.close(commit=False)
                         await response.aclose()
-                        await client.aclose()
 
                 log.info(
                     "live playback slicing 200->206 [vid=%s, range=%d-%s, mime=%s]",
@@ -629,15 +1147,17 @@ class LivePlaybackStreamer:
             req0 = client.build_request("GET", stream.url, headers=first_headers)
             resp0 = await client.send(req0, stream=True)
         except httpx.RequestError:
-            await client.aclose()
+            if cache_writer:
+                cache_writer.close(commit=False)
             raise NetworkError(
                 message="Upstream stream connection failed", video_id=stream.video_id
             )
 
         if resp0.status_code >= 400:
             status = resp0.status_code
+            if cache_writer:
+                cache_writer.close(commit=False)
             await resp0.aclose()
-            await client.aclose()
             raise _UpstreamRejected(status)
 
         if total_length is not None:
@@ -648,8 +1168,22 @@ class LivePlaybackStreamer:
         # اگر سرور بالادست Range را کلاً پشتیبانی نکرد و کل فایل را یکجا با 200 فرستاد
         if resp0.status_code == 200:
             async def _close_direct_200() -> None:
+                if cache_writer:
+                    cache_writer.close(commit=False)
                 await resp0.aclose()
-                await client.aclose()
+
+            async def _stream_direct_200() -> AsyncIterator[bytes]:
+                try:
+                    async for chunk in resp0.aiter_bytes(_PROXY_CHUNK_SIZE):
+                        if cache_writer:
+                            cache_writer.write(chunk)
+                        yield chunk
+                    if cache_writer:
+                        cache_writer.close(commit=True)
+                finally:
+                    if cache_writer:
+                        cache_writer.close(commit=False)
+                    await resp0.aclose()
 
             log.info(
                 "live playback direct 200 stream [vid=%s, mime=%s, codec=%s]",
@@ -658,62 +1192,98 @@ class LivePlaybackStreamer:
                 stream.codec,
             )
             return StreamingResponse(
-                resp0.aiter_bytes(_PROXY_CHUNK_SIZE),
+                _stream_direct_200(),
                 status_code=200,
                 media_type=media_type,
                 headers=response_headers,
                 background=BackgroundTask(_close_direct_200),
             )
 
-        # سرور بالادست 206 داد؛ چانک‌های بعدی را قطعه‌قطعه با Bounded Range دریافت و پیوسته استریم می‌کنیم
+        # سرور بالادست 206 داد؛ چانک‌های بعدی را با پایپ‌لاین پیش‌گیرانه (Lookahead=1)
+        # دریافت و پیوسته استریم می‌کنیم تا تاخیر شبکه بین چانک‌های ۵۱۲ کیلوبایتی حذف شود.
         async def _bounded_range_stream() -> AsyncIterator[bytes]:
+            async def _fetch_chunk(start: int) -> httpx.Response | None:
+                if total_length is not None and start >= total_length:
+                    return None
+                chunk_end = start + bounded_chunk_size - 1
+                if total_length is not None:
+                    chunk_end = min(chunk_end, total_length - 1)
+                sub_headers = dict(base_headers)
+                sub_headers["Range"] = f"bytes={start}-{chunk_end}"
+                sub_headers["Accept-Encoding"] = "identity"
+                sub_req = client.build_request("GET", stream.url, headers=sub_headers)
+                return await client.send(sub_req, stream=True)
+
+            current_resp: httpx.Response | None = resp0
+            next_task: asyncio.Task[httpx.Response | None] | None = None
+            current_start = 0
+
             try:
-                # 1. ارسال داده‌های چانک اول
-                chunk0_bytes = 0
-                async for data in resp0.aiter_bytes(_PROXY_CHUNK_SIZE):
-                    chunk0_bytes += len(data)
-                    yield data
-                await resp0.aclose()
-
-                # 2. دریافت و ارسال پیوسته چانک‌های بعدی
-                current_start = chunk0_bytes
-                while True:
-                    if total_length is not None and current_start >= total_length:
-                        break
-
-                    chunk_end = current_start + bounded_chunk_size - 1
-                    if total_length is not None:
-                        chunk_end = min(chunk_end, total_length - 1)
-
-                    sub_headers = dict(base_headers)
-                    sub_headers["Range"] = f"bytes={current_start}-{chunk_end}"
-                    sub_headers["Accept-Encoding"] = "identity"
-
-                    sub_req = client.build_request("GET", stream.url, headers=sub_headers)
-                    sub_resp = await client.send(sub_req, stream=True)
-
-                    if sub_resp.status_code >= 400:
-                        sub_status = sub_resp.status_code
-                        await sub_resp.aclose()
-                        if sub_status == 416 and current_start > 0:
-                            # به انتهای فایل رسیدیم
-                            break
-                        raise _UpstreamRejected(sub_status)
-
+                while current_resp is not None:
                     bytes_in_chunk = 0
-                    try:
-                        async for data in sub_resp.aiter_bytes(_PROXY_CHUNK_SIZE):
-                            bytes_in_chunk += len(data)
-                            yield data
-                    finally:
-                        await sub_resp.aclose()
+                    lookahead_scheduled = False
+
+                    async for data in current_resp.aiter_bytes(_PROXY_CHUNK_SIZE):
+                        # هم‌زمان با استریم چانک جاری، درخواست چانک بعدی را در پس‌زمینه
+                        # می‌زنیم. قبل از `yield` — نه بعدش: بعد از yield کنترل به
+                        # کلاینت می‌رود و تا درخواست بعدی، پیش‌واکشی شروع نشده است.
+                        if not lookahead_scheduled and next_task is None:
+                            lookahead_scheduled = True
+                            next_start = current_start + bounded_chunk_size
+                            if total_length is None or next_start < total_length:
+                                next_task = asyncio.create_task(_fetch_chunk(next_start))
+
+                        bytes_in_chunk += len(data)
+                        if cache_writer:
+                            cache_writer.write(data)
+                        yield data
+
+                    await current_resp.aclose()
+                    current_resp = None
+                    current_start += bytes_in_chunk
 
                     if bytes_in_chunk == 0:
                         break
-                    current_start += bytes_in_chunk
+                    if total_length is not None and current_start >= total_length:
+                        break
+
+                    # دریافت چانک بعدی که از قبل در پس‌زمینه در حال واکشی بوده است
+                    if next_task is not None:
+                        sub_resp = await next_task
+                        next_task = None
+                        if sub_resp is None:
+                            break
+                        if sub_resp.status_code >= 400:
+                            sub_status = sub_resp.status_code
+                            await sub_resp.aclose()
+                            if sub_status == 416 and current_start > 0:
+                                break
+                            raise _UpstreamRejected(sub_status)
+                        current_resp = sub_resp
+
+                if cache_writer:
+                    cache_writer.close(commit=True)
             finally:
+                if cache_writer:
+                    cache_writer.close(commit=False)
+                if current_resp is not None:
+                    await current_resp.aclose()
+                if next_task is not None and not next_task.done():
+                    next_task.cancel()
+                    try:
+                        t_resp = await next_task
+                        if t_resp is not None:
+                            await t_resp.aclose()
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                elif next_task is not None and next_task.done():
+                    try:
+                        t_resp = next_task.result()
+                        if t_resp is not None:
+                            await t_resp.aclose()
+                    except Exception:
+                        pass
                 await resp0.aclose()
-                await client.aclose()
 
         log.info(
             "live playback bounded range proxy 200 [vid=%s, mime=%s, total=%s]",

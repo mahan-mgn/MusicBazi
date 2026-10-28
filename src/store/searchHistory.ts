@@ -1,11 +1,17 @@
 import { create } from 'zustand'
 
+import { onIdentityChange } from '../lib/identity'
+import { scopedKey } from '../lib/storage'
+
 const KEY = 'search:history'
 const MAX = 8
 
+/** حساب‌محور — عبارت‌هایی که یک نفر جستجو کرده نباید به حسابِ بعدی نشان داده شود */
+const key = () => scopedKey(KEY)
+
 function read(): string[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(key())
     const parsed = raw ? JSON.parse(raw) : []
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []
   } catch {
@@ -15,7 +21,7 @@ function read(): string[] {
 
 function write(items: string[]) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(items))
+    localStorage.setItem(key(), JSON.stringify(items))
   } catch {
     // سهمیه‌ی localStorage پر است — تاریخچه صرفاً یک راحتی است، نه چیز حیاتی
   }
@@ -48,3 +54,6 @@ export const useSearchHistory = create<SearchHistoryState>((set, get) => ({
     set({ items: [] })
   },
 }))
+
+// ورود/خروج بدونِ رفرش: فهرستِ حسابِ قبلی نباید در حسابِ تازه بماند
+onIdentityChange(() => useSearchHistory.setState({ items: read() }))

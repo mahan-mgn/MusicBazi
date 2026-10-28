@@ -53,7 +53,6 @@ try:
 except ImportError:
     pass
 
-
 # جایی که فایل‌های دانلودشده نگه داشته می‌شوند
 DOWNLOAD_DIR = Path(_env("DOWNLOAD_DIR", str(BASE_DIR / "downloads")))
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,6 +66,11 @@ DB_PATH = Path(_env("DB", str(DATA_DIR / "musicbazi.db")))
 STREAM_CACHE_DIR = Path(_env("STREAM_CACHE_DIR", str(DATA_DIR / "cache" / "stream")))
 STREAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 STREAM_CACHE_MAX_MB = int(_env("STREAM_CACHE_MAX_MB", "1024"))
+
+# کشِ درون‌حافظه‌ایِ URLِ رزولوشن‌شده (فاز پخش بی‌درنگ). هر پلی که کش بخورد یک
+# دور رزولوشن InnerTubeX/yt-dlp کمتر می‌خورد. صفر یعنی کش خاموش (تست‌ها).
+RESOLVED_URL_CACHE_TTL = float(_env("RESOLVED_URL_CACHE_TTL", "1800"))
+RESOLVED_URL_CACHE_MAX = int(_env("RESOLVED_URL_CACHE_MAX", "256"))
 
 # چند دانلود همزمان — بیشتر از این هم به یوتیوب فشار می‌آورد هم throttle می‌خوریم
 MAX_CONCURRENT_DOWNLOADS = int(_env("CONCURRENCY", "3"))
@@ -145,7 +149,7 @@ YTDLP_PROXY = _env("YTDLP_PROXY") or PROXY
 # (اسپاتیفای/اپل/دیزر) نوشته می‌شوند چون tagging از Track می‌آید نه از منبع صوت.
 AUDIO_SOURCES = tuple(
     s.strip()
-    for s in _env("AUDIO_SOURCES", "soundcloud,youtube,youtube_music").split(",")
+    for s in _env("AUDIO_SOURCES", "soundcloud,youtube_music,youtube").split(",")
     if s.strip()
 )
 
@@ -455,6 +459,74 @@ ALLOWED_ORIGINS = tuple(
         + [o.strip() for o in _env("ALLOWED_ORIGINS", "").split(",") if o.strip()]
     )
 )
+
+# ---------- حساب کاربری ----------
+
+# پیامی که در حالتِ اینترانت به‌جای خطای شبکه بالا می‌رود. کد ۵۰۳ عمدی است و
+# نه ۵۰۲: مشکل از بالادست نیست، این *سرویس* موقتاً نمی‌تواند کاری بکند — و
+# فرانت با همین کد تشخیص می‌دهد که پیامِ «اینترانت» نشان بدهد نه «خطا».
+#
+# این‌جا نشسته و نه در `main.py` چون `auth_api` هم لازمش دارد (ورودِ گوگل در
+# قطعیِ بین‌الملل) و آن ماژول نمی‌تواند از `main` ایمپورت کند.
+INTRANET_DETAIL = "اینترنت بین‌الملل در دسترس نیست — فقط چیزهای ذخیره‌شده باز می‌شوند"
+
+# قصه‌ی احراز هویت این‌جاست: هیچ جدولِ کاربری وجود نداشت و همه‌ی داده سراسری
+# بود. حالا چند حساب می‌توانند روی همین سرور زندگی کنند. ورود عمداً *اختیاری*
+# است: درخواستِ بدونِ توکن همان کاربرِ `local` (مهمان) است، پس اپ بی‌ورود هم
+# مثل قبل کار می‌کند و هیچ صفحه‌ای قفل نمی‌شود.
+
+# نشست چقدر زنده بماند (روز). بلند انتخاب شده چون اینترنتِ بین‌الملل در ایران
+# قطع می‌شود و کسی که یک‌بار وارد شده باید ماه‌ها بدونِ دسترسی به گوگل کار کند.
+AUTH_SESSION_DAYS = int(_env("AUTH_SESSION_DAYS", "400"))
+
+# عمرِ توکنِ مدیا (ثانیه). `<audio src>` و `EventSource` نمی‌توانند هدرِ
+# `Authorization` بفرستند، پس توکن در query می‌آید — و چیزی که در URL می‌نشیند
+# در لاگ هم می‌نشیند. کوتاه نگه داشته می‌شود و فقط روی مسیرهای پخش اثر دارد.
+AUTH_MEDIA_TTL = int(_env("AUTH_MEDIA_TTL", "3600"))
+
+# فایلِ رازِ امضای توکن‌ها. زیرِ `DATA_DIR` است تا روی volume داکر و
+# `$HOME/musicbazi/data` در Termux بماند — وگرنه هر بازسازی، همه‌ی نشست‌ها را
+# باطل می‌کرد.
+AUTH_SECRET_PATH = DATA_DIR / "auth_secret"
+
+# پوشه‌ی آواتارها. یک فایل برای هر کاربر، روی همان بازنویسی می‌شود.
+AVATAR_DIR = DATA_DIR / "avatars"
+
+# سقفِ حجمِ آواتار پیش از کوچک‌سازی
+AVATAR_MAX_BYTES = int(_env("AVATAR_MAX_BYTES", str(5 * 1024 * 1024)))
+
+# کلیدهای گوگل OAuth. نبودشان یعنی «گوگل تنظیم نشده» و دکمه‌اش در UI می‌ماند.
+GOOGLE_CLIENT_ID = _env("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = _env("GOOGLE_CLIENT_SECRET")
+
+# ریشه‌ی عمومیِ سرور — دامنه‌ی تونل یا `http://localhost:8080`.
+#
+# گوگل برای redirect فقط `https` (یا `localhost`) قبول می‌کند، پس روی آدرسِ
+# `http://192.168.x.x` ورودِ گوگل ذاتاً ممکن نیست و حساب محلی باید کار را
+# راه بیندازد. این مقدار باید دقیقاً با یکی از Redirect URIهای ثبت‌شده در
+# Google Console یکی باشد، وگرنه گوگل با `redirect_uri_mismatch` رد می‌کند.
+AUTH_BASE_URL = (_env("AUTH_BASE_URL") or "").rstrip("/")
+
+# ریشه‌های دیگری که ورودِ گوگل از آن‌ها هم مجاز است — با کاما جدا می‌شوند.
+#
+# گوگل redirect URI را *دقیق* مچ می‌کند، پس با یک دامنه‌ی ثابت نمی‌شود هم روی
+# دامنه و هم روی `localhost` وارد شد: هر کدام URIِ جداگانه‌ای است که باید در
+# همان Google Console ثبت شود. این لیست همان‌ها را کنارِ `AUTH_BASE_URL`
+# می‌گذارد و سرور موقعِ ورود، ریشه را از روی `Origin`ِ همان درخواست انتخاب
+# می‌کند — پس هر دو مسیر با یک اجرا کار می‌کنند.
+#
+# **امنیت:** فقط ریشه‌های همین لیست (و `AUTH_BASE_URL`) قبول می‌شوند. اگر
+# ریشه را کورکورانه از هدر بگیریم، مهاجم می‌تواند ورود را به دامنه‌ی خودش
+# بکشاند و کدِ کاربر را بگیرد.
+AUTH_ALLOWED_ORIGINS = tuple(
+    o.strip().rstrip("/")
+    for o in (_env("AUTH_ALLOWED_ORIGINS") or "").split(",")
+    if o.strip()
+)
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 ITUNES_API = "https://itunes.apple.com"
 DEEZER_API = "https://api.deezer.com"

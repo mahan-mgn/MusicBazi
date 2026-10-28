@@ -70,6 +70,10 @@ export default function SourcePicker({
 
   const supported = API_MODE === 'http'
   const items = options ?? []
+  const searchedSources = new Set<Source>(searched)
+  for (const item of items) {
+    if (item.source) searchedSources.add(item.source)
+  }
 
   return (
     <div
@@ -158,7 +162,7 @@ export default function SourcePicker({
           )}
         </div>
 
-        {supported && !searched.includes('soundcloud') && (
+        {supported && !searchedSources.has('soundcloud') && (
           <div className="border-t border-line-soft px-4 py-2.5">
             <button
               onClick={() => void load('soundcloud')}

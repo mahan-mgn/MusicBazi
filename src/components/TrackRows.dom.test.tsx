@@ -3,8 +3,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Track } from '../lib/types'
+import { useDownloads } from '../store/downloads'
 import { usePlayer } from '../store/player'
 import AlbumTrackRow from './AlbumTrackRow'
+import ArtistTrackRow, { ARTIST_TRACK_GRID } from './ArtistTrackRow'
 import TrackRow from './TrackRow'
 
 // @ts-expect-error React act environment flag
@@ -149,5 +151,75 @@ describe('AlbumTrackRow & TrackRow interactions', () => {
     const row = container.querySelector('div.group')
     expect(row?.classList.contains('bg-accent/8')).toBe(true)
     expect(container.querySelector('span.text-accent')).not.toBeNull()
+  })
+
+  it('ArtistTrackRow uses ARTIST_TRACK_GRID for stable column alignment', () => {
+    act(() => {
+      root.render(
+        <ArtistTrackRow
+          track={mockTrack}
+          index={1}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+        />,
+      )
+    })
+
+    const row = container.querySelector('div.group')
+    expect(row).not.toBeNull()
+    for (const cls of ARTIST_TRACK_GRID.split(' ')) {
+      expect(row?.classList.contains(cls)).toBe(true)
+    }
+
+    // Actions container has justify-self-end to keep actions cleanly at the column end
+    const actionsDiv = row?.querySelector('.justify-self-end')
+    expect(actionsDiv).not.toBeNull()
+  })
+
+  it('ArtistTrackRow preserves ARTIST_TRACK_GRID when track is downloaded with lyrics', () => {
+    useDownloads.setState({
+      jobs: [
+        {
+          id: 'job-1',
+          batchId: 'batch-1',
+          track: mockTrack,
+          quality: '320',
+          status: 'ready',
+          percent: 100,
+          format: 'mp3_320',
+          fileUrl: 'https://example.com/audio.mp3',
+          lyricsUrl: 'https://example.com/lyrics.lrc',
+          createdAt: Date.now(),
+        },
+      ],
+    })
+
+    act(() => {
+      root.render(
+        <ArtistTrackRow
+          track={mockTrack}
+          index={1}
+          playingId={null}
+          onTogglePlay={vi.fn()}
+        />,
+      )
+    })
+
+    const row = container.querySelector('div.group')
+    expect(row).not.toBeNull()
+    for (const cls of ARTIST_TRACK_GRID.split(' ')) {
+      expect(row?.classList.contains(cls)).toBe(true)
+    }
+
+    // Both lyrics link and download badge are present
+    const lyricsLink = container.querySelector('a[href="https://example.com/lyrics.lrc"]')
+    expect(lyricsLink).not.toBeNull()
+
+    const downloadLink = container.querySelector('a[href="https://example.com/audio.mp3"]')
+    expect(downloadLink).not.toBeNull()
+
+    // Actions container maintains stable alignment classes
+    const actionsDiv = row?.querySelector('.justify-self-end')
+    expect(actionsDiv?.classList.contains('justify-end')).toBe(true)
   })
 })

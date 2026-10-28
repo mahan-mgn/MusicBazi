@@ -606,6 +606,78 @@ export interface MusicApi {
   unfollow(chatId: number, artistId: string): Promise<void>
   /** فایل استریم را در کش آماده می‌کند؛ وقتی آماده شد true و در خطا false برمی‌گرداند. */
   prefetchStream?(track: Track, quality?: Quality | null): Promise<boolean>
+
+  // ---------- حساب کاربری ----------
+
+  /**
+   * چه راه‌های ورودی روی این سرور زنده‌اند.
+   *
+   * بدونش دکمه‌ی گوگل روی سروری که کلیدش را ندارد هم نشان داده می‌شود و
+   * کاربر به صفحه‌ی خطا می‌رسد.
+   */
+  authProviders(signal?: AbortSignal): Promise<AuthProviders>
+  /** پروفایلِ کاربرِ لاگین‌شده. توکن نباشد `AuthRequired` پرت می‌شود. */
+  authMe(signal?: AbortSignal): Promise<AuthUser>
+  authRegister(input: { username: string; password: string; displayName?: string }): Promise<AuthSession>
+  authLogin(input: { username: string; password: string }): Promise<AuthSession>
+  /** فقط برای تقارن؛ توکن خودبسنده است و سمتِ سرور باطل نمی‌شود. */
+  authLogout(): Promise<void>
+  authUpdateProfile(patch: { displayName?: string; username?: string }): Promise<AuthUser>
+  /**
+   * توکنِ کوتاه‌عمر برای آدرس‌هایی که هدر نمی‌فرستند
+   * (`<audio src>`، `<img>`، `EventSource`).
+   */
+  authMediaToken(): Promise<MediaToken>
+  authUploadAvatar(file: File): Promise<AuthUser>
+  authRemoveAvatar(): Promise<AuthUser>
+}
+
+/** پروفایلِ کاربر — همان چیزی که سرور می‌فرستد. */
+export interface AuthUser {
+  id: string
+  kind: 'local' | 'google' | 'guest' | string
+  username: string | null
+  displayName: string
+  email: string | null
+  /** آدرسِ آماده‌ی `<img>`؛ سرور بین فایلِ محلی و عکسِ گوگل انتخاب می‌کند */
+  avatarUrl: string | null
+  hasPassword: boolean
+  createdAt: number
+}
+
+export interface AuthSession {
+  token: string
+  expiresAt: number
+  user: AuthUser
+}
+
+export interface AuthProviders {
+  google: boolean
+  /**
+   * چرا گوگل نیست. `not_configured` یعنی کلیدها نیستند؛ `needs_https` یعنی
+   * آدرسِ بازگشت روی دامنه‌ی فعلی را گوگل قبول نمی‌کند — و این دومی چیزی است
+   * که کاربر باید بداند تا بتواند کاری بکند.
+   */
+  googleReason: 'not_configured' | 'needs_https' | null
+}
+
+export interface MediaToken {
+  token: string
+  expiresAt: number
+}
+
+/**
+ * توکن نبود یا باطل بود.
+ *
+ * از `Error` جدا است چون واکنشِ درست فرق دارد: خطای معمولی یعنی «دوباره
+ * تلاش کن»، این یعنی «برو تو لاگین شو». بدونِ تفکیک، یک توکنِ منقضی در همه‌ی
+ * صفحه‌ها به‌شکلِ «چیزی خراب شد» دیده می‌شود.
+ */
+export class AuthRequired extends Error {
+  constructor(message = 'برای این کار باید وارد حساب شوی') {
+    super(message)
+    this.name = 'AuthRequired'
+  }
 }
 
 /**

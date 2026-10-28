@@ -27,6 +27,39 @@ function store(): Storage | null {
   }
 }
 
+/**
+ * پسوندِ کلیدهای شخصی‌سازی‌شده برای هر حساب.
+ *
+ * کتابخانه و آمار روی سرور از هم جدا شده‌اند، ولی این چند تکه (تاریخچه‌ی
+ * جستجو، «ادامه بده»، سنجاق‌های آفلاین) فقط در مرورگر می‌مانند. با کلیدِ
+ * مشترک، حسابِ دوم روی همان دستگاه تاریخچه و آرشیوِ حسابِ اول را می‌دید.
+ *
+ * **مهمان پسوند نمی‌گیرد** تا داده‌ی نسخه‌ی تک‌کاربره سرِ جایش بماند و
+ * کاربرِ بی‌حساب چیزی از دست ندهد.
+ */
+export function scopedKey(key: string): string {
+  const user = currentUserId()
+  return user ? `${key}:${user}` : key
+}
+
+/**
+ * شناسه‌ی کاربرِ فعلی، خوانده از همان محلِ ذخیره‌ی توکن.
+ *
+ * مستقیم از `localStorage` و نه از `auth.ts`: آن ماژول خودش از این import
+ * می‌کند، و کشیدنِ شناسه به داخلِ `auth.ts` یعنی هر استوری که کلید می‌سازد
+ * به آن بسته شود. فرمتِ توکن `<user_id>:<exp>:<sig>` است.
+ */
+function currentUserId(): string | null {
+  try {
+    const raw = store()?.getItem('auth:token')
+    if (!raw) return null
+    const id = raw.split(':')[0]?.trim()
+    return id && id !== 'local' ? id : null
+  } catch {
+    return null
+  }
+}
+
 /** مقدارِ ذخیره‌شده، یا `null` اگر نبود/نشد */
 export function readStored(key: string): string | null {
   try {

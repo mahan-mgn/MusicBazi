@@ -124,7 +124,11 @@ class ScenarioPrimary:
         self.calls: dict[str, int] = {}
         self.total = 0
 
-    async def resolve_stream(self, video_id: str, purpose: str = "playback", quality=None):
+    # `cookie` را می‌پذیرد ولی استفاده نمی‌کند: resolver واقعی همان را پاس می‌دهد
+    # (کوکیِ هر کاربر) و بدون آن `TypeError` می‌شد.
+    async def resolve_stream(
+        self, video_id: str, purpose: str = "playback", quality=None, user_id="local", cookie=None
+    ):
         self.total += 1
         self.calls[video_id] = self.calls.get(video_id, 0) + 1
         if self.kind == "fail":
@@ -431,7 +435,7 @@ class TestHlsExpirationRecovery:
             return base_handler(request)
 
         # recovery به progressive می‌رسد
-        async def progressive_stream(video_id, purpose="playback", quality=None):
+        async def progressive_stream(video_id, purpose="playback", quality=None, user_id="local", cookie=None):
             return make_stream(
                 video_id,
                 f"https://rr1---sn-abc.googlevideo.com/videoplayback?id={video_id}&sig=P",
@@ -547,7 +551,7 @@ class TestHlsConcurrency:
         gate = asyncio.Event()
         inner = streamer.resolver.primary
 
-        async def gated(video_id, purpose="playback", quality=None):
+        async def gated(video_id, purpose="playback", quality=None, user_id="local", cookie=None):
             await gate.wait()
             return await inner.resolve_stream(video_id, purpose, quality)
 
@@ -672,7 +676,7 @@ class TestProgressiveRegression:
 
         streamer._http_transport = httpx.MockTransport(prog_handler)
 
-        async def progressive(video_id, purpose="playback", quality=None):
+        async def progressive(video_id, purpose="playback", quality=None, user_id="local", cookie=None):
             return make_stream(
                 video_id,
                 f"https://rr1---sn-abc.googlevideo.com/videoplayback?id={video_id}&sig=P",
@@ -858,7 +862,7 @@ class TestPhase15Soak100:
         gate = asyncio.Event()
         inner = streamer.resolver.primary
 
-        async def gated(video_id, purpose="playback", quality=None):
+        async def gated(video_id, purpose="playback", quality=None, user_id="local", cookie=None):
             await gate.wait()
             return await inner.resolve_stream(video_id, purpose, quality)
 

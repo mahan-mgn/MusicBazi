@@ -67,7 +67,7 @@ def test_a_wrong_offline_verdict_is_corrected_by_the_next_search(client, monkeyp
     _pretend_offline()
     _probe_says(True, monkeypatch)
 
-    async def fake_search(http, query):
+    async def fake_search(http, query, uid="local"):
         return SearchResults(query=query, tracks=[LIVE])
 
     monkeypatch.setattr(catalog, "search", fake_search)
@@ -128,7 +128,7 @@ def test_an_uncached_album_retries_live_before_giving_up(client, monkeypatch, al
 
     detail = AlbumDetail(**album.model_dump(), durationMs=0, tracks=[LIVE])
 
-    async def fake_ref(http, ref):
+    async def fake_ref(http, ref, uid="local"):
         return detail
 
     monkeypatch.setattr(catalog, "resolve_ref", fake_ref)
@@ -169,7 +169,7 @@ def test_an_online_artist_visit_is_always_fetched_fresh(client, monkeypatch, art
         sourceUrl="https://example.com/new",
     )
 
-    async def fake_artist(http, ref):
+    async def fake_artist(http, ref, uid="local"):
         return ArtistDetail(**artist.model_dump(), topTracks=[fresh_track])
 
     monkeypatch.setattr(catalog, "resolve_artist", fake_artist)

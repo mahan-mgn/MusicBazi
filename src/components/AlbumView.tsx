@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { api } from '../lib/api'
 import { cleanArtist, digits, safeFilename } from '../lib/format'
 import { useI18n } from '../lib/i18n'
-import { dominantColor } from '../lib/artColor'
+import { pageCache } from '../lib/pageCache'
 import { findBestJob, toPlayItem } from '../lib/stream'
 import { downloadFile } from '../lib/native'
 import { SOURCE_LABEL, type Album, type AlbumDetail, type Track } from '../lib/types'
@@ -11,6 +11,7 @@ import { isActive, isDone, useDownloads } from '../store/downloads'
 import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
 import { useToasts } from '../store/toasts'
+import { prewarmTrack } from '../lib/prewarm'
 import AlbumTrackRow from './AlbumTrackRow'
 import Artwork, { HeroBackdrop } from './Artwork'
 import ClickSpark from './ClickSpark'
@@ -136,7 +137,6 @@ export default function AlbumView({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectionMode, setSelectionMode] = useState(false)
   const [zipping, setZipping] = useState(false)
-  const [tint, setTint] = useState<[number, number, number] | null>(null)
   const [moreAlbums, setMoreAlbums] = useState<Album[]>([])
   const [isScrolledPast, setIsScrolledPast] = useState(false)
   const heroRef = useRef<HTMLDivElement>(null)
@@ -163,6 +163,16 @@ export default function AlbumView({
     ),
   )
 
+  // پیش‌گرم‌کردن ترک اول آلبوم در بک‌گراند تا اگر کاربر روی پخش کلیک کرد، بی‌درنگ شروع شود
+  useEffect(() => {
+    if (!album.tracks || album.tracks.length === 0) return
+    const firstTrack = album.tracks[0]
+    const timer = window.setTimeout(() => {
+      prewarmTrack(firstTrack, quality)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [album, quality])
+
   const allSelected = selected.size === album.tracks.length && album.tracks.length > 0
   const targets = selected.size ? album.tracks.filter((x) => selected.has(x.id)) : album.tracks
 
@@ -176,24 +186,35 @@ export default function AlbumView({
       return next
     })
 
-  // رنگِ غالبِ کاور
-  useEffect(() => {
-    let cancelled = false
-    void dominantColor(album.artworkUrl).then((c) => {
-      if (!cancelled) setTint(c)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [album.artworkUrl])
+  /*
+   * تمِ صفحه دیگر این‌جا ساخته نمی‌شود.
+   *
+   * پس‌زمینه‌ی تمام‌صفحه باید ستون‌های کناریِ `max-w-5xl` را هم بپوشاند و
+   * ریشه‌ی این ویو داخلِ آن ستون است، پس لایه به شل منتقل شد
+   * (`App.tsx` → `.page-tint`). `--tint-*`/`--page-*` همچنان از `@property`
+   * با `inherits: true` به این‌جا می‌رسند و گرادیان‌های درون‌خطیِ هیرو
+   * پایین‌تر دست‌نخورده کار می‌کنند.
+   */
 
-  const anyTint = tint ? tint.join(',') : '107,107,107'
-
-  // واکشی سایر آثار هنرمند به صورت پس‌زمینه
+  /*
+   * واکشی سایر آثار هنرمند به صورت پس‌زمینه.
+   *
+   * از کشِ صفحه‌ها رد می‌شود، نه `api.getArtist`ِ خام. مسیرِ عادیِ رسیدن به این
+   * صفحه از خودِ صفحه‌ی هنرمند است؛ آن‌جا همین payload با همین کلید در کشِ
+   * `pageCache.artist` نشسته و فراخوانیِ مستقیم یعنی دانلودِ دوباره‌ی کلِ
+   * دیسکوگرافی (ده‌ها آلبوم + ترک) برای چیزی که از قبل در حافظه است. علاوه بر
+   * آن، `load` درخواست‌های هم‌زمانِ یک کلید را یکی می‌کند — بدونش در StrictMode
+   * این افکت دو بار اجرا می‌شد و دو درخواستِ کامل به پلتفرم می‌رفت.
+   */
   useEffect(() => {
     if (!album.artistId) return
     let cancelled = false
-    api.getArtist(album.artistId)
+    const key = `artist:${album.artistId}`
+    const cached = pageCache.artist.read(key)
+    const request = cached
+      ? Promise.resolve(cached)
+      : pageCache.artist.load(key, (signal) => api.getArtist(album.artistId!, signal))
+    request
       .then((detail) => {
         if (cancelled) return
         const others = detail.albums.filter((a) => a.id !== album.id && a.title !== album.title)
@@ -219,9 +240,26 @@ export default function AlbumView({
     return () => observer.disconnect()
   }, [])
 
-  // پلی‌لیست و تک‌آهنگ هم در همین قالب می‌آیند
-  const typeLabel =
-    album.id.includes(':playlist:') ? t.typePlaylist : album.tracks.length === 1 ? t.typeSong : t.typeAlbum
+  /*
+   * برچسبِ نوعِ اثر — پلی‌لیست، تک‌آهنگ، EP یا آلبوم.
+   *
+   * `releaseType` (که خودِ پلتفرم می‌دهد) بر حدسِ فرانت مقدم است. قبلاً فقط
+   * شناسه چک می‌شد و هر ادیتوری با `:playlist:` در شناسه‌اش «پلی‌لیست»
+   * برچسب می‌خورد — از جمله ساندکلاد که همان کالکشن را EP می‌داند و صفحه‌ی
+   * هنرمند هم «EP» نشانش می‌دهد. یک اثرِ یکسان دو برچسبِ متفاوت می‌گرفت
+   * بسته به این‌که از کدام صفحه بازش کنی.
+   *
+   * ترتیب: نوعِ رسمی → تک‌ترکی → پلی‌لیستِ واقعی (شناسه، بی‌نوعِ رسمی) → آلبوم.
+   */
+  const typeLabel = album.releaseType
+    ? { album: t.typeAlbum, single: t.typeSingle ?? t.typeSong, ep: 'EP', compilation: t.typeAlbum }[
+        album.releaseType
+      ]
+    : album.tracks.length === 1
+      ? t.typeSong
+      : album.id.includes(':playlist:')
+        ? t.typePlaylist
+        : t.typeAlbum
 
   /** تمام ترک‌های آلبوم با متادیتای غنی‌شده (کاور و عنوان والد) قابل پخش‌اند */
   const playableItems = useMemo(
@@ -235,7 +273,7 @@ export default function AlbumView({
           artistId: track.artistId || (track.artist === album.artist ? album.artistId : undefined),
           artistArtworkUrl: track.artistArtworkUrl || (track.artist === album.artist ? album.artistArtworkUrl : undefined),
         }
-        const job = findBestJob(readyJobs, track.id, quality)
+        const job = findBestJob(readyJobs, track.id, quality, enriched)
         return toPlayItem(enriched, job, quality)
       }),
     [album.artist, album.artistId, album.artistArtworkUrl, album.artworkUrl, album.id, album.title, album.tracks, readyJobs, quality],
@@ -254,27 +292,6 @@ export default function AlbumView({
 
   const isTrackFromAlbumActive = Boolean(currentTrackId && albumTrackIds.has(currentTrackId))
   const isThisAlbumPlaying = (isCurrentAlbumQueue || isTrackFromAlbumActive) && isPlaying
-
-  // پیش‌گرم‌سازی ۳ ترک اول آلبوم در پس‌زمینه — وابسته به شناسه‌های آماده، نه آبجکتِ jobs
-  const readyTrackIds = useMemo(() => new Set(readyJobs.map((j) => j.track.id)), [readyJobs])
-  useEffect(() => {
-    const tracksToWarm = album.tracks.slice(0, 3)
-    if (!tracksToWarm.length) return
-
-    const timers: ReturnType<typeof setTimeout>[] = []
-    tracksToWarm.forEach((track, i) => {
-      if (readyTrackIds.has(track.id)) return
-
-      const timer = setTimeout(() => {
-        void api.prefetchStream?.(track)
-      }, i * 600)
-      timers.push(timer)
-    })
-
-    return () => {
-      timers.forEach((t) => clearTimeout(t))
-    }
-  }, [album.id, album.tracks, readyTrackIds])
 
   const handleTrackToggle = useCallback(
     (track: Track) => {
@@ -348,7 +365,14 @@ export default function AlbumView({
   }
 
   return (
-    <div className="rise pb-6">
+    /*
+     * سه‌گانه‌های تم روی *ریشه‌ی ویو* می‌نشینند، نه روی هیرو — تا واشِ رنگی
+     * تمامِ ارتفاعِ صفحه را بگیرد. هیرو `background` درون‌خطیِ خودش را نگه
+     * می‌دارد و همان varها را به ارث می‌برد (`@property`ها inherits: true
+     * ثبت شده‌اند). `tint-page` پس‌زمینه را می‌کشد و `isolation`ش نمی‌گذارد
+     * لایه‌ی بلورِ `-z-10`ِ هیرو زیرش ناپدید شود.
+     */
+    <div className="rise tint-page pb-6">
       {/* دکمه‌ی بازگشت */}
       <div className="mb-2 px-1 pt-1 sm:px-2">
         <button
@@ -366,8 +390,8 @@ export default function AlbumView({
         className="relative -mx-2 -mt-2 mb-6 overflow-hidden rounded-3xl p-4 sm:-mx-4 sm:p-7 md:p-8"
         style={{
           background: `
-            radial-gradient(ellipse 90% 70% at 50% -10%, rgb(${anyTint} / 0.42), transparent 75%),
-            linear-gradient(to bottom, rgb(${anyTint} / 0.16) 0%, transparent 100%)
+            radial-gradient(ellipse 90% 70% at 50% -10%, rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.42), transparent 75%),
+            linear-gradient(to bottom, rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.16) 0%, transparent 100%)
           `,
         }}
       >
@@ -382,6 +406,16 @@ export default function AlbumView({
         >
           <HeroBackdrop src={album.artworkUrl} seed={album.id} />
         </div>
+
+        {/*
+         * گاردِ متنی: واشِ رنگی از خودِ کاور می‌آید و می‌تواند روشن باشد؛ این
+         * نوار با آلفای تختِ نیمه‌ی پایینی‌اش خواناییِ عنوان و متادیتا را تضمین
+         * می‌کند. عددش با TEXT_GUARD_ALPHA در lib/pageTheme.ts گره خورده است.
+         */}
+        <div
+          aria-hidden
+          className="tint-text-guard pointer-events-none absolute inset-x-0 bottom-0 h-3/5"
+        />
 
         <div className="relative flex flex-col gap-6 sm:flex-row sm:items-end sm:gap-8">
           {/* بخش کاور با دیسک وینیل */}
@@ -398,7 +432,7 @@ export default function AlbumView({
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0 rounded-2xl opacity-60 blur-2xl transition-opacity duration-500 group-hover/cover:opacity-85"
-              style={{ background: `rgb(${anyTint} / 0.7)` }}
+              style={{ background: 'rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.7)' }}
             />
 
             {/* جلد آلبوم */}
@@ -589,8 +623,15 @@ export default function AlbumView({
         </div>
       )}
 
-      {/* نوار چسبان: نمایش کنترل‌ها و مینی‌پلیر هنگام اسکرول */}
-      <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-3 flex items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 sm:gap-3 sm:px-4 sm:py-2.5">
+      {/*
+       * نوار چسبان: نمایش کنترل‌ها و مینی‌پلیر هنگام اسکرول.
+       *
+       * `min-h` عمدی است: دو حالتِ این نوار ارتفاعِ طبیعیِ متفاوتی دارند
+       * (حالتِ انتخاب تک‌خطی است، مینی‌پلیر دو خط متن + کاور دارد) و بدونِ کفِ
+       * ارتفاع، لحظه‌ی رد‌شدن از هیرو یک پرشِ چند پیکسلی در کلِ جدولِ ترک‌ها
+       * دیده می‌شد. کفِ ارتفاع را روی حالتِ بلندتر می‌گذاریم.
+       */}
+      <div className="glass-bar sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 mb-3 flex min-h-[3.25rem] items-center justify-between gap-2 rounded-2xl border-b border-line-soft px-3 py-2 sm:min-h-[3.5rem] sm:gap-3 sm:px-4 sm:py-2.5">
         {/* در حالت اسکرول: مینی پلیر آلبوم ظاهر می‌شود */}
         {isScrolledPast ? (
           <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">

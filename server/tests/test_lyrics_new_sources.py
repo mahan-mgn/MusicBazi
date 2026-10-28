@@ -371,7 +371,7 @@ class TestGeniusManualOnlyPolicy:
 
     def test_genius_is_absent_from_the_automatic_chain(self, monkeypatch):
         monkeypatch.delenv("MUSICBAZI_LYRICS_GENIUS_POLICY", raising=False)
-        monkeypatch.setattr("app.providers.genius.GENIUS_ACCESS_TOKEN", "t")
+        monkeypatch.setattr("app.config.GENIUS_ACCESS_TOKEN", "t")
 
         manager = LyricsManager()
 

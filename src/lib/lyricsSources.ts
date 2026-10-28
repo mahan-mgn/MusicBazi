@@ -1,5 +1,19 @@
+import { cachedMediaToken, token, withMediaToken } from './auth'
 import { apiUrl } from './server'
 import type { Track } from './types'
+
+/**
+ * هدرِ نشست برای مسیرهایی که کلیدِ شخصی می‌خوانند.
+ *
+ * `/api/lyrics/sources` و `/api/lyrics/preference` با `optional_user` کار
+ * می‌کنند: بی‌توکن یعنی مهمان. نتیجه‌اش دو باگِ بی‌صدا بود — منوی منبع با
+ * کلیدهای مهمان ساخته می‌شد (پس توکنِ Geniusِ خودِ کاربر «تنظیم نشده» دیده
+ * می‌شد) و ترجیح در ردیفِ `local` می‌نشست، یعنی برای همه.
+ */
+function authHeaders(): Record<string, string> {
+  const value = token()
+  return value ? { authorization: `Bearer ${value}` } : {}
+}
 
 /**
  * کلاینتِ انتخابِ منبعِ متن.
@@ -120,7 +134,13 @@ export async function fetchLyricsFromSource(
   params.set('provider', provider)
   if (force) params.set('force', 'true')
   try {
-    const response = await fetch(apiUrl(`/api/stream/lyrics?${params.toString()}`))
+    // مسیرِ مدیا هدر نمی‌گیرد، پس توکن در query می‌رود — وگرنه انتخابِ منبع
+    // برای کاربرِ واردشده به مهمان تفسیر می‌شود و کوکیِ او استفاده نمی‌شود.
+    const url = withMediaToken(
+      apiUrl(`/api/stream/lyrics?${params.toString()}`),
+      cachedMediaToken(),
+    )
+    const response = await fetch(url)
     if (response.ok) {
       return { text: await response.text() }
     }
@@ -158,7 +178,9 @@ function trackParams(track: Track): URLSearchParams {
  */
 export async function fetchLyricsSources(track: Track): Promise<LyricsSourcesResponse | null> {
   try {
-    const response = await fetch(apiUrl(`/api/lyrics/sources?${trackParams(track).toString()}`))
+    const response = await fetch(apiUrl(`/api/lyrics/sources?${trackParams(track).toString()}`), {
+      headers: authHeaders(),
+    })
     if (!response.ok) return null
     const body = (await response.json()) as LyricsSourcesResponse
     if (!body || !Array.isArray(body.sources)) return null
@@ -173,6 +195,7 @@ export async function fetchLyricsPreference(trackId: string): Promise<string | n
   try {
     const response = await fetch(
       apiUrl(`/api/lyrics/preference?track_id=${encodeURIComponent(trackId)}`),
+      { headers: authHeaders() },
     )
     if (!response.ok) return null
     const body = (await response.json()) as { provider?: string | null }
@@ -195,7 +218,7 @@ export async function saveLyricsPreference(trackId: string, provider: string): P
         `/api/lyrics/preference?track_id=${encodeURIComponent(trackId)}` +
           `&provider=${encodeURIComponent(provider)}`,
       ),
-      { method: 'PUT' },
+      { method: 'PUT', headers: authHeaders() },
     )
     return response.ok
   } catch {
@@ -208,7 +231,7 @@ export async function clearLyricsPreference(trackId: string): Promise<boolean> {
   try {
     const response = await fetch(
       apiUrl(`/api/lyrics/preference?track_id=${encodeURIComponent(trackId)}`),
-      { method: 'DELETE' },
+      { method: 'DELETE', headers: authHeaders() },
     )
     return response.ok
   } catch {
@@ -220,5 +243,8 @@ export async function clearLyricsPreference(trackId: string): Promise<boolean> {
 export function streamLyricsUrlForProvider(track: Track, provider: string): string {
   const params = trackParams(track)
   params.set('provider', provider)
-  return apiUrl(`/api/stream/lyrics?${params.toString()}`)
+  return withMediaToken(
+    apiUrl(`/api/stream/lyrics?${params.toString()}`),
+    cachedMediaToken(),
+  )
 }

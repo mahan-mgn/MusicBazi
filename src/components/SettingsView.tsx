@@ -88,6 +88,8 @@ const SETTING_KEYS = [
   'ui:reduceMotion',
   'audio:normalize',
   'audio:crossfade',
+  'audio:automix',
+  'audio:smartDj',
   'audio:eqBands',
   'audio:tone',
   'audio:balance',
@@ -124,6 +126,10 @@ export default function SettingsView({ onSetup, onServer }: Props) {
   const setBoost = useSettings((s) => s.setBoost)
   const crossfade = useSettings((s) => s.crossfade)
   const setCrossfade = useSettings((s) => s.setCrossfade)
+  const automix = useSettings((s) => s.automix)
+  const setAutomix = useSettings((s) => s.setAutomix)
+  const smartDj = useSettings((s) => s.smartDj)
+  const setSmartDj = useSettings((s) => s.setSmartDj)
   const eqBands = useSettings((s) => s.eqBands)
   const setEqBands = useSettings((s) => s.setEqBands)
   const eqEnabled = useSettings((s) => s.eqEnabled)
@@ -372,6 +378,22 @@ export default function SettingsView({ onSetup, onServer }: Props) {
           format={(v) => (v === 0 ? t.crossfadeOff : t.crossfadeValue(v))}
           onChange={setCrossfade}
         />
+        {crossfade > 0 && (
+          <>
+            <ToggleRow
+              label={t.automix}
+              hint={t.automixHint}
+              checked={automix}
+              onChange={setAutomix}
+            />
+            <ToggleRow
+              label={t.smartDj}
+              hint={t.smartDjHint}
+              checked={smartDj}
+              onChange={setSmartDj}
+            />
+          </>
+        )}
         <Divider />
         <ToggleRow
           label={t.equalizer}

@@ -18,6 +18,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 from pathlib import Path
 
 from . import db, downloader, loudness, mood, reach, resolver, verify
@@ -59,6 +60,9 @@ class Job:
     finished_at: float | None = None
     # نسخه‌ای که کاربر خودش انتخاب کرده — resolver اصلاً صدا زده نمی‌شود
     candidate_url: str | None = None
+    # صاحبِ جاب — دانلود در پس‌زمینه باید با اعتبارنامه‌ی او برود، وگرنه
+    # کاربری که کوکی/کلید داد، فایلش را با کلیدِ مهمان می‌گیرد.
+    user_id: str = db.GUEST_ID
     subscribers: set[asyncio.Queue[DownloadProgress]] = field(default_factory=set)
 
 
@@ -184,15 +188,26 @@ class JobManager:
     # ---------- ورودی عمومی ----------
 
     def create(
-        self, track: Track, quality: Quality, candidate_url: str | None = None
+        self,
+        track: Track,
+        quality: Quality,
+        candidate_url: str | None = None,
+        user_id: str = db.GUEST_ID,
     ) -> tuple[Job, bool]:
-        """(کار، آیا از کتابخانه بازاستفاده شد)."""
+        """
+        (کار، آیا از کتابخانه بازاستفاده شد).
+
+        بازاستفاده یعنی فایل روی دیسک هست — ولی مالکیتش هنوز مالِ همان کاربرِ
+        قبلی است. پس همین‌جا کاربرِ تازه هم مالک می‌شود: «همان فایل، کتابخانه‌ی
+        جدا» دقیقاً تصمیمی است که این جدولِ جدا برایش ساخته شد.
+        """
         self._loop = asyncio.get_running_loop()
         self._sweep()
 
         # انتخاب دستی یعنی «همانی که داری غلط است» — بازاستفاده دقیقاً همان
         # فایلِ ناخواسته را برمی‌گرداند و کاربر فکر می‌کند دکمه کار نکرد
-        if candidate_url is None and (existing := self._reusable(track.id, quality)):
+        if candidate_url is None and (existing := self._reusable(track, quality)):
+            db.own(existing.id, user_id)
             self._backfill(existing, track)
             self._refresh_lyrics(existing)
             return existing, True
@@ -210,9 +225,10 @@ class JobManager:
             quality=quality,
             progress=DownloadProgress(status=status, percent=0),
             candidate_url=candidate_url,
+            user_id=user_id,
         )
         self._jobs[job.id] = job
-        db.insert_job(job.id, track, quality, status, job.created_at, candidate_url)
+        db.insert_job(job.id, track, quality, status, job.created_at, candidate_url, user_id)
         if not deferred:
             job.task = asyncio.create_task(self._run(job))
         return job, False
@@ -315,6 +331,7 @@ class JobManager:
             created_at=float(row["created_at"]),
             finished_at=row["finished_at"],
             candidate_url=row["candidate_url"],
+            user_id=db.job_primary_owner(row["id"]),
             progress=DownloadProgress(
                 status=row["status"],
                 percent=100.0 if row["status"] == "ready" else 0.0,
@@ -328,14 +345,14 @@ class JobManager:
             ),
         )
 
-    def _reusable(self, track_id: str, quality: Quality) -> Job | None:
+    def _reusable(self, track: Track, quality: Quality) -> Job | None:
         """
         همین ترک با همین کیفیت از قبل دانلود شده؟ پس دوباره نگیرش.
 
         این تنها جایی است که کتابخانه واقعاً به کار می‌آید: «دانلود همه»ی یک
         آلبومی که نصفش را قبلاً گرفته‌ای، فقط بقیه‌اش را می‌گیرد.
         """
-        row = db.find_ready(track_id, quality)
+        row = db.find_ready(track.id, quality)
         if row is None:
             return None
         job = self._jobs.get(row["id"]) or self._from_row(row)
@@ -344,6 +361,17 @@ class JobManager:
             db.delete_job(row["id"])
             self._jobs.pop(row["id"], None)
             return None
+
+        # بررسی انطباق مدت‌زمان و اورراید قطعی: اگر جاب ذخیره‌شده نسخه دستکاری‌شده باشد بازاستفاده نمی‌شود
+        override = resolver._canonical_override(track)
+        if override and job.candidate_url and job.candidate_url != override.url:
+            return None
+        if track.durationMs >= 30_000 and job.track.durationMs:
+            delta = abs(track.durationMs - job.track.durationMs) / 1000
+            rel_delta = delta / (track.durationMs / 1000)
+            if delta > 5.0 and rel_delta > 0.035:
+                return None
+
         self._jobs[job.id] = job
         return job
 
@@ -435,7 +463,9 @@ class JobManager:
         async def run() -> None:
             async with self._lyric_slots:
                 try:
-                    lyrics = await asyncio.to_thread(downloader.fetch_lyrics, job.track)
+                    lyrics = await asyncio.to_thread(
+                        downloader.fetch_lyrics, job.track, job.user_id
+                    )
                     if not lyrics or job.path is None:
                         return
                     await asyncio.to_thread(downloader.attach_lyrics, job.path, lyrics)
@@ -519,6 +549,7 @@ class JobManager:
                     on_progress,
                     job_dir(job.id),
                     lambda: job.canceled,
+                    job.user_id,
                 )
                 return path, candidate, ""
             except downloader.DownloadCanceled:
@@ -548,7 +579,9 @@ class JobManager:
                         )
                     ]
                 else:
-                    candidates = await asyncio.to_thread(resolver.resolve, job.track)
+                    candidates = await asyncio.to_thread(
+                        resolver.resolve, job.track, job.user_id
+                    )
                 if not candidates:
                     self._emit(
                         job,
@@ -559,12 +592,14 @@ class JobManager:
 
                 path, used, last_error = await self._attempt(job, candidates)
 
-                # اگر کاندید انتخابی کاربر DRM داشت، برای جلوگیری از شکست قطعی،
+                # اگر کاندید انتخابی کاربر DRM یا پیش‌نمایش Go+ داشت، برای جلوگیری از شکست قطعی،
                 # جستجوی خودکار کاندیدهای دیگر را فعال می‌کنیم
-                if path is None and job.candidate_url and any(k in last_error.lower() for k in ("drm", "subscription", "protected")):
+                if path is None and job.candidate_url and any(k in last_error.lower() for k in ("drm", "subscription", "protected", "preview", "go+", "soundcloud go")):
                     log.info("کاندید انتخابی دارای DRM است — جستجوی خودکار برای «%s»", job.track.title)
                     self._emit(job, status="searching", percent=0)
-                    auto_candidates = await asyncio.to_thread(resolver.resolve, job.track)
+                    auto_candidates = await asyncio.to_thread(
+                        resolver.resolve, job.track, job.user_id
+                    )
                     if auto_candidates:
                         path, used, auto_error = await self._attempt(job, auto_candidates)
                         if auto_error:
@@ -579,7 +614,7 @@ class JobManager:
                 if path is None:
                     tried_sources = frozenset(c.source for c in candidates)
                     fallback = await asyncio.to_thread(
-                        resolver.resolve_fallback, job.track, tried_sources
+                        resolver.resolve_fallback, job.track, tried_sources, job.user_id
                     )
                     if fallback:
                         self._emit(job, status="searching", percent=0)
@@ -602,14 +637,16 @@ class JobManager:
                 # بشناسد؛ وگرنه کرشِ وسط تگ‌گذاری یک فایل بی‌صاحب جا می‌گذارد
                 job.path = path
                 self._emit(job, status="tagging", percent=100)
-                final = await asyncio.to_thread(downloader.finalize, path, job.track)
+                final = await asyncio.to_thread(
+                    downloader.finalize, path, job.track, job.user_id
+                )
                 job.lyrics_path = final.lyrics_path
                 job.bytes = path.stat().st_size
 
                 # فینگرپرینت صوتی فایل را رد نمی‌کند، فقط هشدار می‌دهد —
                 # AcoustID روی موسیقی غیرغربی پوشش کاملی ندارد
                 warning = await asyncio.to_thread(
-                    verify.check, path, job.track.title, job.track.artist
+                    verify.check, path, job.track.title, job.track.artist, job.user_id
                 )
                 # ترکِ ۲۹۲ ثانیه‌ای با فایلِ ۳۰ ثانیه‌ایِ بدون‌هشدار ready شد —
                 # مدتِ واقعی فایل را با mutagen می‌خوانیم: اگر یک‌سومِ انتظار

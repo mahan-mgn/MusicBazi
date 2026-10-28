@@ -40,6 +40,15 @@ import {
 } from './audio/CrossfadeController'
 import { combineCurves, flatCurve, manualCurve, toneCurve, EQ_SLOTS, type EqCurve } from './audio/dsp/EqCurve'
 import { classifyMediaError, StreamRecovery, type StreamErrorKind } from './audio/StreamRecovery'
+import type { AudioDiagnostics } from './native'
+import {
+  isSetSinkIdSupported,
+  getSavedSinkId,
+  saveSinkId,
+  routeAudioElements,
+  routeAudioContext,
+} from './audio/AudioRouting'
+import { planTransition, type TransitionPlan } from './audio/automix/TransitionPlanner'
 
 /** فرکانس مرکزیِ باندها — پنج‌تایی استانداردِ اکولایزرهای مصرفی */
 export const EQ_BANDS = [60, 230, 910, 3600, 14000]
@@ -92,6 +101,8 @@ export interface EngineHandlers {
 
 interface DeckDsp {
   source: MediaElementAudioSourceNode
+  /** زنجیرهٔ یکپارچهٔ DspChain معادل DspChain.kt اندروید */
+  chain: AudioWorkletNode | null
   spatial: AudioWorkletNode | null
   eq: AudioWorkletNode | null
   loudness: AudioWorkletNode | null
@@ -178,6 +189,27 @@ let nextSource: { src: string; gainDb: number } | null = null
  * پردازندهٔ لودنسِ فاز ۲ این را به‌عنوان trim هدف می‌گیرد.
  */
 let blendHeadroomValue = 1
+
+let currentSinkId = ''
+let currentSinkLabel = ''
+let currentTransitionPlan: TransitionPlan | null = null
+let automixEnabled = true
+let smartDjEnabled = true
+
+/** ارسال یکپارچه پیام به زنجیره DSP (ورک‌لت واحد یا نودهای مجزا) */
+function postDsp(deck: Deck | null, msg: unknown): void {
+  if (!deck || !workletPath) return
+  if (deck.dsp?.chain) {
+    deck.dsp.chain.port.postMessage(msg)
+    return
+  }
+  const m = msg as { type: string }
+  if (m.type === 'eq') deck.dsp?.eq?.port.postMessage(msg)
+  else if (m.type === 'spatial') deck.dsp?.spatial?.port.postMessage(msg)
+  else if (['gain', 'track', 'normalize', 'trim', 'boundary', 'flush'].includes(m.type)) {
+    deck.dsp?.loudness?.port.postMessage(msg)
+  }
+}
 
 function active(): Deck | null {
   return decks ? decks[activeIndex] : null
@@ -266,13 +298,40 @@ const crossfadeHooks: CrossfadeHooks<string> = {
     const outgoing = active()
     const incoming = idle()
     if (!outgoing || !incoming) return
+
+    const outMeta = outgoing.mediaId
+      ? { id: outgoing.mediaId, durationMs: (outgoing.el.duration || 0) * 1000 }
+      : null
+    const inMeta = incoming.mediaId
+      ? { id: incoming.mediaId, durationMs: (incoming.el.duration || 0) * 1000 }
+      : null
+
+    const plan = planTransition(outMeta, inMeta, seconds, {
+      automix: automixEnabled,
+      smartDj: smartDjEnabled,
+    })
+    currentTransitionPlan = plan
+
+    if (plan.transitionStyle === 'DJ_BLEND' && plan.bassSwap) {
+      // تعویض فرکانس بیس: در ابتدای ترنزیشن، بیس ترک ورودی بریده می‌شود تا با بیس ترک خروجی تداخل نکند
+      postDsp(incoming, { type: 'transition_filter', lowPassHz: 20000, highPassHz: 180 })
+      postDsp(outgoing, { type: 'transition_filter', lowPassHz: 20000, highPassHz: 20 })
+    } else if (plan.transitionStyle === 'DJ_FILTER') {
+      // فیلتر دی‌جی: بستن تدریجی فرکانس‌های بالا روی ترک خروجی
+      postDsp(outgoing, { type: 'transition_filter', lowPassHz: 250, highPassHz: 20 })
+      postDsp(incoming, { type: 'transition_filter', lowPassHz: 20000, highPassHz: 20 })
+      if (plan.filterVariant === 'ECHO_RIDE') {
+        postDsp(outgoing, { type: 'transition_echo', delaySeconds: 0.25, send: 0.5, dry: 0.5 })
+      }
+    }
+
     rampEqualPower(outgoing.fade, 'out', seconds)
     rampEqualPower(incoming.fade, 'in', seconds)
   },
 
-  onHandoff(_outgoing: string, incoming: string): void {
+  onHandoff(_outgoing: string, incomingRef: string): void {
     // تعویض نقش در میانهٔ فید — همان لحظه UI باید ترک تازه را نشان دهد
-    const deck = deckByRef(incoming)
+    const deck = deckByRef(incomingRef)
     activeIndex = 1 - activeIndex
     handlers?.onAdvance()
     if (deck && Number.isFinite(deck.el.duration)) handlers?.onDuration(deck.el.duration)
@@ -283,6 +342,14 @@ const crossfadeHooks: CrossfadeHooks<string> = {
       isPlaying: true,
       isBuffering: false,
     })
+
+    if (currentTransitionPlan?.transitionStyle === 'DJ_BLEND' && currentTransitionPlan.bassSwap) {
+      // نقطه میانی فید: حالا بیس به ترک ورودی واگذار می‌شود و بیس خروجی قطع می‌شود
+      const inDeck = active()
+      const outDeck = idle()
+      postDsp(inDeck, { type: 'transition_filter', lowPassHz: 20000, highPassHz: 20 })
+      postDsp(outDeck, { type: 'transition_filter', lowPassHz: 20000, highPassHz: 180 })
+    }
   },
 
   onBlendHeadroom(headroom: number): void {
@@ -291,7 +358,7 @@ const crossfadeHooks: CrossfadeHooks<string> = {
     // سمت پردازنده است — نوشتن هر ۳۰ms اینجا فقط target را عوض می‌کند)
     if (workletPath) {
       for (const deck of decks ?? []) {
-        deck.dsp?.loudness?.port.postMessage({ type: 'trim', value: headroom })
+        postDsp(deck, { type: 'trim', value: headroom })
       }
     }
   },
@@ -301,9 +368,14 @@ const crossfadeHooks: CrossfadeHooks<string> = {
     //  - پایان موفق فید: دک خروجی idle شده → متوقف و آزاد
     //  - bail وسط فید: دک ورودی هنوز شروع‌نشده/نیمه‌کاره → متوقف و آزاد؛
     //    دک فعال (ترک جاری) دست‌نخورده می‌ماند
+    currentTransitionPlan = null
     for (const ref of [outgoing, incoming]) {
       if (ref === null) continue
       const deck = deckByRef(ref)
+      if (deck) {
+        postDsp(deck, { type: 'transition_filter', lowPassHz: 20000, highPassHz: 20 })
+        postDsp(deck, { type: 'transition_park_echo' })
+      }
       if (!deck || deck === active()) continue
       deck.el.pause()
       detachHls(deck.el)
@@ -509,6 +581,10 @@ function makeDeck(): Deck {
   el.volume = volume
   el.muted = muted
 
+  if (currentSinkId && 'setSinkId' in el && typeof (el as any).setSinkId === 'function') {
+    void (el as any).setSinkId(currentSinkId).catch(() => {})
+  }
+
   return { el, norm: null, fade: null, dsp: null, gainDb: 0, mediaId: null, pendingSeek: null }
 }
 
@@ -528,12 +604,23 @@ function bootGraph(): void {
   const Ctor = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!Ctor) return
 
+  const savedSink = getSavedSinkId()
+  if (savedSink) currentSinkId = savedSink
+
   void (async () => {
     try {
-      ctx = new Ctor()
+      ctx = new Ctor({ latencyHint: 'playback' } as AudioContextOptions)
     } catch {
-      ctx = null
-      return
+      try {
+        ctx = new Ctor()
+      } catch {
+        ctx = null
+        return
+      }
+    }
+
+    if (currentSinkId && ctx) {
+      void routeAudioContext(ctx, currentSinkId)
     }
 
     try {
@@ -623,15 +710,15 @@ function connectDeck(deck: Deck, useWorklet: boolean): void {
   deck.fade = fade
 
   if (!useWorklet) {
-    deck.dsp = { source, spatial: null, eq: null, loudness: null }
+    deck.dsp = { source, chain: null, spatial: null, eq: null, loudness: null }
     source.connect(norm)
     norm.connect(fade)
     fade.connect(eqSlotNodes[0])
     return
   }
 
-  // مسیر ورک‌لت — ترتیب زنجیره مطابق DspChain.kt اندروید:
-  //   Spatial → EQ → Transition(fade) → Loudness → master
+  // مسیر ورک‌لت — زنجیره واحد mb-dsp-chain مطابق DspChain.kt اندروید:
+  //   Spatial → EQ → TransitionFilter → Loudness → fade → master
   const workletOptions: AudioWorkletNodeOptions = {
     numberOfInputs: 1,
     numberOfOutputs: 1,
@@ -640,6 +727,24 @@ function connectDeck(deck: Deck, useWorklet: boolean): void {
     channelCountMode: 'explicit',
     channelInterpretation: 'speakers',
   }
+
+  let chain: AudioWorkletNode | null = null
+  try {
+    chain = new AudioWorkletNode(ctx, 'mb-dsp-chain', workletOptions)
+  } catch {
+    chain = null
+  }
+
+  if (chain) {
+    deck.dsp = { source, chain, spatial: null, eq: null, loudness: null }
+    source.connect(norm)
+    norm.connect(chain)
+    chain.connect(fade)
+    fade.connect(master)
+    return
+  }
+
+  // فالبک به نودهای سه‌گانه در صورت در دسترس نبودن زنجیرهٔ واحد
   let spatial: AudioWorkletNode | null = null
   let eq: AudioWorkletNode | null = null
   let loudness: AudioWorkletNode | null = null
@@ -660,7 +765,7 @@ function connectDeck(deck: Deck, useWorklet: boolean): void {
   }
 
   if (spatial && eq && loudness) {
-    deck.dsp = { source, spatial, eq, loudness }
+    deck.dsp = { source, chain: null, spatial, eq, loudness }
     source.connect(norm)
     norm.connect(spatial)
     spatial.connect(eq)
@@ -669,7 +774,7 @@ function connectDeck(deck: Deck, useWorklet: boolean): void {
     loudness.connect(master)
   } else {
     // ورک‌لت ناقص ساخت — گراف ساده ولی زنده؛ صدا هرگز قطع نمی‌شود
-    deck.dsp = { source, spatial: null, eq: null, loudness: null }
+    deck.dsp = { source, chain: null, spatial: null, eq: null, loudness: null }
     source.connect(norm)
     norm.connect(fade)
     fade.connect(master)
@@ -826,7 +931,7 @@ function applyEq(): void {
   const curve = eqEnabled ? combinedEqCurve() : flatCurve()
   if (workletPath) {
     for (const deck of decks ?? []) {
-      deck.dsp?.eq?.port.postMessage({
+      postDsp(deck, {
         type: 'eq',
         curve: { gainsDb: Array.from(curve.gainsDb), qs: Array.from(curve.qs), preampDb: curve.preampDb },
         balance: eqBalance,
@@ -856,26 +961,25 @@ function legacyPresetToBands7(values: readonly number[]): number[] {
   return bands
 }
 
-/** پیام ترک جاری + گینش به پردازندهٔ لودنسِ یک دک */function pushTrackMessage(deck: Deck): void {
-  if (!workletPath) return
-  const port = deck.dsp?.loudness?.port
-  if (!port || deck.mediaId === null) return
+/** پیام ترک جاری + گینش به پردازندهٔ لودنسِ یک دک */
+function pushTrackMessage(deck: Deck): void {
+  if (!workletPath || deck.mediaId === null) return
   const gain = normalizeOn ? gainFromDb(deck.gainDb) : 1
-  port.postMessage({ type: 'gain', mediaId: deck.mediaId, gain })
-  port.postMessage({ type: 'track', mediaId: deck.mediaId })
+  postDsp(deck, { type: 'gain', mediaId: deck.mediaId, gain })
+  postDsp(deck, { type: 'track', mediaId: deck.mediaId })
 }
 
 function pushNormalize(): void {
   if (!workletPath) return
   for (const deck of decks ?? []) {
-    deck.dsp?.loudness?.port.postMessage({ type: 'normalize', on: normalizeOn })
+    postDsp(deck, { type: 'normalize', on: normalizeOn })
   }
 }
 
 function pushSpatial(): void {
   if (!workletPath) return
   for (const deck of decks ?? []) {
-    deck.dsp?.spatial?.port.postMessage({ type: 'spatial', enabled: spatialOn })
+    postDsp(deck, { type: 'spatial', enabled: spatialOn })
   }
 }
 
@@ -968,6 +1072,17 @@ export const engine = {
     handlers = next
   },
 
+  /**
+   * آماده‌سازی پیش‌دستانه‌ی گراف صوتی و دیکد ورک‌لت پیش از اولین کلیک پلی.
+   */
+  prewarm(): void {
+    if (typeof window === 'undefined') return
+    ensure()
+    if (ctx && ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {})
+    }
+  },
+
   /** المنتِ دکِ فعال — برای ثبت در audioFocus و تست */
   element(): HTMLAudioElement {
     return ensure().el
@@ -1012,8 +1127,40 @@ export const engine = {
     streamRecovery.reset()
     if (deck.fade) deck.fade.gain.value = 1
 
-    // اگر دکِ غیرفعال قبلاً با همین منبع پرلود شده بود، پاک شود تا تکرار/اکو نشود
     const other = idle()
+    // سوئیچ سریع بدون‌وقفه (Fast Gapless Swap): اگر دک آماده از قبل همین منبع را بافر کرده است
+    if (other && sameSource(other.el.src, src) && at === 0) {
+      const outgoing = deck
+      activeIndex = 1 - activeIndex
+      const incoming = other
+      incoming.mediaId = trackId ?? null
+      applyNormalize(incoming, gainDb)
+      cancelPendingSeek(incoming)
+      if (incoming.fade) incoming.fade.gain.value = 1
+
+      // توقف و آزادسازی دک خروجی تا برای ترک بعدیِ صف آماده باشد
+      if (outgoing) {
+        outgoing.el.pause()
+        detachHls(outgoing.el)
+        outgoing.el.removeAttribute('src')
+        outgoing.el.preload = 'metadata'
+        outgoing.mediaId = null
+        if (outgoing.fade) outgoing.fade.gain.value = 1
+      }
+
+      statePublisher?.patch({
+        status: incoming.el.readyState >= 2 ? 'READY' : 'BUFFERING',
+        isBuffering: incoming.el.readyState < 2 && autoplay,
+        isPlaying: false,
+        errorMessage: null,
+      })
+
+      if (autoplay) this.play()
+      handlers?.onAdvance?.()
+      return
+    }
+
+    // اگر دکِ غیرفعال قبلاً با همین منبع پرلود شده بود، پاک شود تا تکرار/اکو نشود
     if (other && (sameSource(other.el.src, src) || !sameSource(nextSource?.src, other.el.src))) {
       other.el.pause()
       detachHls(other.el)
@@ -1118,6 +1265,16 @@ export const engine = {
     crossfadeSeconds = Math.max(0, seconds)
     // کوتاه‌شدنِ فید زیر حداقل، ترنزیشن منتظری را بی‌معنا می‌کند
     if (crossfadeSeconds < MIN_CROSSFADE_SECONDS) controller.notifyInterruption()
+  },
+
+  /** فعال/غیرفعال کردن میکس خودکار زمان‌بندی (Automix) */
+  setAutomix(on: boolean): void {
+    automixEnabled = on
+  },
+
+  /** فعال/غیرفعال کردن ترنزیشن‌های دی‌جی (سوئیپ فیلتر LPF و تعویض ساب‌بیس) */
+  setSmartDj(on: boolean): void {
+    smartDjEnabled = on
   },
 
   /**
@@ -1228,9 +1385,59 @@ export const engine = {
       detachHls(deck.el)
       deck.el.removeAttribute('src')
       deck.mediaId = null
-      deck.dsp?.loudness?.port.postMessage({ type: 'flush' })
+      postDsp(deck, { type: 'flush' })
       if (deck.fade) deck.fade.gain.value = 1
     })
     statePublisher?.patch({ status: 'IDLE', isPlaying: false, isBuffering: false, errorMessage: null })
+  },
+
+  /** گزارش جامع وضعیت خط پردازش صوتی وب برای AudioPipelineModal */
+  getDiagnostics(): AudioDiagnostics {
+    const isBitPerfect = !eqEnabled && !spatialOn && !normalizeOn && boostDb === 0
+    const devLabel = currentSinkLabel || 'بلندگو / خروجی پیش‌فرض مرورگر'
+    const isUsb = /usb|dac|fiio|schiit|topping|audioengine|chord|dragonfly/i.test(devLabel)
+
+    return {
+      sink: currentSinkId ? `Direct Hardware Sink (${currentSinkId.slice(0, 8)}...)` : 'WebAudio Destination',
+      deviceName: devLabel,
+      routeKind: isUsb ? 'USB_DAC' : currentSinkId ? 'EXTERNAL_SINK' : 'SYSTEM_DEFAULT',
+      actualEncoding: 32,
+      actualSampleRateHz: ctx?.sampleRate ?? 44100,
+      systemMixerRateHz: ctx?.sampleRate ?? 44100,
+      decoderName: 'HTML5 MediaElement + WebAudio',
+      decoderOutputEncoding: 'Float32 PCM',
+      dspFormat: workletPath ? 'AudioWorklet (Float32 Single-Pass DspChain)' : 'Web Audio Biquad Fallback',
+      dspAvailable: workletPath,
+      directPlaybackSupported: isSetSinkIdSupported(),
+      directPlaybackActual: Boolean(currentSinkId),
+      outputExact: isBitPerfect,
+      outputExactDetail: isBitPerfect
+        ? 'Bit-Perfect Direct Float32'
+        : workletPath
+          ? 'DSP Chain Active (Float32)'
+          : 'Biquad Fallback Active',
+      loudnessGainDb: active()?.gainDb ?? 0,
+      loudnessLufs: -14.0,
+      usbProductName: isUsb ? devLabel : null,
+    }
+  },
+
+  /** تغییر سخت‌افزار یا دستگاه خروجی صدا (مانند DAC یواس‌بی) */
+  async setOutputDevice(deviceId: string, label?: string): Promise<boolean> {
+    currentSinkId = deviceId
+    currentSinkLabel = label ?? ''
+    saveSinkId(deviceId)
+    const elements = decks ? [decks[0].el, decks[1].el] : []
+    const elSuccess = await routeAudioElements(elements, deviceId)
+    const ctxSuccess = await routeAudioContext(ctx, deviceId)
+    return elSuccess || ctxSuccess
+  },
+
+  getCurrentOutputDevice(): { deviceId: string; label: string } {
+    return { deviceId: currentSinkId, label: currentSinkLabel }
+  },
+
+  getAudioContext(): AudioContext | null {
+    return ctx
   },
 }
