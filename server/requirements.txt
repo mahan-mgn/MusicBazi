@@ -1,5 +1,5 @@
 fastapi>=0.118
-uvicorn[standard]>=0.38
+uvicorn[standard]>=0.54.0
 # extra socks لازم است اگر MUSICBAZI_PROXY از نوع socks5 باشد؛ بدونش httpx
 # همان‌جا با «Using SOCKS proxy, but the socksio package is not installed» می‌افتد.
 # yt-dlp خودش socks را بومی می‌فهمد و به این نیاز ندارد.
