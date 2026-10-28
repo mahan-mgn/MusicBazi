@@ -85,8 +85,6 @@ export default function PillNav({
   const circleRefs = useRef<Array<HTMLSpanElement | null>>([])
   const tlRefs = useRef<Array<gsap.core.Timeline | null>>([])
   const activeTweenRefs = useRef<Array<gsap.core.Tween | null>>([])
-  const logoInnerRef = useRef<HTMLElement | null>(null)
-  const logoTweenRef = useRef<gsap.core.Tween | null>(null)
   const hamburgerRef = useRef<HTMLButtonElement | null>(null)
   const mobileMenuRef = useRef<HTMLDivElement | null>(null)
   const navItemsRef = useRef<HTMLDivElement | null>(null)
@@ -199,14 +197,6 @@ export default function PillNav({
   const handleEnter = (i: number) => seek(i, tlRefs.current[i]?.duration() ?? 0, 0.3)
   const handleLeave = (i: number) => seek(i, 0, 0.2)
 
-  const handleLogoEnter = () => {
-    const el = logoInnerRef.current
-    if (!el || reducedMotion()) return
-    logoTweenRef.current?.kill()
-    gsap.set(el, { rotate: 0 })
-    logoTweenRef.current = gsap.to(el, { rotate: 360, duration: 0.2, ease, overwrite: 'auto' })
-  }
-
   const setMobileMenu = (open: boolean) => {
     setIsMobileMenuOpen(open)
 
@@ -262,23 +252,13 @@ export default function PillNav({
 
   const brand = logoNode ? (
     <span
-      ref={(el) => {
-        logoInnerRef.current = el
-      }}
       className="grid size-full place-items-center"
       style={{ color: 'var(--hover-text)' }}
     >
       {logoNode}
     </span>
   ) : (
-    <img
-      src={logo}
-      alt={logoAlt}
-      ref={(el) => {
-        logoInnerRef.current = el
-      }}
-      className="block size-full object-cover"
-    />
+    <img src={logo} alt={logoAlt} className="block size-full object-contain" />
   )
 
   const pillClasses =
@@ -287,18 +267,23 @@ export default function PillNav({
   return (
     <div className={`relative ${className}`} style={cssVars}>
       <nav aria-label={logoAlt} className="box-border flex w-max items-center justify-start">
+        {/*
+          نشانِ برند فقط خودِ تصویر است — بدونِ پلاکِ رنگیِ پس‌زمینه و بدونِ
+          بریدن به شکلِ دایره. `var(--base)` عمداً اینجا نمی‌آید: قرصِ ناوبری و
+          دایره‌ی هاور از آن استفاده می‌کنند، ولی زیرِ لوگو یک لکه‌ی رنگیِ اضافه
+          بود که نشان را قاب می‌گرفت. خودِ `logo-mark.png` شفاف است.
+        */}
         <a
           href={logoTarget}
           aria-label={logoAlt}
-          onMouseEnter={handleLogoEnter}
           onClick={(e) => {
             if (!logoAction) return
             e.preventDefault()
             logoAction()
           }}
           ref={logoRef}
-          className="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full p-1.5"
-          style={{ width: 'var(--nav-h)', height: 'var(--nav-h)', background: 'var(--base)' }}
+          className="inline-flex shrink-0 items-center justify-center"
+          style={{ width: 'var(--nav-h)', height: 'var(--nav-h)' }}
         >
           {brand}
         </a>

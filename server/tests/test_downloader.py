@@ -186,6 +186,56 @@ class TestLyrics:
         assert not Lyrics(plain=None, synced=None)
         assert Lyrics(plain="x", synced=None)
 
+    def _word_timed(self):
+        from app.lyrics.models import LyricLine, LyricWord
+
+        return Lyrics(
+            lines=(
+                LyricLine(
+                    start_ms=1000,
+                    text="hello world",
+                    words=(
+                        LyricWord(start_ms=1000, text="hello "),
+                        LyricWord(start_ms=1500, text="world"),
+                    ),
+                ),
+            ),
+            sync_type="word",
+        )
+
+    def test_the_downloaded_lrc_is_line_only_by_default(self, tmp_path, monkeypatch):
+        """
+        فایلِ `.lrc` کنارِ آهنگ **نباید** تگِ کلمه بگیرد مگر کاربر صریح
+        خواسته باشد — پخش‌کننده‌های خارجی آن تگ را متنِ اضافه نشان می‌دهند.
+        """
+        monkeypatch.delenv("MUSICBAZI_LYRICS_ENHANCED_LRC", raising=False)
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"")
+
+        path = write_lrc(audio, self._word_timed())
+
+        text = path.read_text(encoding="utf-8")
+        assert "<00:01.00>" not in text
+        assert "[00:01.00]hello world" in text
+
+    def test_the_downloaded_lrc_takes_word_tags_only_when_asked(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"")
+
+        path = write_lrc(audio, self._word_timed())
+
+        assert "<00:01.00>" in path.read_text(encoding="utf-8")
+
+    def test_a_providers_own_synced_field_is_never_rewritten(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MUSICBAZI_LYRICS_ENHANCED_LRC", "1")
+        audio = tmp_path / "a.mp3"
+        audio.write_bytes(b"")
+
+        path = write_lrc(audio, Lyrics(plain="p", synced="[00:01.00]as-is"))
+
+        assert path.read_text(encoding="utf-8") == "[00:01.00]as-is"
+
 
 class TestArtworkProxy:
     """
@@ -276,7 +326,7 @@ class TestCoverIsReported:
         assert audio.read_bytes() == b"audio"
 
     def test_finalize_carries_both_the_lrc_and_the_cover_verdict(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(downloader, "fetch_lyrics", lambda track: Lyrics(plain="x", synced=None))
+        monkeypatch.setattr(downloader, "fetch_lyrics", lambda track, uid="local": Lyrics(plain="x", synced=None))
         monkeypatch.setattr(downloader, "_fetch_artwork", lambda url: None)
         monkeypatch.setitem(downloader._TAGGERS, ".mp3", lambda *a: None)
         audio = tmp_path / "a.mp3"

@@ -140,7 +140,7 @@ class TestFinalizeContract:
         from app import downloader
         from app.providers.lrclib import Lyrics
 
-        monkeypatch.setattr(downloader, "fetch_lyrics", lambda t: Lyrics(plain="x", synced=None))
+        monkeypatch.setattr(downloader, "fetch_lyrics", lambda t, uid="local": Lyrics(plain="x", synced=None))
         monkeypatch.setattr(downloader, "_fetch_artwork", lambda url: None)
         monkeypatch.setitem(downloader._TAGGERS, ".mp3", lambda *a: None)
         audio = tmp_path / "a.mp3"

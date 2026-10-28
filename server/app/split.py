@@ -118,13 +118,13 @@ def _chapters_from(info: dict) -> list[Chapter]:
     return out[:MAX_CHAPTERS]
 
 
-def probe(url: str) -> SplitSource | None:
+def probe(url: str, user_id: str = db.GUEST_ID) -> SplitSource | None:
     """
     چپترهای یک لینک. None یعنی لینک باز نشد؛ لیستِ خالیِ chapters یعنی باز شد
     ولی چپتری نداشت. بلاک‌کننده است — در thread صدا زده شود.
     """
     try:
-        with YoutubeDL(ydl.opts(skip_download=True)) as y:
+        with YoutubeDL(ydl.opts(user_id=user_id, skip_download=True)) as y:
             info = y.extract_info(url, download=False)
     except Exception:
         return None
@@ -182,6 +182,8 @@ class SplitTask:
     job_ids: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     task: asyncio.Task | None = None
+    # صاحبِ تسک: پولینگ و قطعه‌های تازه فقط برای همین کاربر دیده می‌شوند
+    user_id: str = db.GUEST_ID
 
 
 _tasks: dict[str, SplitTask] = {}
@@ -198,10 +200,15 @@ def _sweep() -> None:
         _tasks.pop(key, None)
 
 
-def start(source: SplitSource, chapters: list[Chapter], quality: Quality) -> SplitTask:
+def start(
+    source: SplitSource,
+    chapters: list[Chapter],
+    quality: Quality,
+    user_id: str = db.GUEST_ID,
+) -> SplitTask:
     """تسک را می‌سازد و در پس‌زمینه اجرا می‌کند. پیشرفتش با polling خوانده می‌شود."""
     _sweep()
-    task = SplitTask(id=uuid.uuid4().hex[:12], total=len(chapters))
+    task = SplitTask(id=uuid.uuid4().hex[:12], total=len(chapters), user_id=user_id)
     _tasks[task.id] = task
     task.task = asyncio.create_task(_run(task, source, chapters, quality))
     return task
@@ -259,7 +266,14 @@ async def _run(
             task.percent = round(pct * 0.7, 1)
 
         mix_path = await asyncio.to_thread(
-            downloader.download, mix, source.url, quality, on_progress, holder
+            downloader.download,
+            mix,
+            source.url,
+            quality,
+            on_progress,
+            holder,
+            None,
+            task.user_id,
         )
 
         task.status = "cutting"
@@ -273,8 +287,10 @@ async def _run(
             if not await asyncio.to_thread(_cut, mix_path, chapter, target):
                 continue
 
-            db.insert_job(job_id, track, quality, "queued", time.time())
-            final = await asyncio.to_thread(downloader.finalize, target, track)
+            db.insert_job(job_id, track, quality, "queued", time.time(), user_id=task.user_id)
+            final = await asyncio.to_thread(
+                downloader.finalize, target, track, task.user_id
+            )
             lyrics_path = final.lyrics_path
 
             measured = (

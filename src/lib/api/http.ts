@@ -1,9 +1,13 @@
 import { useSettings } from '../../store/settings'
+import { attachMediaToken, cachedMediaToken, clearToken, token, withMediaToken } from '../auth'
 import { absolute, apiUrl } from '../server'
-import { IdentifyUnavailable, IntranetError } from '../types'
+import { AuthRequired, IdentifyUnavailable, IntranetError } from '../types'
 import type {
   AlbumDetail,
   ArtistDetail,
+  AuthProviders,
+  AuthSession,
+  AuthUser,
   CandidateOption,
   ChaptersInfo,
   DailyMix,
@@ -14,6 +18,7 @@ import type {
   IdentifyResult,
   LibraryItem,
   LibraryPage,
+  MediaToken,
   MusicApi,
   NetStatus,
   Quality,
@@ -59,11 +64,47 @@ const trackRef = (track: Track) => ({
 const base = () => apiUrl('/api')
 
 /**
+ * هدرهای هر درخواست.
+ *
+ * یک نقطه‌ی عبورِ واحد: اگر تزریقِ توکن پخش‌پخش می‌شد، افزودنِ یک اندپوینتِ
+ * تازه کافی بود تا یکی‌شان بی‌توکن بماند و بی‌صدا مهمان حساب شود.
+ */
+function headers(extra?: Record<string, string>): Record<string, string> {
+  const value = token()
+  return value ? { ...extra, Authorization: `Bearer ${value}` } : { ...extra }
+}
+
+/**
+ * `fetch` با توکن.
+ *
+ * این ماژول حدود سی درخواستِ دستی دارد؛ تزریقِ دستیِ هدر در همه‌شان یعنی هر
+ * اندپوینتِ تازه یک فرصتِ تازه برای فراموش‌کردن. همه از این قیف رد می‌شوند.
+ */
+function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(path, { ...init, headers: headers(init.headers as Record<string, string>) })
+}
+
+/**
+ * واکنشِ سراسری به ۴۰۱.
+ *
+ * استورِ حساب خودش را این‌جا ثبت می‌کند؛ اگر `http.ts` مستقیم استور را
+ * ایمپورت می‌کرد، حلقه‌ی وابستگی می‌شد (استور هم `api` را می‌خواهد).
+ */
+let onUnauthorized: (() => void) | null = null
+
+export function setUnauthorizedHandler(run: (() => void) | null): void {
+  onUnauthorized = run
+}
+
+/**
  * پاسخ‌های سرور از این‌جا رد می‌شوند تا آدرس‌های نسبیِ داخلشان (فایل، استریم،
  * متن آهنگ) مطلق شوند. در مرورگر بی‌اثر است.
+ *
+ * `attachMediaToken` هم همان‌جا اجرا می‌شود: این آدرس‌ها بعداً داخل `<audio>`
+ * و `<img>` می‌نشینند که هدر نمی‌فرستند و باید توکنِ مدیا در query داشته باشند.
  */
 async function readJson<T>(res: Response): Promise<T> {
-  return absolute((await res.json()) as T)
+  return attachMediaToken(absolute((await res.json()) as T))
 }
 
 /**
@@ -83,7 +124,7 @@ async function errorText(res: Response): Promise<string> {
 }
 
 async function json<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(base() + path, { signal, cache: 'no-store' })
+  const res = await apiFetch(base() + path, { signal, cache: 'no-store' })
   // مسیرهای POST از اول `errorText` را می‌خواندند ولی GETها نه، و همه‌ی
   // پیام‌های دقیقِ سرور («این لینک شناخته نشد یا محتوایی نداشت») سرِ راه به
   // یک «۴۰۴ Not Found»ِ بی‌فایده تبدیل می‌شد
@@ -92,18 +133,58 @@ async function json<T>(path: string, signal?: AbortSignal): Promise<T> {
   // بین‌الملل قطع است و این درخواست در کش هم نبود. تبدیلش به `Error`ِ ساده،
   // آن را در همان قیفِ «یک چیزی خراب شد» گم می‌کرد.
   if (res.status === 503) throw new IntranetError(await errorText(res))
+  // ۴۰۱ با نوعِ خودش می‌آید تا UI «برو لاگین شو» نشان بدهد نه «خطا». توکنِ
+  // باطل هم همین‌جا دور انداخته می‌شود؛ نگه‌داشتنش یعنی هر درخواستِ بعدی هم
+  // ۴۰۱ می‌گیرد.
+  if (res.status === 401) {
+    clearToken()
+    onUnauthorized?.()
+    throw new AuthRequired(await errorText(res))
+  }
   if (!res.ok) throw new Error(await errorText(res))
   return readJson<T>(res)
 }
 
+/** بدنه‌ی JSON با هدرِ احراز هویت — برای درخواست‌های غیرِ GET. */
+async function send<T>(
+  path: string,
+  method: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  const res = await fetch(base() + path, {
+    method,
+    signal,
+    headers: headers(body === undefined ? {} : { 'content-type': 'application/json' }),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (res.status === 503) throw new IntranetError(await errorText(res))
+  if (res.status === 401) {
+    clearToken()
+    onUnauthorized?.()
+    throw new AuthRequired(await errorText(res))
+  }
+  if (!res.ok) throw new Error(await errorText(res))
+  /*
+   * پاسخِ درخواستِ توکنِ مدیا نباید دوباره توکنِ مدیا بخواهد.
+   *
+   * `readJson` از `attachMediaToken` می‌گذرد و آن از `mediaToken()` می‌پرسد؛
+   * برای همین مسیر، همان پرسش یعنی رفتنِ دوباره سراغ `/auth/media` — یعنی
+   * چرخه‌ی بی‌پایانِ درخواست‌ها که `refresh` را هرگز تمام نمی‌کند و تاپ‌بار را
+   * روی «ورود» نگه می‌دارد. پاسخِ خودِ توکن تنها پاسخی است که نباید garnish شود.
+   */
+  if (path === '/auth/media') return (await res.json()) as T
+  return readJson<T>(res)
+}
+
 function abortJob(jobId: string): Promise<unknown> {
-  return fetch(`${base()}/downloads/${jobId}`, { method: 'DELETE' }).catch(() => null)
+  return apiFetch(`${base()}/downloads/${jobId}`, { method: 'DELETE' }).catch(() => null)
 }
 
 function patchPlaylist(id: string, body: Record<string, unknown>): Promise<Response> {
-  return fetch(`${base()}/playlists/${id}`, {
+  return apiFetch(`${base()}/playlists/${id}`, {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: headers({ 'content-type': 'application/json' }),
     body: JSON.stringify(body),
   }).then(async (res) => {
     if (!res.ok) throw new Error(await errorText(res))
@@ -128,6 +209,96 @@ const jobIdByTrack = new Map<string, string>()
 const jobKey = (trackId: string, quality: Quality) => `${trackId}::${quality}`
 
 /**
+ * اتصالِ SSE به جاب و ترجمه‌ی رویدادها به onProgress — مشترک بینِ
+ * `download` (بعد از POST) و `attach` (بعد از رفرش).
+ *
+ * جابِ معوق (منتظرِ اینترنتِ بین‌الملل) اتصالِ دائمی نمی‌گیرد: هر EventSource
+ * یکی از ۶ سوکتِ HTTP/1.1 مرورگر را اشغال می‌کند و صفِ معوقِ بلند، پخش و
+ * کاورها را قفل می‌کرد. با رسیدنِ `deferred` اتصال بسته می‌شود و هر ۳۰
+ * ثانیه یک وصل‌کوتاه وضعیت را می‌پرسد — سرور با برگشتنِ اینترنت خودش جاب را
+ * جلو می‌برد.
+ */
+function listenToJob(
+  jobId: string,
+  onProgress: (p: DownloadProgress) => void,
+  aborted: () => boolean,
+): () => void {
+  let events: EventSource | null = null
+  let staleTimer: ReturnType<typeof setTimeout> | undefined
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+
+  const clearStale = () => {
+    if (staleTimer) {
+      clearTimeout(staleTimer)
+      staleTimer = undefined
+    }
+  }
+
+  const open = async () => {
+    if (aborted()) return
+    // `EventSource` هدر نمی‌فرستد، پس توکنِ مدیا در query می‌رود — وگرنه
+    // صفِ دانلودِ کاربرِ وارد‌شده همیشه «این کار پیدا نشد» می‌گیرد
+    const media = cachedMediaToken()
+    const url = withMediaToken(`${base()}/downloads/${jobId}/events`, media)
+    if (aborted()) return
+    events = new EventSource(url)
+    events.onmessage = (e) => {
+      clearStale()
+      // این‌یکی از fetch نمی‌آید، پس خودش باید مطلق شود و در صورت وجود توکن مدیا، mt بگیرد
+      const p = absolute(JSON.parse(e.data) as DownloadProgress)
+      const curMedia = cachedMediaToken()
+      if (curMedia) {
+        if (p.streamUrl) p.streamUrl = withMediaToken(p.streamUrl, curMedia)
+        if (p.lyricsUrl) p.lyricsUrl = withMediaToken(p.lyricsUrl, curMedia)
+        if (p.fileUrl) p.fileUrl = withMediaToken(p.fileUrl, curMedia)
+      }
+      onProgress(p)
+      if (p.status === 'deferred') {
+        events?.close()
+        events = null
+        if (!pollTimer) pollTimer = setInterval(open, 30000)
+        return
+      }
+      if (p.status === 'ready' || p.status === 'error' || p.status === 'canceled') {
+        if (pollTimer) {
+          clearInterval(pollTimer)
+          pollTimer = undefined
+        }
+        events?.close()
+      }
+    }
+    events.onerror = () => {
+      if (!events) return
+      // EventSource خودش وصل دوباره می‌زند و در آن حالت readyState روی
+      // CONNECTING است. قبلاً هر خطایی — از جمله یک قطعیِ گذرا — کار را
+      // شکست‌خورده اعلام می‌کرد، درحالی‌که دانلود روی سرور ادامه داشت.
+      // سرور موقع وصل دوباره وضعیت فعلی را می‌فرستد، پس چیزی گم نمی‌شود.
+      if (events.readyState === EventSource.CLOSED) {
+        clearStale()
+        onProgress({ status: 'error', percent: 0, error: 'connection-lost' })
+        return
+      }
+      // ولی اگر تلاش برای وصل دوباره خیلی طول بکشد (قطعیِ دائمی، نه گذرا)،
+      // برای همیشه در حالت «در حال تلاش» گیر نکنیم
+      if (!staleTimer) {
+        staleTimer = setTimeout(() => {
+          staleTimer = undefined
+          events?.close()
+          onProgress({ status: 'error', percent: 0, error: 'connection-lost' })
+        }, 20000)
+      }
+    }
+  }
+
+  open()
+  return () => {
+    clearStale()
+    if (pollTimer) clearInterval(pollTimer)
+    events?.close()
+  }
+}
+
+/**
  * پیاده‌سازی واقعی روی بک‌اند FastAPI.
  * پروگرس از طریق SSE می‌آید: POST /downloads → {jobId} سپس GET /downloads/{jobId}/events
  */
@@ -140,8 +311,8 @@ export const httpApi: MusicApi = {
     // `/net` فقط یک بولِ در حافظه را می‌خواند و مرتب پرسیده می‌شود؛ `/net/check`
     // واقعاً پروب می‌زند و فقط با کلیکِ صریحِ کاربر صدا زده می‌شود
     const res = recheck
-      ? await fetch(`${base()}/net/check`, { method: 'POST', signal })
-      : await fetch(`${base()}/net`, { signal })
+      ? await apiFetch(`${base()}/net/check`, { method: 'POST', signal })
+      : await apiFetch(`${base()}/net`, { signal })
     // نرسیدن به خودِ سرور یک چیزِ دیگر است (وای‌فای قطع، سرور خاموش) و
     // `OfflineBar` جدا نشانش می‌دهد — اینجا فقط «نمی‌دانم» برمی‌گردانیم
     if (!res.ok) return null
@@ -165,7 +336,7 @@ export const httpApi: MusicApi = {
   },
 
   async removeFromLibrary(jobId) {
-    const res = await fetch(`${base()}/library/${jobId}`, { method: 'DELETE' })
+    const res = await apiFetch(`${base()}/library/${jobId}`, { method: 'DELETE' })
     if (!res.ok) throw new Error(await errorText(res))
   },
 
@@ -179,35 +350,35 @@ export const httpApi: MusicApi = {
 
   async recordPlay(jobId, seconds) {
     // شکستش بی‌صدا رد می‌شود: ثبتِ پخش یک راحتی است، نه چیزی که پخش را خراب کند
-    await fetch(`${base()}/plays`, {
+    await apiFetch(`${base()}/plays`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ jobId, seconds }),
     }).catch(() => null)
   },
 
   async stats(days = 7, signal) {
-    const res = await fetch(`${base()}/stats?days=${days}`, { signal })
+    const res = await apiFetch(`${base()}/stats?days=${days}`, { signal })
     if (!res.ok) return null
     return readJson<Stats>(res)
   },
 
   async favorites(signal) {
-    const res = await fetch(`${base()}/favorites`, { signal })
+    const res = await apiFetch(`${base()}/favorites`, { signal })
     if (!res.ok) return null
     return readJson<LibraryItem[]>(res)
   },
 
   async dailyMix(signal) {
-    const res = await fetch(`${base()}/mix`, { signal })
+    const res = await apiFetch(`${base()}/mix`, { signal })
     if (!res.ok) return null
     return readJson<DailyMix>(res)
   },
 
   async candidates(track, source) {
-    const res = await fetch(`${base()}/candidates`, {
+    const res = await apiFetch(`${base()}/candidates`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ ...trackRef(track), source }),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -216,15 +387,14 @@ export const httpApi: MusicApi = {
 
   download({ track, quality, candidateUrl }, onProgress) {
     const ctrl = new AbortController()
-    let events: EventSource | null = null
     let id: string | null = null
-    let staleTimer: ReturnType<typeof setTimeout> | undefined
+    let listen: (() => void) | null = null
 
     onProgress({ status: 'queued', percent: 0 })
 
-    fetch(`${base()}/downloads`, {
+    apiFetch(`${base()}/downloads`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       // متادیتا را همراه می‌فرستیم تا سرور برای تگ‌گذاری دوباره lookup نزند
       body: JSON.stringify({ ...trackRef(track), quality, candidateUrl }),
       signal: ctrl.signal,
@@ -237,66 +407,47 @@ export const httpApi: MusicApi = {
       .then(({ jobId }) => {
         id = jobId
         jobIdByTrack.set(jobKey(track.id, quality), jobId)
+        // شناسه‌ی سروری هرچه زودتر به استور برسد — لایک/ثبتِ پخش و
+        // re-attach بعد از رفرش به همین شناسه وابسته‌اند، نه شناسه‌ی محلی
+        onProgress({ status: 'queued', percent: 0, jobId })
         // لغو قبل از رسیدن jobId: حالا که id داریم، به سرور هم خبر بده
         if (ctrl.signal.aborted) {
           void abortJob(jobId)
           return
         }
-        events = new EventSource(`${base()}/downloads/${jobId}/events`)
-        events.onmessage = (e) => {
-          if (staleTimer) {
-            clearTimeout(staleTimer)
-            staleTimer = undefined
-          }
-          // این‌یکی از fetch نمی‌آید، پس خودش باید مطلق شود
-          const p = absolute(JSON.parse(e.data) as DownloadProgress)
-          onProgress(p)
-          if (p.status === 'ready' || p.status === 'error' || p.status === 'canceled') {
-            events?.close()
-          }
-        }
-        events.onerror = () => {
-          // EventSource خودش وصل دوباره می‌زند و در آن حالت readyState روی
-          // CONNECTING است. قبلاً هر خطایی — از جمله یک قطعیِ گذرا — کار را
-          // شکست‌خورده اعلام می‌کرد، درحالی‌که دانلود روی سرور ادامه داشت.
-          // سرور موقع وصل دوباره وضعیت فعلی را می‌فرستد، پس چیزی گم نمی‌شود.
-          if (events?.readyState === EventSource.CLOSED) {
-            onProgress({ status: 'error', percent: 0, error: 'ارتباط با سرور قطع شد' })
-            return
-          }
-          // ولی اگر تلاش برای وصل دوباره خیلی طول بکشد (قطعیِ دائمی، نه گذرا)،
-          // برای همیشه در حالت «در حال تلاش» گیر نکنیم
-          if (!staleTimer) {
-            staleTimer = setTimeout(() => {
-              staleTimer = undefined
-              events?.close()
-              onProgress({ status: 'error', percent: 0, error: 'ارتباط با سرور قطع شد' })
-            }, 20000)
-          }
-        }
+        listen = listenToJob(jobId, onProgress, () => ctrl.signal.aborted)
       })
       .catch((err: unknown) => {
         if (ctrl.signal.aborted) return
         onProgress({
           status: 'error',
           percent: 0,
-          error: err instanceof Error ? err.message : 'خطای ناشناخته',
+          error: err instanceof Error ? err.message : 'unknown-error',
         })
       })
 
     return () => {
       ctrl.abort()
-      if (staleTimer) clearTimeout(staleTimer)
-      events?.close()
+      listen?.()
       // بستن EventSource کار را روی سرور متوقف نمی‌کند — باید صریح لغو شود
       if (id) void abortJob(id)
     }
   },
 
+  attach(jobId, onProgress) {
+    const ctrl = new AbortController()
+    // فقط گوش می‌دهد؛ لغوِ خودِ جاب از مسیر صریحِ DELETE انجام می‌شود
+    const stop = listenToJob(jobId, onProgress, () => ctrl.signal.aborted)
+    return () => {
+      ctrl.abort()
+      stop()
+    }
+  },
+
   async vibeSuggest(input: VibeInput, signal) {
-    const res = await fetch(`${base()}/vibe`, {
+    const res = await apiFetch(`${base()}/vibe`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(input),
       signal,
     })
@@ -313,9 +464,9 @@ export const httpApi: MusicApi = {
       .filter((id): id is string => Boolean(id))
     if (!jobIds.length) return null
 
-    const res = await fetch(`${base()}/downloads/zip`, {
+    const res = await apiFetch(`${base()}/downloads/zip`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ jobIds, name }),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -326,7 +477,7 @@ export const httpApi: MusicApi = {
   async identify(file, filename, signal) {
     const body = new FormData()
     body.append('file', file, filename)
-    const res = await fetch(`${base()}/identify`, { method: 'POST', body, signal })
+    const res = await apiFetch(`${base()}/identify`, { method: 'POST', body, signal })
     // ۵۰۳ یعنی سرور اصلاً شناسایی ندارد — با «چیزی پیدا نشد» فرق دارد، و
     // متنش دقیقاً می‌گوید کدام تکه کم است
     if (res.status === 503) throw new IdentifyUnavailable(await errorText(res))
@@ -335,16 +486,16 @@ export const httpApi: MusicApi = {
   },
 
   async chapters(url, signal) {
-    const res = await fetch(`${base()}/chapters?ref=${encodeURIComponent(url)}`, { signal })
+    const res = await apiFetch(`${base()}/chapters?ref=${encodeURIComponent(url)}`, { signal })
     // لینکی که باز نشد یعنی «چپتری در کار نیست»، نه خطایی که باید toast شود
     if (!res.ok) return null
     return readJson<ChaptersInfo>(res)
   },
 
   async split(url, quality, indexes) {
-    const res = await fetch(`${base()}/downloads/split`, {
+    const res = await apiFetch(`${base()}/downloads/split`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ url, quality, indexes }),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -352,7 +503,7 @@ export const httpApi: MusicApi = {
   },
 
   async splitStatus(taskId) {
-    const res = await fetch(`${base()}/downloads/split/${taskId}`)
+    const res = await apiFetch(`${base()}/downloads/split/${taskId}`)
     if (!res.ok) return null
     return readJson<SplitStatus>(res)
   },
@@ -362,15 +513,15 @@ export const httpApi: MusicApi = {
   },
 
   async playlist(id, signal) {
-    const res = await fetch(`${base()}/playlists/${id}`, { signal })
+    const res = await apiFetch(`${base()}/playlists/${id}`, { signal })
     if (!res.ok) return null
     return readJson<UserPlaylistDetail>(res)
   },
 
   async createPlaylist(input) {
-    const res = await fetch(`${base()}/playlists`, {
+    const res = await apiFetch(`${base()}/playlists`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(input),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -386,14 +537,14 @@ export const httpApi: MusicApi = {
   },
 
   async deletePlaylist(id) {
-    const res = await fetch(`${base()}/playlists/${id}`, { method: 'DELETE' })
+    const res = await apiFetch(`${base()}/playlists/${id}`, { method: 'DELETE' })
     if (!res.ok) throw new Error(await errorText(res))
   },
 
   async addToPlaylist(id, jobIds) {
-    const res = await fetch(`${base()}/playlists/${id}/items`, {
+    const res = await apiFetch(`${base()}/playlists/${id}/items`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify({ jobIds }),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -402,25 +553,25 @@ export const httpApi: MusicApi = {
   },
 
   async removeFromPlaylist(id, jobId) {
-    const res = await fetch(`${base()}/playlists/${id}/items/${jobId}`, { method: 'DELETE' })
+    const res = await apiFetch(`${base()}/playlists/${id}/items/${jobId}`, { method: 'DELETE' })
     if (!res.ok) throw new Error(await errorText(res))
   },
 
   async telegramStatus(signal) {
     // سروری که این نسخه را ندارد نباید دکمه‌ی شکسته نشان بدهد
-    const res = await fetch(`${base()}/telegram/status`, { signal })
+    const res = await apiFetch(`${base()}/telegram/status`, { signal })
     if (!res.ok) return null
     return (await res.json()) as TelegramStatus
   },
 
   async telegramPair() {
-    const res = await fetch(`${base()}/telegram/pair`, { method: 'POST' })
+    const res = await apiFetch(`${base()}/telegram/pair`, { method: 'POST' })
     if (!res.ok) throw new Error(await errorText(res))
     return (await res.json()) as TelegramPairing
   },
 
   async telegramUnlink() {
-    const res = await fetch(`${base()}/telegram/link`, { method: 'DELETE' })
+    const res = await apiFetch(`${base()}/telegram/link`, { method: 'DELETE' })
     if (!res.ok) throw new Error(await errorText(res))
   },
 
@@ -432,9 +583,9 @@ export const httpApi: MusicApi = {
         ? { kind: 'track', track: trackRef(req.track), title: req.track.title, quality: req.quality, keep: req.keep }
         : { kind: 'album', ref: req.ref, title: req.title, quality: req.quality, keep: req.keep }
 
-    const res = await fetch(`${base()}/telegram/send`, {
+    const res = await apiFetch(`${base()}/telegram/send`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(body),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -442,14 +593,14 @@ export const httpApi: MusicApi = {
   },
 
   async telegramSendStatus(id) {
-    const res = await fetch(`${base()}/telegram/sends/${id}`)
+    const res = await apiFetch(`${base()}/telegram/sends/${id}`)
     if (!res.ok) throw new Error(await errorText(res))
     return (await res.json()) as TelegramSend
   },
 
   async follows(chatId, signal) {
     const qs = chatId !== undefined ? `?chatId=${chatId}` : ''
-    const res = await fetch(`${base()}/follows${qs}`, { signal })
+    const res = await apiFetch(`${base()}/follows${qs}`, { signal })
     if (!res.ok) throw new Error(await errorText(res))
     return (await res.json()) as Follow[]
   },
@@ -464,9 +615,9 @@ export const httpApi: MusicApi = {
   },
 
   async follow(chatId, req: FollowRequest) {
-    const res = await fetch(`${base()}/follows?chatId=${chatId}`, {
+    const res = await apiFetch(`${base()}/follows?chatId=${chatId}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(req),
     })
     if (!res.ok) throw new Error(await errorText(res))
@@ -484,9 +635,9 @@ export const httpApi: MusicApi = {
   async prefetchStream(track: Track, quality?: Quality | null): Promise<boolean> {
     try {
       const q = quality ?? useSettings.getState().quality
-      const res = await fetch(`${base()}/stream/prefetch`, {
+      const res = await apiFetch(`${base()}/stream/prefetch`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: headers({ 'content-type': 'application/json' }),
         body: JSON.stringify({ ...trackRef(track), quality: q }),
       })
       return res.ok
@@ -494,5 +645,59 @@ export const httpApi: MusicApi = {
       // پری‌فچ بهترین تلاش است و خطایش نباید رابط کاربری را تحت تاثیر بگذارد
       return false
     }
+  },
+
+  // ---------- حساب کاربری ----------
+
+  async authProviders(signal?: AbortSignal) {
+    return json<AuthProviders>('/auth/providers', signal)
+  },
+
+  async authMe(signal?: AbortSignal) {
+    return json<AuthUser>('/auth/me', signal)
+  },
+
+  async authRegister(input) {
+    return send<AuthSession>('/auth/local/register', 'POST', input)
+  },
+
+  async authLogin(input) {
+    return send<AuthSession>('/auth/local/login', 'POST', input)
+  },
+
+  async authLogout() {
+    // سرور توکنِ خودبسنده را باطل نمی‌کند؛ این فراخوانی فقط برای تقارن است و
+    // خطایش هم اهمیتی ندارد (شبکه نبود، توکن سمتِ کلاینت پاک می‌شود)
+    await apiFetch(`${base()}/auth/logout`, { method: 'POST', headers: headers() }).catch(() => null)
+  },
+
+  async authUpdateProfile(patch) {
+    return send<AuthUser>('/auth/me', 'PATCH', patch)
+  },
+
+  async authMediaToken() {
+    return send<MediaToken>('/auth/media', 'POST')
+  },
+
+  async authUploadAvatar(file: File) {
+    const form = new FormData()
+    form.append('file', file)
+    // `content-type` عمداً ست نمی‌شود: مرورگر خودش boundary را می‌گذارد
+    const res = await apiFetch(`${base()}/auth/avatar`, {
+      method: 'POST',
+      headers: headers(),
+      body: form,
+    })
+    if (res.status === 401) {
+      clearToken()
+      onUnauthorized?.()
+      throw new AuthRequired(await errorText(res))
+    }
+    if (!res.ok) throw new Error(await errorText(res))
+    return (await res.json()) as AuthUser
+  },
+
+  async authRemoveAvatar() {
+    return send<AuthUser>('/auth/avatar', 'DELETE')
   },
 }

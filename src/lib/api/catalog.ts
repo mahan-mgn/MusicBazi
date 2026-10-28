@@ -241,6 +241,21 @@ export function artistDetail(artist: Artist): ArtistDetail {
     subtitle: `${ALBUMS.length} آلبوم`,
     topTracks: TOP_TRACKS,
     albums: [...ALBUMS].sort((a, b) => b.year - a.year),
+    appearsOn:
+      artist.source === 'spotify' || artist.source === 'apple'
+        ? [
+            {
+              id: `${artist.source}:album:collab-1`,
+              title: 'Remembering Pioneers (Various Artists)',
+              artist: 'Various Artists',
+              year: 2004,
+              artworkUrl: null,
+              trackCount: 10,
+              source: artist.source,
+              sourceUrl: '',
+            },
+          ]
+        : [],
     // پلی‌لیستِ همان کاتالوگِ ماک — برای دیدنِ بخشِ پلی‌لیست‌های صفحه بدون سرور
     playlists: PLAYLISTS.filter((p) => p.source === artist.source),
     // فقط برای دموی ساندکلاد پر است؛ بقیه‌ی پلتفرم‌ها این تب‌ها را ندارند

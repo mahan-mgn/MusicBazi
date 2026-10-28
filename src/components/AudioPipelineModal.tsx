@@ -5,9 +5,13 @@
  */
 
 import { useEffect, useState } from 'react'
-import { getNativeAudioDiagnostics, type AudioDiagnostics } from '../lib/native'
+import type { AudioDiagnostics } from '../lib/native'
+import { getUnifiedAudioDiagnostics } from '../lib/audio/AudioDiagnostics'
+import { getAudioOutputDevices, type AudioDevice, isSetSinkIdSupported } from '../lib/audio/AudioRouting'
+import { engine } from '../lib/audioEngine'
 import { isNativeApp } from '../lib/server'
 import { useI18n } from '../lib/i18n'
+import { matchingPreset } from '../lib/audio/dsp/EqPresets'
 import { useSettings } from '../store/settings'
 
 interface Props {
@@ -17,20 +21,32 @@ interface Props {
 
 export default function AudioPipelineModal({ open, onClose }: Props) {
   const { lang } = useI18n()
-  const { spatialAudio, eq, normalize, setSpatialAudio } = useSettings()
+  const { spatialAudio, eqBands, eqEnabled, normalize, setSpatialAudio, setEqEnabled } = useSettings()
   const [diag, setDiag] = useState<AudioDiagnostics | null>(null)
+  const [devices, setDevices] = useState<AudioDevice[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
 
   useEffect(() => {
-    if (!open || !isNativeApp()) return
+    if (!open) return
     let active = true
 
     const fetchDiag = async () => {
-      const data = await getNativeAudioDiagnostics()
+      const data = await getUnifiedAudioDiagnostics()
       if (active) setDiag(data)
     }
 
     void fetchDiag()
     const timer = setInterval(fetchDiag, 1000)
+
+    if (!isNativeApp() && isSetSinkIdSupported()) {
+      void getAudioOutputDevices().then((devs) => {
+        if (active) {
+          setDevices(devs)
+          setSelectedDeviceId(engine.getCurrentOutputDevice().deviceId)
+        }
+      })
+    }
+
     return () => {
       active = false
       clearInterval(timer)
@@ -40,7 +56,15 @@ export default function AudioPipelineModal({ open, onClose }: Props) {
   if (!open) return null
 
   const isFa = lang === 'fa'
-  const isBitPerfect = diag?.outputExact && eq === 'off' && !spatialAudio
+  const isBitPerfect = diag?.outputExact && (!eqEnabled || matchingPreset(eqBands) === 'FLAT') && !spatialAudio
+
+  const handleDeviceChange = async (deviceId: string) => {
+    setSelectedDeviceId(deviceId)
+    const dev = devices.find((d) => d.deviceId === deviceId)
+    await engine.setOutputDevice(deviceId, dev?.label)
+    const fresh = await getUnifiedAudioDiagnostics()
+    setDiag(fresh)
+  }
 
   return (
     <div
@@ -118,11 +142,18 @@ export default function AudioPipelineModal({ open, onClose }: Props) {
               {isFa ? 'زنجیره پردازش (Float32 DSP Chain)' : 'DSP Chain'}
             </span>
             <div className="mt-1 space-y-1">
-              <div className="flex justify-between text-muted-2">
+              <div className="flex items-center justify-between text-muted-2">
                 <span>{isFa ? 'اکولایزر (Parametric SVF)' : 'Equalizer'}</span>
-                <span className={`font-mono ${eq !== 'off' ? 'text-accent font-medium' : 'text-zinc-500'}`}>
-                  {eq !== 'off' ? `ON (${eq})` : 'BYPASS'}
-                </span>
+                <button
+                  onClick={() => setEqEnabled(!eqEnabled)}
+                  className={`text-[11px] font-mono px-2 py-0.5 rounded border transition ${
+                    eqEnabled
+                      ? 'border-accent bg-accent/20 text-accent'
+                      : 'border-line text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  {eqEnabled ? `ON (${matchingPreset(eqBands)})` : 'BYPASS'}
+                </button>
               </div>
               <div className="flex items-center justify-between text-muted-2">
                 <span>{isFa ? 'صدای فراگیر (Spatial Audio)' : 'Spatial Audio'}</span>
@@ -156,13 +187,27 @@ export default function AudioPipelineModal({ open, onClose }: Props) {
               {isFa ? 'خروجی و مسیر سخت‌افزار (Output Route)' : 'Output Route'}
             </span>
             <div className="mt-1 space-y-1">
-              <div className="flex justify-between text-muted-2">
+              <div className="flex justify-between items-center text-muted-2">
                 <span>{isFa ? 'دستگاه فعال' : 'Active Device'}</span>
-                <span className="font-mono text-fg">{diag?.deviceName || 'Built-in Audio'}</span>
+                {devices.length > 0 ? (
+                  <select
+                    value={selectedDeviceId}
+                    onChange={(e) => void handleDeviceChange(e.target.value)}
+                    className="max-w-[180px] truncate rounded border border-line bg-zinc-900 px-1.5 py-0.5 text-[11px] font-mono text-fg focus:border-accent focus:outline-none"
+                  >
+                    {devices.map((d) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.isUsb ? `🎧 ${d.label}` : d.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="font-mono text-fg">{diag?.deviceName || 'Built-in Audio'}</span>
+                )}
               </div>
               <div className="flex justify-between text-muted-2">
                 <span>{isFa ? 'نوع مسیر' : 'Route Kind'}</span>
-                <span className="font-mono text-fg">{diag?.routeKind || 'PHONE'}</span>
+                <span className="font-mono text-fg">{diag?.routeKind || 'SYSTEM_DEFAULT'}</span>
               </div>
               {diag?.bluetoothCodec && (
                 <div className="flex justify-between text-muted-2">

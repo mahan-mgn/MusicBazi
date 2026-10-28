@@ -1,0 +1,54 @@
+{
+  "_comment": "نمونه‌ی ورودیِ scripts/lyrics_smoke.py — فقط متادیتا. هیچ متنِ آهنگی اینجا نیست و نباید اضافه شود؛ اسکریپت خودش متن را واکشی می‌کند و هرگز چاپ نمی‌کند.",
+  "tracks": [
+    {
+      "_why": "ترکِ انگلیسیِ شناخته‌شده — نقطه‌ی مرجع برای مقایسه‌ی Providerها",
+      "title": "Blinding Lights",
+      "artist": "The Weeknd",
+      "album": "After Hours",
+      "duration_ms": 200040
+    },
+    {
+      "_why": "ترکِ فارسی — رومانیزه‌ی نامطمئن را می‌سنجد (اسپاتیفای «Mordi» و Genius «Moordi»)",
+      "title": "Mordi",
+      "artist": "Tlkhoon",
+      "album": null,
+      "duration_ms": 185000
+    },
+    {
+      "_why": "نسخه‌ی Live — باید نسخه‌ی استودیو ترجیح داده شود و این رد نشود",
+      "title": "Mard-e Tanha",
+      "artist": "Farhad Mehrad",
+      "album": "Mard-E Tanha",
+      "duration_ms": 185000
+    },
+    {
+      "_why": "نسخه‌ی Remix — همان تستِ بالا برای ریمیکس",
+      "title": "Blinding Lights (Remix)",
+      "artist": "The Weeknd",
+      "album": null,
+      "duration_ms": 220000
+    },
+    {
+      "_why": "ساختگی/ناموجود — هیچ Providerی نباید متن بدهد؛ اگر متنی آمد یعنی تطبیق اشتباه است. مدت ۰ = بی‌سیگنال (تأیید نشده).",
+      "title": "Zqxwv Nonexistent Track Nine Eight Seven Six",
+      "artist": "Nobody At All Zqxwv",
+      "album": null,
+      "duration_ms": 0
+    },
+    {
+      "_why": "عنوانِ بسیار رایج (هم‌نامی فراوان) — تطبیقِ کور را می‌سنجد؛ ممکن است متنِ آهنگِ دیگری برگردد. مدت ۰ = بی‌سیگنال.",
+      "title": "Home",
+      "artist": "Michael Buble",
+      "album": null,
+      "duration_ms": 0
+    },
+    {
+      "_why": "هنرمندِ هم‌نام در کاتالوگ‌ها (نامِ کوتاه و رایج) — تطبیقِ هنرمند را می‌سنجد. مدت ۰ = بی‌سیگنال.",
+      "title": "Barf",
+      "artist": "Farhad",
+      "album": null,
+      "duration_ms": 0
+    }
+  ]
+}

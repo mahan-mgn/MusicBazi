@@ -13,8 +13,21 @@ import asyncio
 import httpx
 import pytest
 
-from app import catalog, vibe
+from app import catalog, credentials, db, vibe
 from app.models import AlbumDetail, Playlist, SearchResults, Track, VibeRequest
+
+
+def _gemini_key(monkeypatch, value: str | None) -> None:
+    """
+    کلیدِ Gemini حالا personal است و از `credentials` خوانده می‌شود، نه از یک
+    ثابتِ ماژولیِ `vibe`. برای «کلید دارد» روی ردیفِ مهمان می‌نویسیم و برای
+    «کلید ندارد» مقداری نمی‌گذاریم.
+    """
+    credentials.set_many(db.GUEST_ID, {"MUSICBAZI_GEMINI_API_KEY": value or ""}, 1.0)
+
+
+def _no_gemini_key(monkeypatch) -> None:
+    _gemini_key(monkeypatch, None)
 
 
 def _track(title: str, artist: str, source: str = "apple") -> Track:
@@ -138,7 +151,7 @@ class TestQualifiers:
 class TestSuggestWithoutLlm:
     @pytest.fixture(autouse=True)
     def no_key(self, monkeypatch):
-        monkeypatch.setattr(vibe, "GEMINI_API_KEY", None)
+        _no_gemini_key(monkeypatch)
 
     def test_chip_click_uses_canned_vibe_without_touching_client(self):
         # client=None: اگر مسیر چیپ سراغ شبکه می‌رفت، همین‌جا با AttributeError می‌شکست
@@ -194,10 +207,10 @@ def _req(**kw) -> VibeRequest:
 class TestCallLlm:
     @pytest.fixture(autouse=True)
     def key(self, monkeypatch):
-        monkeypatch.setattr(vibe, "GEMINI_API_KEY", "test-key")
+        _gemini_key(monkeypatch, "test-key")
 
     def test_no_key_short_circuits_without_a_request(self, monkeypatch):
-        monkeypatch.setattr(vibe, "GEMINI_API_KEY", None)
+        _no_gemini_key(monkeypatch)
         client = _FakeClient(lambda *a: (_ for _ in ()).throw(AssertionError("should not connect")))
 
         assert asyncio.run(vibe._call_llm(client, _req(), "ناراحتم")) is None
@@ -363,7 +376,7 @@ class TestCallLlm:
                 '{"vibe": "sad", "reply": "x", "reason": "r", "picks": [{"title": "A", "artist": "B"}]}'
             ))
 
-        monkeypatch.setattr(vibe, "library_digest", lambda: "User's liked artists: شادمهر عقیلی")
+        monkeypatch.setattr(vibe, "library_digest", lambda user_id="local": "User's liked artists: شادمهر عقیلی")
         asyncio.run(vibe._call_llm(_FakeClient(handler), _req(), "ناراحتم"))
 
         assert "User's liked artists: شادمهر عقیلی" in captured["body"]["systemInstruction"]["parts"][0]["text"]
@@ -377,7 +390,7 @@ class TestCallLlm:
                 '{"vibe": "sad", "reply": "x", "reason": "r", "picks": [{"title": "A", "artist": "B"}]}'
             ))
 
-        monkeypatch.setattr(vibe, "library_digest", lambda: None)
+        monkeypatch.setattr(vibe, "library_digest", lambda user_id="local": None)
         asyncio.run(vibe._call_llm(_FakeClient(handler), _req(), "ناراحتم"))
 
         assert "Taste profile" not in captured["body"]["systemInstruction"]["parts"][0]["text"]
@@ -402,14 +415,14 @@ class TestCallLlm:
 class TestSuggestWithLlm:
     @pytest.fixture(autouse=True)
     def key(self, monkeypatch):
-        monkeypatch.setattr(vibe, "GEMINI_API_KEY", "test-key")
+        _gemini_key(monkeypatch, "test-key")
 
     def test_llm_result_is_used_when_available(self, monkeypatch):
         fake_result = vibe.VibeResult(
             vibe="calm", label=vibe.VIBES["calm"].label, reply="آروم باش.", picks=[("A", "B")]
         )
 
-        async def fake_llm(client, req, text):
+        async def fake_llm(client, req, text, user_id="local"):
             return fake_result
 
         monkeypatch.setattr(vibe, "_call_llm", fake_llm)
@@ -418,7 +431,7 @@ class TestSuggestWithLlm:
         assert result is fake_result
 
     def test_llm_failure_falls_back_to_keywords(self, monkeypatch):
-        async def fake_llm(client, req, text):
+        async def fake_llm(client, req, text, user_id="local"):
             return None
 
         monkeypatch.setattr(vibe, "_call_llm", fake_llm)
@@ -436,7 +449,7 @@ class TestSuggestWithLlm:
             vibe="romantic", label=vibe.VIBES["romantic"].label, reply="عشق!", picks=[("A", "B")], reason="r"
         )
 
-        async def fake_llm(client, req, text):
+        async def fake_llm(client, req, text, user_id="local"):
             captured["text"] = text
             return fake_result
 
@@ -449,7 +462,7 @@ class TestSuggestWithLlm:
     def test_chip_falls_back_to_its_own_vibe_when_llm_is_silent(self, monkeypatch):
         """بدونِ کلید/با خطای Gemini، چیپ باید همان وایبِ خودش را بدهد نه حدسِ متن."""
 
-        async def fake_llm(client, req, text):
+        async def fake_llm(client, req, text, user_id="local"):
             return None
 
         monkeypatch.setattr(vibe, "_call_llm", fake_llm)
@@ -461,7 +474,7 @@ class TestSuggestWithLlm:
 
 class TestResolveTracks:
     def test_dedupes_and_caps_at_max(self, monkeypatch):
-        async def fake_search(client, query):
+        async def fake_search(client, query, uid="local"):
             if "dup" in query:
                 return SearchResults(query=query, tracks=[_track("Same Song", "Artist")])
             return SearchResults(query=query, tracks=[_track(query.strip(), "X")])
@@ -475,7 +488,7 @@ class TestResolveTracks:
         assert [t.title for t in tracks].count("Same Song") == 1
 
     def test_a_failed_search_does_not_break_the_rest(self, monkeypatch):
-        async def fake_search(client, query):
+        async def fake_search(client, query, uid="local"):
             if "boom" in query:
                 raise RuntimeError("provider down")
             return SearchResults(query=query, tracks=[_track(query.strip(), "X")])
@@ -486,7 +499,7 @@ class TestResolveTracks:
         assert [t.title for t in tracks] == ["ok y"]
 
     def test_empty_search_results_are_skipped(self, monkeypatch):
-        async def fake_search(client, query):
+        async def fake_search(client, query, uid="local"):
             return SearchResults(query=query, tracks=[])
 
         monkeypatch.setattr(catalog, "search", fake_search)
@@ -497,7 +510,7 @@ class TestResolveTracks:
         assert asyncio.run(vibe.resolve_tracks(None, [])) == []
 
     def test_excluded_track_ids_are_dropped(self, monkeypatch):
-        async def fake_search(client, query):
+        async def fake_search(client, query, uid="local"):
             return SearchResults(query=query, tracks=[_track(query.strip(), "X", source="deezer")])
 
         monkeypatch.setattr(catalog, "search", fake_search)
@@ -544,7 +557,7 @@ class TestTracksFromPlaylists:
         p1, p2 = _playlist("1"), _playlist("2")
         overlapping_titles = [f"t{i}" for i in range(10)]
 
-        async def fake_resolve(client, ref):
+        async def fake_resolve(client, ref, uid="local"):
             # هر دو پلی‌لیست همان ده عنوان را دارند — نتیجه باید یکتا بماند
             return _detail(ref, overlapping_titles)
 
@@ -561,7 +574,7 @@ class TestTracksFromPlaylists:
         detail = _detail("a", ["Keep", "Drop"])
         drop_id = next(t.id for t in detail.tracks if t.title == "Drop")
 
-        async def fake_resolve(client, ref):
+        async def fake_resolve(client, ref, uid="local"):
             return detail
 
         monkeypatch.setattr(catalog, "resolve_ref", fake_resolve)
@@ -573,7 +586,7 @@ class TestTracksFromPlaylists:
     def test_a_failed_resolve_does_not_break_the_rest(self, monkeypatch):
         p1, p2 = _playlist("1"), _playlist("2")
 
-        async def fake_resolve(client, ref):
+        async def fake_resolve(client, ref, uid="local"):
             if ref == p1.sourceUrl:
                 raise RuntimeError("down")
             return _detail("b", ["Ok Song"])
@@ -597,10 +610,10 @@ class TestBuildPlaylist:
     def test_uses_platform_playlists_when_found(self, monkeypatch):
         pl = _playlist("1")
 
-        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers(), uid="local"):
             return [pl]
 
-        async def fake_tracks_from_playlists(client, playlists, exclude):
+        async def fake_tracks_from_playlists(client, playlists, exclude, uid="local"):
             return [_track("Real Song", "Artist", source="deezer")]
 
         async def fail_resolve_tracks(client, picks, exclude=frozenset()):
@@ -617,10 +630,10 @@ class TestBuildPlaylist:
         assert "Playlist 1" in result.reply
 
     def test_falls_back_to_the_old_method_when_no_playlists_found(self, monkeypatch):
-        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers(), uid="local"):
             return []
 
-        async def fake_resolve_tracks(client, picks, exclude=frozenset()):
+        async def fake_resolve_tracks(client, picks, exclude=frozenset(), uid="local"):
             return [_track("Fallback Song", "Artist")]
 
         monkeypatch.setattr(vibe, "_search_playlists", fake_search_playlists)
@@ -637,14 +650,14 @@ class TestBuildPlaylist:
         سناریوی «یک پلی لیست غمگین از آهنگ های قدیمی ایرانی میخوام»: هم
         جستجوی پلی‌لیستِ واقعی هم استخرِ برگشتی باید همان قیدها را ببینند.
         """
-        monkeypatch.setattr(vibe, "GEMINI_API_KEY", None)
+        _no_gemini_key(monkeypatch)
         captured: dict = {}
 
-        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers(), uid="local"):
             captured["qualifiers"] = qualifiers
             return []  # پلتفرم چیزی نداد — باید به استخرِ فیلترشده بیفتد
 
-        async def fake_resolve_tracks(client, picks, exclude=frozenset()):
+        async def fake_resolve_tracks(client, picks, exclude=frozenset(), uid="local"):
             captured["picks"] = picks
             return [_track("بزن بارون", "فریدون فروغی", source="deezer")]
 
@@ -663,13 +676,13 @@ class TestBuildPlaylist:
         """پلی‌لیست پیدا شد ولی resolve_ref همه را None داد (پلتفرم موقتاً قطع) — نباید دست‌خالی بماند."""
         pl = _playlist("1")
 
-        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers(), uid="local"):
             return [pl]
 
-        async def empty_tracks_from_playlists(client, playlists, exclude):
+        async def empty_tracks_from_playlists(client, playlists, exclude, uid="local"):
             return []
 
-        async def fake_resolve_tracks(client, picks, exclude=frozenset()):
+        async def fake_resolve_tracks(client, picks, exclude=frozenset(), uid="local"):
             return [_track("Fallback Song", "Artist")]
 
         monkeypatch.setattr(vibe, "_search_playlists", fake_search_playlists)
@@ -728,15 +741,15 @@ class TestLibraryAwareness:
         assert vibe._owned_files([track])[track.id].jobId == "j-high"
 
     def test_build_playlist_reports_reason_and_ready(self, monkeypatch, fresh_db, track):
-        async def fake_suggest(client, req):
+        async def fake_suggest(client, req, user_id="local"):
             return vibe.VibeResult(
                 vibe="sad", label=vibe.VIBES["sad"].label, reply="r", picks=[("x", "y")], reason="چون دلتنگی"
             )
 
-        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers(), uid="local"):
             return []
 
-        async def fake_resolve(client, picks, exclude=frozenset()):
+        async def fake_resolve(client, picks, exclude=frozenset(), uid="local"):
             return [track]
 
         monkeypatch.setattr(vibe, "_search_playlists", fake_search_playlists)
@@ -755,12 +768,12 @@ class TestLibraryAwareness:
 
     def test_keyword_path_has_no_reason(self, monkeypatch):
         """مسیرِ کلیدواژه توضیحی نمی‌سازد — «چرا اینا؟» فقط با مدل."""
-        monkeypatch.setattr(vibe, "GEMINI_API_KEY", None)
+        _no_gemini_key(monkeypatch)
 
-        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers()):
+        async def fake_search_playlists(client, key, qualifiers=vibe.Qualifiers(), uid="local"):
             return []
 
-        async def fake_resolve(client, picks, exclude=frozenset()):
+        async def fake_resolve(client, picks, exclude=frozenset(), uid="local"):
             return [_track("x", "y")]
 
         monkeypatch.setattr(vibe, "_search_playlists", fake_search_playlists)

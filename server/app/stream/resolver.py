@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from typing import Any, Callable
@@ -236,6 +237,7 @@ class YouTubeStreamResolver:
         video_id: str,
         purpose: str = "playback",
         quality: str | None = None,
+        user_id: str = "local",
     ) -> ResolvedStream:
         """
         رزولو کردن استریم ویدیو از یوتیوب با اعمال دقیق خط مشی فال‌بک.
@@ -283,10 +285,21 @@ class YouTubeStreamResolver:
             )
         else:
             try:
+                user_cookie = None
+                try:
+                    from .. import ydl
+                    cookies_file = ydl._live("COOKIES_FILE", ydl.COOKIES_FILE)
+                    if cookies_file and os.path.exists(cookies_file):
+                        with open(cookies_file, "r", encoding="utf-8", errors="ignore") as f:
+                            user_cookie = f.read()
+                except Exception:
+                    user_cookie = None
+
                 stream = await self.primary.resolve_stream(
                     video_id=clean_vid,
                     purpose=purpose,
                     quality=quality,
+                    cookie=user_cookie,
                 )
                 # اعتبارسنجی انقضای لحظه رزولوشن (Resolution-time expiration check)
                 if stream.is_expired():
@@ -353,6 +366,7 @@ class YouTubeStreamResolver:
                 video_id=clean_vid,
                 purpose=purpose,
                 quality=quality,
+                user_id=user_id,
             )
             if stream.is_expired():
                 raise ExpiredStreamError(

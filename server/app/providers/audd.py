@@ -22,7 +22,9 @@ from pathlib import Path
 
 import httpx
 
-from ..config import AUDD_API, AUDD_TOKEN, PROXY
+from .. import credentials
+from ..config import AUDD_API, PROXY
+from ..db import GUEST_ID
 
 # آپلودِ فایل به‌علاوه‌ی تشخیص؛ تنگ‌تر از این روی شبکه‌ی معمولی زود می‌برد
 _TIMEOUT = 60.0
@@ -45,11 +47,11 @@ class AuddMatch:
     release_date: str | None = None
 
 
-def enabled() -> bool:
-    return bool(AUDD_TOKEN)
+def enabled(uid: str = GUEST_ID) -> bool:
+    return credentials.audd_token(uid) is not None
 
 
-def recognize(path: Path) -> AuddMatch | None:
+def recognize(path: Path, uid: str = GUEST_ID) -> AuddMatch | None:
     """
     None یعنی نشناخت (که یک جوابِ معتبر است).
 
@@ -59,14 +61,15 @@ def recognize(path: Path) -> AuddMatch | None:
 
     بلاک‌کننده است — باید در thread صدا زده شود.
     """
-    if not enabled() or not path.exists():
+    token = credentials.audd_token(uid)
+    if not token or not path.exists():
         return None
 
     try:
         with path.open("rb") as handle:
             res = httpx.post(
                 AUDD_API,
-                data={"api_token": AUDD_TOKEN},
+                data={"api_token": token},
                 files={"file": (path.name, handle)},
                 timeout=_TIMEOUT,
                 proxy=PROXY,

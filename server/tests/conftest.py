@@ -77,6 +77,34 @@ def playlist() -> Playlist:
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_credentials(monkeypatch):
+    """
+    هر تست از صفر شروع کند.
+
+    مقدارها حالا در `user_secrets` می‌نشینند و کشِ شمارنده‌ی `credentials` در
+    حافظه می‌ماند؛ بدونِ این، تستی که کلیدی را برای حسابِ مهمان ست می‌کند آن را
+    به تستِ بعدی نشت می‌دهد. `effective()` برای مهمان به `cfg.*` نگاه می‌کند، پس
+    مقدارهای سراسری هم صفر می‌شوند.
+    """
+    from app import config as cfg
+    from app import credentials
+
+    credentials.reset()
+    for name in (
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_CLIENT_SECRET",
+        "GENIUS_ACCESS_TOKEN",
+        "GEMINI_API_KEY",
+        "ACOUSTID_KEY",
+        "AUDD_TOKEN",
+        "COOKIES_FILE",
+    ):
+        monkeypatch.setattr(cfg, name, None)
+    yield
+    credentials.reset()
+
+
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
     """دیتابیس خالی و مستقل برای هر تست."""

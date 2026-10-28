@@ -96,11 +96,18 @@ class ResolvedStream(BaseModel):
             raise ValueError("مقدار عددی نمی‌تواند منفی باشد")
         return v
 
-    def is_expired(self, skew_seconds: int = 30) -> bool:
-        """بررسی اینکه آیا مهلت دسترسی استریم به پایان رسیده است یا خیر."""
+    def is_expired(self, skew_seconds: int = 30, now: float | None = None) -> bool:
+        """
+        بررسی اینکه آیا مهلت دسترسی استریم به پایان رسیده است یا خیر.
+
+        `now` برای تزریق ساعت لازم است: کشِ `ResolvedURLCache` ساعت خودش را
+        تزریق می‌کند و اگر انقضا با ساعت دیوار سنجیده شود، تست نمی‌تواند
+        زمان را جلو ببرد و رفتار کش در تست و production یکی نمی‌ماند.
+        """
         if self.expires_at is None:
             return False
-        return time.time() + skew_seconds >= self.expires_at
+        reference = time.time() if now is None else now
+        return reference + skew_seconds >= self.expires_at
 
     def to_dict(self) -> dict[str, Any]:
         """تبدیل به دیکشنری خالص برای سریال‌سازی و ترنسفر."""

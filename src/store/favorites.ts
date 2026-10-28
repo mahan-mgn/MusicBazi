@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../lib/api'
+import { onIdentityChange } from '../lib/identity'
 
 /**
  * لایک‌های کاربر — مجموعه‌ی jobIdهایی که قلب خورده‌اند.
@@ -48,3 +49,12 @@ export const useFavorites = create<FavoritesState>((set, get) => ({
     }
   },
 }))
+
+/*
+ * ورود/خروج بدونِ رفرش: قلب‌های حسابِ قبلی نباید در حسابِ تازه روشن بمانند —
+ * شناسه‌ی جاب‌ها هم مالِ اوست. `version` هم بالا می‌رود تا فهرستِ «لایک‌شده‌ها»
+ * که به آن وابسته است دوباره واکشی کند.
+ */
+onIdentityChange(() => {
+  useFavorites.setState((s) => ({ items: {}, version: s.version + 1 }))
+})

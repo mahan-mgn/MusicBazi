@@ -87,3 +87,59 @@ class TestM3u:
     def test_unknown_duration_is_minus_one(self, full):
         """`-1` قرارداد خودِ M3U برای «نمی‌دانم» است؛ صفر یعنی ترکِ صفرثانیه‌ای."""
         assert "#EXTINF:-1," in paths.m3u([(full.model_copy(update={"durationMs": 0}), "a.mp3")])
+
+
+class TestArtistCatalogArchive:
+    def test_single_release_detection(self, track):
+        # ترک بدون آلبوم
+        assert paths.is_single_release(track.model_copy(update={"album": None})) is True
+
+        # ترک با آلبوم برابر با عنوان
+        single_track = track.model_copy(update={"title": "Gorg", "album": "Gorg", "trackNumber": 1})
+        assert paths.is_single_release(single_track) is True
+
+        # ترک با پسوند Single در نام آلبوم
+        single_with_suffix = track.model_copy(update={"title": "Gorg", "album": "Gorg - Single", "trackNumber": 1})
+        assert paths.is_single_release(single_with_suffix) is True
+
+        # ترک هم‌نام با آلبوم اما شماره ترک بیش از ۱ (عضو آلبوم)
+        title_track_in_album = track.model_copy(update={"title": "Barzakh", "album": "Barzakh", "trackNumber": 3})
+        assert paths.is_single_release(title_track_in_album) is False
+
+        # ترک هم‌نام با آلبوم که در بسته چندین ترک از آن آلبوم وجود دارد
+        album_counts = {"barzakh": 12, "gorg": 1}
+        title_track_first = track.model_copy(update={"title": "Barzakh", "album": "Barzakh", "trackNumber": 1})
+        assert paths.is_single_release(title_track_first, album_counts) is False
+
+        # تک‌آهنگ مستقل در همان بسته
+        standalone_single = track.model_copy(update={"title": "Gorg", "album": "Gorg", "trackNumber": 1})
+        assert paths.is_single_release(standalone_single, album_counts) is True
+
+    def test_render_archive_path_places_singles_in_artist_root(self, track):
+        """تک‌آهنگ‌های کاتالوگ مستقیماً زیر پوشه هنرمند قرار می‌گیرند، بدون پوشه اضافه."""
+        single = track.model_copy(update={"title": "Nawazesh", "album": "Nawazesh", "trackNumber": 1, "artist": "Amir Tataloo"})
+        rendered = paths.render_archive_path(single, ".mp3", is_album=False, primary_artist="Amir Tataloo")
+        assert rendered == "Amir Tataloo/Nawazesh.mp3"
+
+    def test_render_archive_path_places_album_tracks_in_album_subfolder(self, track):
+        """تمام ترک‌های آلبوم همراه با شماره در پوشه همان آلبوم قرار می‌گیرند."""
+        t1 = track.model_copy(update={"title": "Bebor", "album": "Ebrahim", "trackNumber": 1, "artist": "Mohsen Chavoshi"})
+        t2 = track.model_copy(update={"title": "Jahan", "album": "Ebrahim", "trackNumber": 2, "artist": "Mohsen Chavoshi"})
+
+        assert paths.render_archive_path(t1, ".mp3", is_album=True, primary_artist="Mohsen Chavoshi") == "Mohsen Chavoshi/Ebrahim/01 - Bebor.mp3"
+        assert paths.render_archive_path(t2, ".mp3", is_album=True, primary_artist="Mohsen Chavoshi") == "Mohsen Chavoshi/Ebrahim/02 - Jahan.mp3"
+
+    def test_render_archive_path_keeps_guest_tracks_in_main_artist_album(self, track):
+        """ترک‌هایی که خواننده مهمان دارند به پوشه هنرمند دیگر پرتاب نمی‌شوند و در آلبوم اصلی می‌مانند."""
+        guest_track = track.model_copy(
+            update={
+                "title": "Kojayi",
+                "album": "Shahrzad",
+                "trackNumber": 5,
+                "artist": "Mohsen Chavoshi, Sina Sarlak",
+                "albumArtist": "Mohsen Chavoshi",
+            }
+        )
+        rendered = paths.render_archive_path(guest_track, ".mp3", is_album=True, primary_artist="Mohsen Chavoshi")
+        assert rendered == "Mohsen Chavoshi/Shahrzad/05 - Kojayi.mp3"
+

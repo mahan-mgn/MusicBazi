@@ -1,3 +1,5 @@
+import { cachedMediaToken, withMediaToken } from './auth'
+import { trackDedupeKey } from './radio'
 import { apiUrl } from './server'
 import type { Quality, Track } from './types'
 import type { PlayItem } from '../store/player'
@@ -22,9 +24,28 @@ export const QUALITY_RANK: Record<string, number> = {
  * در غیر این صورت، بالاترین کیفیت موجود (FLAC > Original > 320 > Opus ...) انتخاب می‌شود.
  */
 export function findBestJob<
-  T extends { track: { id: string }; quality?: string; format?: string; createdAt?: number },
->(jobs: T[], trackId: string, preferredQuality?: string | null): T | undefined {
-  const matching = jobs.filter((j) => j.track.id === trackId)
+  T extends { track: { id: string; title?: string; artist?: string; durationMs?: number }; quality?: string; format?: string; createdAt?: number },
+>(jobs: T[], trackId: string, preferredQuality?: string | null, track?: Pick<Track, 'title' | 'artist' | 'durationMs'>): T | undefined {
+  let matching = jobs.filter((j) => j.track.id === trackId)
+  if (matching.length === 0 && track?.title && track?.artist) {
+    const key = trackDedupeKey(track)
+    matching = jobs.filter(
+      (j) => j.track.title && j.track.artist && trackDedupeKey(j.track as Pick<Track, 'title' | 'artist'>) === key,
+    )
+  }
+
+  // اعتبارسنجی انطباق مدت‌زمان: اگر ترکی در کتابخانه با طول انحرافی (مانند نسخه slowed ۳:۴۹ در برابر ۳:۱۹)
+  // وجود داشته باشد، آن جاب نامنطبق تلقی شده و رد می‌شود تا پلیر به استریم نسخه اصلی سوئیچ کند
+  if (track?.durationMs && track.durationMs >= 30_000) {
+    matching = matching.filter((j) => {
+      const jDur = j.track.durationMs ?? 0
+      if (!jDur) return true
+      const delta = Math.abs(track.durationMs! - jDur) / 1000
+      const relDelta = delta / (track.durationMs! / 1000)
+      return !(delta > 5.0 && relDelta > 0.035)
+    })
+  }
+
   if (matching.length === 0) return undefined
   if (matching.length === 1) return matching[0]
 
@@ -59,7 +80,9 @@ export function streamUrlFor(track: Track, quality?: Quality | null): string {
   if (track.sourceUrl) p.set('source_url', track.sourceUrl)
   const q = quality ?? useSettings.getState().quality
   if (q) p.set('quality', q)
-  return apiUrl(`/api/stream?${p.toString()}`)
+  // `<audio>` و hls.js هدر نمی‌فرستند: برای کاربرِ واردشده، مسیرِ `/api/stream`
+  // بدونِ `mt` به مهمان تفسیر می‌شود و یوتیوب با کوکیِ او پیش نمی‌رود.
+  return withMediaToken(apiUrl(`/api/stream?${p.toString()}`), cachedMediaToken())
 }
 
 /**
@@ -73,7 +96,11 @@ export function streamLyricsUrlFor(track: Track): string {
   })
   if (track.album) p.set('album', track.album)
   if (track.durationMs) p.set('duration_ms', String(track.durationMs))
-  return apiUrl(`/api/stream/lyrics?${p.toString()}`)
+  // راهنماهای اختیاری — فقط وقتی مقدار دارند فرستاده می‌شوند تا URLِ
+  // درخواست‌های معمولی مثل قبل بماند
+  if (track.videoId) p.set('videoId', track.videoId)
+  if (track.isrc) p.set('isrc', track.isrc)
+  return withMediaToken(apiUrl(`/api/stream/lyrics?${p.toString()}`), cachedMediaToken())
 }
 
 /**
@@ -83,15 +110,27 @@ export function streamLyricsUrlFor(track: Track): string {
  */
 export function toPlayItem(
   track: Track,
-  downloadedJob?: { streamUrl?: string; lyricsUrl?: string; gainDb?: number } | null,
+  downloadedJob?: { track?: { durationMs?: number }; streamUrl?: string; lyricsUrl?: string; gainDb?: number } | null,
   preferredQuality?: Quality | null,
 ): PlayItem {
-  if (downloadedJob?.streamUrl) {
+  let isMismatched = false
+  if (downloadedJob && downloadedJob.track?.durationMs && track.durationMs && track.durationMs >= 30_000) {
+    const delta = Math.abs(track.durationMs - downloadedJob.track.durationMs) / 1000
+    const relDelta = delta / (track.durationMs / 1000)
+    if (delta > 5.0 && relDelta > 0.035) {
+      isMismatched = true
+    }
+  }
+
+  if (downloadedJob?.streamUrl && !isMismatched) {
+    const media = cachedMediaToken()
     return {
       id: track.id,
       track,
-      streamUrl: downloadedJob.streamUrl,
-      lyricsUrl: downloadedJob.lyricsUrl,
+      streamUrl: withMediaToken(apiUrl(downloadedJob.streamUrl), media),
+      lyricsUrl: downloadedJob.lyricsUrl
+        ? withMediaToken(apiUrl(downloadedJob.lyricsUrl), media)
+        : undefined,
       gainDb: downloadedJob.gainDb,
     }
   }

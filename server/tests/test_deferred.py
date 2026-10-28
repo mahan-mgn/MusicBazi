@@ -145,6 +145,23 @@ def test_an_already_downloaded_track_is_reused_even_during_a_blackout(manager, f
     assert job.progress.status == "ready"
 
 
+def test_reusable_rejects_duration_mismatch(manager, fresh_db, track):
+    """اگر جاب موجود در کتابخانه از نظر مدت زمان با ترک درخواستی انحراف داشته باشد، بازاستفاده نمی‌شود."""
+    path = fresh_db.DB_PATH.parent / "song_slowed.mp3"
+    path.write_bytes(b"audio")
+    slowed_track = track.model_copy(update={"durationMs": 229_000})  # 3:49
+    fresh_db.insert_job("old_slowed", slowed_track, "320", "ready", 1.0)
+    fresh_db.update_job("old_slowed", path=str(path), bytes=5)
+
+    official_track = track.model_copy(update={"durationMs": 199_000})  # 3:19
+
+    async def go():
+        return manager.create(official_track, "320")
+
+    job, reused = asyncio.run(go())
+    assert reused is False
+
+
 async def _create(manager, track, candidate_url=None):
     return manager.create(track, "320", candidate_url)
 

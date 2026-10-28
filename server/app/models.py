@@ -54,6 +54,18 @@ class Track(BaseModel):
     valence: float | None = None
     energy: float | None = None
     views: str | None = None
+    # شناسه‌هایی که فقط *بعضی* منابعِ متن لازم دارند، نه کلِ اپ.
+    #
+    # `videoId` کلیدِ SimpMusic است و `isrc` کلیدِ تطبیقِ دقیق در چند منبعِ
+    # دیگر. هیچ‌کدام هویتِ ترک نیستند — ترک با `id`/`sourceUrl` شناسایی
+    # می‌شود — پس اختیاری‌اند و فقط وقتی پر می‌شوند که منبعِ ترک آن‌ها را
+    # داشته باشد (یوتیوب videoId دارد، آی‌تیونز/دیزر isrc).
+    #
+    # این دو عمداً روی `Track` نشستند نه در یک مسیرِ جدا: تنها راهِ رساندنشان
+    # از فرانت به Provider است، و `Track` همان چیزی است که این مسیر عبور
+    # می‌دهد. `src/lib/types.ts` آینهٔ همین فیلدها را دارد.
+    videoId: str | None = None
+    isrc: str | None = None
 
 
 class Artist(BaseModel):
@@ -170,6 +182,8 @@ class ArtistDetail(Artist):
 
     topTracks: list[Track] = Field(default_factory=list)
     albums: list[Album] = Field(default_factory=list)
+    # حضور در آثار دیگران و کالکشن‌ها (اسپاتیفای و اپل موزیک)
+    appearsOn: list[Album] = Field(default_factory=list)
     # تفکیک تک‌آهنگ‌ها/EPها برای کاتالوگ دقیق (یوتیوب موزیک و ساندکلاد)
     singles: list[Album] = Field(default_factory=list)
     # ویدیوهای رسمی هنرمند (یوتیوب موزیک و کانال یوتیوب)
@@ -715,3 +729,63 @@ class ClientError(BaseModel):
     url: str = ""
     app: str = ""
     device: str = ""
+
+
+# ---------- حساب کاربری ----------
+
+
+class AuthUser(BaseModel):
+    """
+    پروفایلِ کاربر — همان چیزی که فرانت رندر می‌کند.
+
+    `passwordHash` عمداً اینجا نیست و هیچ‌وقت نباید اضافه شود: تنها ساختارِ
+    عمومیِ کاربر همین است و نشتیِ آن یعنی نشتیِ هشِ رمز.
+    """
+
+    id: str
+    kind: str
+    username: str | None = None
+    displayName: str = ""
+    email: str | None = None
+    # آدرسِ آماده‌ی نمایش؛ ترتیبِ اولویت (فایل محلی، بعد گوگل) سمتِ سرور
+    # انتخاب می‌شود تا فرانت دو شاخه نداشته باشد
+    avatarUrl: str | None = None
+    hasPassword: bool = False
+    createdAt: float = 0.0
+
+
+class AuthSession(BaseModel):
+    """توکنِ نشست + پروفایل، در یک پاسخ — تا بعدِ ورود یک رفت‌وبرگشت باشد."""
+
+    token: str
+    expiresAt: float
+    user: AuthUser
+
+
+class AuthCredentials(BaseModel):
+    username: str
+    password: str
+    displayName: str | None = None
+
+
+class AuthLogin(BaseModel):
+    username: str
+    password: str
+
+
+class AuthProfilePatch(BaseModel):
+    displayName: str | None = None
+    username: str | None = None
+
+
+class AuthProviders(BaseModel):
+    """چه راه‌های ورودی روی این سرور زنده‌اند — تا UI دکمه‌ی مرده نشان ندهد."""
+
+    google: bool = False
+    # چرا گوگل نیست: «تنظیم نشده» یا «آدرسِ بازگشت روی این دامنه ممکن نیست»
+    googleReason: str | None = None
+
+
+class MediaToken(BaseModel):
+    token: str
+    expiresAt: float

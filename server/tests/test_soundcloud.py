@@ -88,6 +88,35 @@ class TestMapping:
 
         assert soundcloud.as_entry(row)["thumbnail"] == "https://i1.sndcdn.com/avatars-xyz-t500x500.jpg"
 
+    def test_artwork_drops_default_avatar(self):
+        """آواتار پیش‌فرض نباید به عنوان کاور استفاده شود چون t500x500 آن ۴۰۴ است."""
+        row = _row(1, "GONAH", artwork_url=None)
+        row["user"]["avatar_url"] = "https://a1.sndcdn.com/images/default_avatar_large.png"
+
+        assert soundcloud.as_entry(row)["thumbnail"] is None
+
+    def test_snippet_policy_tracks_are_filtered_from_entries(self):
+        """ترک‌های پیش‌نمایش ۳۰ ثانیه‌ای Go+ نباید در کاتالوگ بنشینند."""
+        rows = [
+            _row(1, "FULL", policy="ALLOW"),
+            _row(2, "PREVIEW", policy="SNIPPET"),
+            _row(3, "BLOCKED", policy="BLOCK"),
+        ]
+        entries = soundcloud._entries(rows)
+        assert [e["title"] for e in entries] == ["FULL"]
+
+    def test_dash_variants_in_title_split_correctly(self):
+        """خط تیره‌های en-dash و em-dash باید نام هنرمند و عنوان را به درستی تفکیک کنند."""
+        e1 = {"id": "1", "title": "Dorcci – Gonah", "uploader": "Dorcci"}
+        t1 = ytdlp._entry_to_track(e1, "soundcloud", None)
+        assert t1.artist == "Dorcci"
+        assert t1.title == "Gonah"
+
+        e2 = {"id": "2", "title": "Arown — Kagan", "uploader": "Arown"}
+        t2 = ytdlp._entry_to_track(e2, "soundcloud", None)
+        assert t2.artist == "Arown"
+        assert t2.title == "Kagan"
+
 
 def _user_row(user_id: int, username: str, **extra) -> dict:
     return {
@@ -691,6 +720,30 @@ class TestClientId:
         assert seen == ["stale", fresh]
         assert rows["11"]["title"] == "GONAH"
         # دفعه‌ی بعد از همان تازه شروع می‌کنیم
+        assert soundcloud._cached_id == fresh
+
+    def test_expired_cached_id_in_module_is_rescraped_and_invalidated(self, monkeypatch):
+        """اگر _cached_id از قبل مقدار داشته و منقضی شود، نباید در کش گیر کند."""
+        fresh = "f" * 32
+        seen: list[str] = []
+
+        def handler(url, params):
+            if url.endswith("/tracks"):
+                seen.append(params["client_id"])
+                if params["client_id"] == "stale_cached":
+                    return self._response(url, 401, text="")
+                return self._response(url, 200, json_body=[_row(11, "GONAH")])
+            if url == "https://soundcloud.com/":
+                return self._response(url, 200, text='<script src="https://a.sndcdn.com/app.js">')
+            return self._response(url, 200, text=f'client_id:"{fresh}"')
+
+        self._fake_http(monkeypatch, handler)
+        monkeypatch.setattr(soundcloud, "_cached_id", "stale_cached")
+
+        rows = soundcloud.tracks(["11"])
+
+        assert seen == ["stale_cached", fresh]
+        assert rows["11"]["title"] == "GONAH"
         assert soundcloud._cached_id == fresh
 
     def test_ids_are_sent_in_batches(self, monkeypatch):

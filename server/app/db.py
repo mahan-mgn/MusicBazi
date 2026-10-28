@@ -25,6 +25,10 @@ from .config import DB_PATH
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
+# کاربرِ مهمان. همان ثابتی که `auth.GUEST` است؛ تکرارِ رشته این‌جا فقط برای
+# این است که `db.py` بی‌نیاز از `auth` بماند (auth خودش از db استفاده می‌کند).
+GUEST_ID = "local"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id           TEXT PRIMARY KEY,
@@ -188,6 +192,70 @@ CREATE TABLE IF NOT EXISTS resolved_candidates (
     resolved_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_resolved_cand_at ON resolved_candidates(resolved_at DESC);
+
+-- منبعِ متنِ انتخابیِ کاربر برای هر آهنگ. نبودِ ردیف یعنی «خودکار».
+-- کلید همان `track_id` است که مسیرِ استریم/کش استفاده می‌کند، پس یک آهنگ
+-- یک انتخاب دارد و انتخاب با پاک‌شدنِ کش از دست نمی‌رود.
+CREATE TABLE IF NOT EXISTS lyrics_preferences (
+    track_id    TEXT PRIMARY KEY,
+    provider    TEXT NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+-- کاربران. تا پیش از این اپ هیچ هویتی نداشت و همه‌ی داده سراسری بود.
+--
+-- ردیفِ با شناسه‌ی `local` یک کاربرِ *واقعی* است، نه حالتِ خاص: درخواستِ
+-- بی‌توکن به همان تفسیر می‌شود («مهمان») و همه‌ی داده‌ی نسخه‌ی تک‌کاربره به آن
+-- می‌رسد. این‌طور هیچ کوئری‌ای شاخه‌ی «کاربر ندارد» لازم نمی‌شود.
+--
+-- `username` تهی است تا وقتی کاربر خودش انتخابش کند — ورودِ گوگل بدونِ گرفتنِ
+-- نامِ کاربری هم باید کار کند.
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL,
+    username      TEXT,
+    display_name  TEXT NOT NULL DEFAULT '',
+    email         TEXT,
+    google_sub    TEXT,
+    avatar_file   TEXT,
+    avatar_url    TEXT,
+    password_hash TEXT,
+    created_at    REAL NOT NULL
+);
+-- یکتاییِ نامِ کاربری، بی‌توجه به بزرگی و کوچکیِ حروف: «Ali» و «ali» یک نفرند
+-- و اجازه‌دادن به هر دو، سرِ ورود گیج‌کننده است.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(LOWER(username));
+-- شناسه‌ی پایدارِ گوگل؛ کلیدِ تشخیصِ «همان کاربر قبلی» در ورودِ دوباره.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google  ON users(google_sub);
+
+-- مالکیتِ کتابخانه. جدولِ جدا نه ستونِ user_id روی jobs: دو حساب می‌توانند
+-- همان ترک را داشته باشند و همان فایلِ روی دیسک را share کنند؛ با ستون، یا
+-- باید دو ردیف می‌شد (دو فایل، هدر رفتن فضا) یا مالکِ چندم جای نمی‌گرفت.
+-- این‌طور `find_ready`/`find_any_ready` و کل منطقِ کشِ آفلاین دست‌نخورده
+-- می‌ماند: «آیا فایل هست؟» پرسشی است جدا از «آیا این کاربر صاحبش است؟».
+CREATE TABLE IF NOT EXISTS job_owners (
+    user_id  TEXT NOT NULL,
+    job_id   TEXT NOT NULL,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    added_at REAL NOT NULL,
+    PRIMARY KEY (user_id, job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_owner_job  ON job_owners(job_id);
+CREATE INDEX IF NOT EXISTS idx_owner_user ON job_owners(user_id, added_at DESC);
+
+-- اعتبارنامه‌های شخصیِ هر حساب (کلیدِ اسپاتیفای، Genius، Gemini، AcoustID، AudD
+-- و مسیرِ فایلِ کوکیِ یوتیوب). عمداً از `users` جدا است: این مقدارها راز‌اند و
+-- هیچ کوئریِ پروفایلی نباید ناخواسته آن‌ها را با خود ببرد.
+--
+-- مقدارِ خالی یعنی «صریحاً پاک شده» — نه «ست نشده». همین تفاوت است که اجازه
+-- می‌دهد کاربرِ مهمان کلیدِ سراسری را عمداً خاموش کند بدونِ اینکه دوباره برگردد.
+CREATE TABLE IF NOT EXISTS user_secrets (
+    user_id    TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
 """
 
 # ستون‌هایی که بعد از اولین نسخه اضافه شدند. CREATE TABLE IF NOT EXISTS روی
@@ -215,6 +283,34 @@ def _migrate(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass  # ستون از قبل هست
 
+    # ستون‌هایی که روی جدول‌های جز `jobs` اضافه شدند (مالکیتِ حساب‌ها).
+    for table, name, sql_type in (
+        ("plays", "user_id", "TEXT NOT NULL DEFAULT 'local'"),
+        ("playlists", "user_id", "TEXT NOT NULL DEFAULT 'local'"),
+        # زمانِ تمام‌شدنِ ویزاردِ ستاپ برای هر حساب. `NULL` یعنی «هنوز ندیده»؛
+        # رشته‌ی خالی نمی‌تواند این را نشان دهد (کاربر می‌تواند همه‌ی کلیدها را
+        # پاک کند و باز هم ویزارد نباید برگردد).
+        ("users", "setup_done_at", "REAL"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+        except sqlite3.OperationalError:
+            pass  # ستون از قبل هست
+
+    # داده‌ی تک‌کاربره‌ی موجود به حسابِ مهمان (`local`) می‌رسد: هر حسابِ تازه
+    # خالی شروع می‌کند و چیزی از بین نمی‌رود. `INSERT OR IGNORE` هر بار اجرا
+    # می‌شود ولی بعد از اولین بار چیزی برای اضافه‌کردن نیست — و اگر جابی بعدش
+    # بی‌مالک ماند (مثلاً ردیفِ بازیابی‌شده از بکاپ) دوباره به مهمان می‌رسد.
+    conn.execute(
+        """INSERT OR IGNORE INTO job_owners (user_id, job_id, favorite, added_at)
+           SELECT ?, id, favorite, created_at FROM jobs""",
+        (GUEST_ID,),
+    )
+    # ایندکسِ پخش‌ها هنگامِ ساختِ جدول نبوده؛ این‌جا بعد از افزودنِ ستون ساخته
+    # می‌شود (وگرنه SQLite روی ستونِ ناموجود خطا می‌داد).
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_plays_user ON plays(user_id, played_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id, created_at DESC)")
+
 
 def connect() -> sqlite3.Connection:
     global _conn
@@ -227,6 +323,11 @@ def connect() -> sqlite3.Connection:
         _conn.execute("PRAGMA synchronous=NORMAL")
         _conn.executescript(SCHEMA)
         _migrate(_conn)
+        _conn.execute(
+            """INSERT OR IGNORE INTO users (id, kind, username, display_name, created_at)
+               VALUES (?, 'guest', NULL, '', ?)""",
+            (GUEST_ID, time.time()),
+        )
         _conn.commit()
     return _conn
 
@@ -289,7 +390,14 @@ def insert_job(
     status: str,
     created_at: float,
     candidate_url: str | None = None,
+    user_id: str = GUEST_ID,
 ) -> None:
+    """
+    ردیفِ جاب + مالکیتش برای کاربری که درخواست داده.
+
+    مالکیت همیشه نوشته می‌شود، حتی وقتی فایل از حسابِ دیگری بازاستفاده شده:
+    «فایل روی دیسک هست» و «این کاربر آن را در کتابخانه دارد» دو چیزند.
+    """
     _exec(
         """INSERT OR REPLACE INTO jobs
            (id, track_id, track_json, search_text, quality, status, created_at, candidate_url)
@@ -305,6 +413,56 @@ def insert_job(
             candidate_url,
         ),
     )
+    own(job_id, user_id, added_at=created_at)
+
+
+# ---------- مالکیت ----------
+
+
+def own(job_id: str, user_id: str, *, favorite: bool = False, added_at: float | None = None) -> None:
+    """
+    جاب را در کتابخانه‌ی کاربر می‌گذارد (یا اگر بود، دست نمی‌زند).
+
+    `INSERT OR IGNORE` عمدی است: بازاستفاده‌ی همان ترک توسطِ همان کاربر نباید
+    «تاریخِ افزوده‌شدن» و لایکش را ریست کند.
+    """
+    _exec(
+        """INSERT OR IGNORE INTO job_owners (user_id, job_id, favorite, added_at)
+           VALUES (?, ?, ?, ?)""",
+        (user_id, job_id, 1 if favorite else 0, time.time() if added_at is None else added_at),
+    )
+
+
+def job_primary_owner(job_id: str) -> str:
+    """
+    اولین مالکِ جاب — یعنی کسی که دانلود را شروع کرد.
+
+    دانلودِ پس‌زمینه باید بداند با اعتبارنامه‌ی *کی* برود (کوکی/Genius). بعد از
+    ری‌استارت، جابِ معوق فقط در دیتابیس است و این تنها راهِ بازیابیِ آن است.
+    """
+    rows = _query(
+        "SELECT user_id FROM job_owners WHERE job_id = ? ORDER BY added_at ASC LIMIT 1",
+        (job_id,),
+    )
+    return rows[0]["user_id"] if rows else GUEST_ID
+
+
+def owns_job(user_id: str, job_id: str) -> bool:
+    return bool(_query("SELECT 1 FROM job_owners WHERE user_id = ? AND job_id = ?", (user_id, job_id)))
+
+
+def disown(job_id: str, user_id: str) -> bool:
+    """
+    حذف از کتابخانه‌ی یک کاربر. تعدادِ مالکانِ باقی‌مانده برمی‌گردد؟ نه — `bool`
+    یعنی «مالک بود». تصمیمِ پاک‌کردنِ فایل مالِ صدازننده است (`owner_count`).
+    """
+    cur = _exec("DELETE FROM job_owners WHERE user_id = ? AND job_id = ?", (user_id, job_id))
+    return bool(cur.rowcount)
+
+
+def owner_count(job_id: str) -> int:
+    row = _query("SELECT COUNT(*) c FROM job_owners WHERE job_id = ?", (job_id,))[0]
+    return int(row["c"])
 
 
 _UPDATABLE = (
@@ -351,6 +509,7 @@ def update_track(job_id: str, track: Any) -> None:
 
 def delete_job(job_id: str) -> None:
     _exec("DELETE FROM jobs WHERE id = ?", (job_id,))
+    _exec("DELETE FROM job_owners WHERE job_id = ?", (job_id,))
     # عضوِ پلی‌لیستی که فایلش رفته، ردیفِ مرده است — پلی‌لیست باید کوتاه شود،
     # نه اینکه به چیزی اشاره کند که دیگر نیست
     _exec("DELETE FROM playlist_items WHERE job_id = ?", (job_id,))
@@ -402,6 +561,47 @@ def find_any_ready(
         if r["path"] and Path(r["path"]).exists():
             return r
     return rows[0] if rows else None
+
+
+def find_any_ready_by_meta(
+    title: str, artist: str, preferred_quality: str | None = None
+) -> sqlite3.Row | None:
+    """هر فایلِ آماده‌ای از آهنگ با همین عنوان و هنرمند، برای حالتی که شناسه در سینگل و آلبوم فرق دارد."""
+    import re
+
+    t_clean = title.strip().lower()
+    a_clean = artist.strip().lower()
+    if not t_clean or not a_clean:
+        return None
+
+    # حذف پسوندهایی نظیر - single برای تطابق بهتر
+    t_clean = re.sub(r"\s*[-–—]\s*(single|ep|album version|remastered).*", "", t_clean).strip()
+    escaped_title = _like(t_clean)
+    escaped_artist = _like(a_clean)
+
+    rows = _query(
+        f"""SELECT * FROM jobs
+           WHERE search_text LIKE ? ESCAPE '{_LIKE_ESCAPE}'
+             AND search_text LIKE ? ESCAPE '{_LIKE_ESCAPE}'
+             AND status = 'ready' AND path IS NOT NULL
+           ORDER BY
+             CASE quality
+               WHEN 'flac' THEN 7
+               WHEN 'original' THEN 6
+               WHEN '320' THEN 5
+               WHEN 'opus' THEN 4
+               WHEN 'm4a' THEN 3
+               WHEN '192' THEN 2
+               WHEN '128' THEN 1
+               ELSE 0
+             END DESC,
+             created_at DESC""",
+        (escaped_title, escaped_artist),
+    )
+    for r in rows:
+        if r["path"] and Path(r["path"]).exists():
+            return r
+    return None
 
 
 def get_resolved_candidates(track_id: str) -> list[dict] | None:
@@ -474,22 +674,31 @@ def deferred_jobs() -> list[sqlite3.Row]:
 # ---------- کتابخانه ----------
 
 
-def library(query: str = "", limit: int = 50, offset: int = 0) -> tuple[list[sqlite3.Row], int, int]:
+def library(
+    query: str = "", limit: int = 50, offset: int = 0, user_id: str = GUEST_ID
+) -> tuple[list[sqlite3.Row], int, int]:
     """(ردیف‌ها، تعداد کل، مجموع حجم) — فیلترِ متنی روی عنوان/هنرمند/آلبوم."""
-    where = "status = 'ready' AND path IS NOT NULL"
-    params: tuple = ()
+    where = "status = 'ready' AND path IS NOT NULL AND o.user_id = ?"
+    params: list = [user_id]
     if query.strip():
         where += f" AND search_text LIKE ? ESCAPE '{_LIKE_ESCAPE}'"
-        params = (_like(query.strip().lower()),)
+        params.append(_like(query.strip().lower()))
 
-    head = _query(f"SELECT COUNT(*) c, COALESCE(SUM(bytes), 0) b FROM jobs WHERE {where}", params)[0]
+    head = _query(
+        f"SELECT COUNT(*) c, COALESCE(SUM(jobs.bytes), 0) b FROM jobs JOIN job_owners o ON o.job_id = jobs.id WHERE {where}",
+        tuple(params),
+    )[0]
     # play_count زیرکوئری است نه JOIN: با LEFT JOIN و GROUP BY ساختارِ ردیف‌ها
-    # عوض می‌شد و prune سمتِ main.py که row["path"] می‌خواند به هم می‌ریخت
+    # عوض می‌شد و prune سمتِ main.py که row["path"] می‌خواند به هم می‌ریخت.
+    # `favorite` از جدولِ مالکیت می‌آید نه از jobs — لایک مالِ کاربر است، نه فایل.
     rows = _query(
-        f"""SELECT *,
-                   (SELECT COUNT(*) FROM plays p WHERE p.job_id = jobs.id) AS play_count,
-                   (SELECT MAX(p.played_at) FROM plays p WHERE p.job_id = jobs.id) AS last_played_at
-            FROM jobs WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+        f"""SELECT jobs.*, o.favorite AS favorite,
+                   (SELECT COUNT(*) FROM plays p
+                     WHERE p.job_id = jobs.id AND p.user_id = o.user_id) AS play_count,
+                   (SELECT MAX(p.played_at) FROM plays p
+                     WHERE p.job_id = jobs.id AND p.user_id = o.user_id) AS last_played_at
+            FROM jobs JOIN job_owners o ON o.job_id = jobs.id
+            WHERE {where} ORDER BY jobs.created_at DESC LIMIT ? OFFSET ?""",
         (*params, limit, offset),
     )
     return rows, int(head["c"]), int(head["b"])
@@ -534,25 +743,35 @@ def record_play(
     duration_ms: int,
     seconds: int,
     played_at: float,
+    user_id: str = GUEST_ID,
 ) -> None:
     _exec(
         """INSERT INTO plays
-           (job_id, track_id, title, artist, album, artwork_url, duration_ms, seconds, played_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (job_id, track_id, title, artist, album, artwork_url, duration_ms, seconds, played_at),
+           (job_id, track_id, title, artist, album, artwork_url, duration_ms, seconds, played_at, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (job_id, track_id, title, artist, album, artwork_url, duration_ms, seconds, played_at, user_id),
     )
 
 
-def set_favorite(job_id: str, favorite: bool) -> bool:
-    """False برمی‌گردد اگر جابی با این شناسه نبود."""
+def set_favorite(job_id: str, favorite: bool, user_id: str = GUEST_ID) -> bool:
+    """
+    `False` برمی‌گردد اگر این جاب در کتابخانه‌ی این کاربر نبود.
+
+    لایک روی `job_owners` می‌نشیند: دو کاربر می‌توانند یک فایل را داشته باشند و
+    یکی دوستش داشته باشد و دیگری نه. ستونِ قدیمیِ `jobs.favorite` فقط برای
+    مهمان آینه می‌شود — چند جا (`get_job` و صفِ دانلود) هنوز از همان می‌خوانند
+    و برای مهمان باید همان معنیِ قبلی را بدهد.
+    """
     cur = _exec(
-        "UPDATE jobs SET favorite = ? WHERE id = ?",
-        (1 if favorite else 0, job_id),
+        "UPDATE job_owners SET favorite = ? WHERE user_id = ? AND job_id = ?",
+        (1 if favorite else 0, user_id, job_id),
     )
+    if cur.rowcount and user_id == GUEST_ID:
+        _exec("UPDATE jobs SET favorite = ? WHERE id = ?", (1 if favorite else 0, job_id))
     return bool(cur.rowcount)
 
 
-def favorite_jobs() -> list[sqlite3.Row]:
+def favorite_jobs(user_id: str = GUEST_ID) -> list[sqlite3.Row]:
     """
     ترک‌های لایک‌شده، تازه‌ترین اول — برای نمایشِ «علاقه‌مندی‌ها».
 
@@ -560,16 +779,20 @@ def favorite_jobs() -> list[sqlite3.Row]:
     در این نما هم کار کند.
     """
     return _query(
-        """SELECT *,
-                  (SELECT COUNT(*) FROM plays p WHERE p.job_id = jobs.id) AS play_count,
-                  (SELECT MAX(p.played_at) FROM plays p WHERE p.job_id = jobs.id) AS last_played_at
-           FROM jobs
-           WHERE favorite = 1 AND status = 'ready' AND path IS NOT NULL
-           ORDER BY created_at DESC"""
+        """SELECT jobs.*, o.favorite AS favorite,
+                  (SELECT COUNT(*) FROM plays p
+                    WHERE p.job_id = jobs.id AND p.user_id = o.user_id) AS play_count,
+                  (SELECT MAX(p.played_at) FROM plays p
+                    WHERE p.job_id = jobs.id AND p.user_id = o.user_id) AS last_played_at
+           FROM jobs JOIN job_owners o ON o.job_id = jobs.id
+           WHERE o.favorite = 1 AND o.user_id = ?
+             AND jobs.status = 'ready' AND jobs.path IS NOT NULL
+           ORDER BY jobs.created_at DESC""",
+        (user_id,),
     )
 
 
-def recent_moods(since: float, limit: int) -> list[sqlite3.Row]:
+def recent_moods(since: float, limit: int, user_id: str = GUEST_ID) -> list[sqlite3.Row]:
     """
     حس‌وحالِ بیشترین‌های گوش‌داده‌شده — برای ساختِ میکس وقتی لایکی در کار نیست.
 
@@ -580,29 +803,31 @@ def recent_moods(since: float, limit: int) -> list[sqlite3.Row]:
     return _query(
         """SELECT j.valence AS valence, j.energy AS energy, COUNT(*) AS plays
            FROM plays p JOIN jobs j ON j.id = p.job_id
-           WHERE p.played_at >= ? AND j.valence IS NOT NULL
+           WHERE p.played_at >= ? AND p.user_id = ? AND j.valence IS NOT NULL
            GROUP BY j.id ORDER BY plays DESC LIMIT ?""",
-        (since, limit),
+        (since, user_id, limit),
     )
 
 
-def recent_plays(limit: int) -> list[sqlite3.Row]:
-    """تاریخچه‌ی پخش — تازه‌ترین اول."""
-    return _query("SELECT * FROM plays ORDER BY played_at DESC LIMIT ?", (limit,))
+def recent_plays(limit: int, user_id: str = GUEST_ID) -> list[sqlite3.Row]:
+    """تاریخچه‌ی پخشِ همین کاربر — تازه‌ترین اول."""
+    return _query(
+        "SELECT * FROM plays WHERE user_id = ? ORDER BY played_at DESC LIMIT ?", (user_id, limit)
+    )
 
 
-def play_totals(since: float) -> tuple[int, int, int]:
+def play_totals(since: float, user_id: str = GUEST_ID) -> tuple[int, int, int]:
     """(تعداد پخش، مجموع ثانیه‌های گوش‌شده، تعداد ترک‌های متفاوت) از یک زمان به بعد."""
     row = _query(
         """SELECT COUNT(*) c, COALESCE(SUM(seconds), 0) s,
                   COUNT(DISTINCT track_id) u
-           FROM plays WHERE played_at >= ?""",
-        (since,),
+           FROM plays WHERE played_at >= ? AND user_id = ?""",
+        (since, user_id),
     )[0]
     return int(row["c"]), int(row["s"]), int(row["u"])
 
 
-def top_tracks(since: float, limit: int) -> list[sqlite3.Row]:
+def top_tracks(since: float, limit: int, user_id: str = GUEST_ID) -> list[sqlite3.Row]:
     """
     بیشترین‌های یک بازه، گروه‌شده بر اساسِ ترک.
 
@@ -618,10 +843,10 @@ def top_tracks(since: float, limit: int) -> list[sqlite3.Row]:
         """SELECT track_id, title, artist, album, artwork_url,
                   COUNT(*) AS plays, COALESCE(SUM(seconds), 0) AS seconds,
                   MAX(played_at) AS last_at
-           FROM plays WHERE played_at >= ?
+           FROM plays WHERE played_at >= ? AND user_id = ?
            GROUP BY track_id
            ORDER BY plays DESC, last_at DESC LIMIT ?""",
-        (since, limit * 3),
+        (since, user_id, limit * 3),
     )
 
     merged: dict[tuple[str, str], dict[str, Any]] = {}
@@ -674,7 +899,7 @@ def top_tracks(since: float, limit: int) -> list[sqlite3.Row]:
     ]
 
 
-def top_artists(since: float, limit: int) -> list[sqlite3.Row]:
+def top_artists(since: float, limit: int, user_id: str = GUEST_ID) -> list[sqlite3.Row]:
     """
     بیشترین‌های هنرمند — با ادغامِ جداکننده‌ها.
 
@@ -685,9 +910,9 @@ def top_artists(since: float, limit: int) -> list[sqlite3.Row]:
     """
     rows = _query(
         """SELECT artist, COUNT(*) AS plays, COALESCE(SUM(seconds), 0) AS seconds
-           FROM plays WHERE played_at >= ?
+           FROM plays WHERE played_at >= ? AND user_id = ?
            GROUP BY artist ORDER BY plays DESC LIMIT ?""",
-        (since, limit * 3),
+        (since, user_id, limit * 3),
     )
 
     merged: dict[str, dict[str, Any]] = {}
@@ -736,6 +961,7 @@ def daily_mix(
     center: tuple[float, float] | None,
     exclude_ids: set[str],
     limit: int,
+    user_id: str = GUEST_ID,
 ) -> list[sqlite3.Row]:
     """
     میکسِ روزانه: نزدیک‌ترین ترک‌های کتابخانه به مرکزِ حسیِ کاربر.
@@ -748,7 +974,12 @@ def daily_mix(
     تحلیل‌نشده‌ها (بدونِ والانس) وقتی مرکز هست در انتها می‌نشینند نه بیرون:
     بیرون‌انداختنشان در کتابخانه‌ای که librosa خاموش است یعنی میکسِ خالی.
     """
-    rows = _query("SELECT * FROM jobs WHERE status = 'ready' AND path IS NOT NULL")
+    rows = _query(
+        """SELECT jobs.*, o.favorite AS favorite
+           FROM jobs JOIN job_owners o ON o.job_id = jobs.id
+           WHERE o.user_id = ? AND jobs.status = 'ready' AND jobs.path IS NOT NULL""",
+        (user_id,),
+    )
     candidates = [r for r in rows if r["track_id"] not in exclude_ids]
 
     if center is None:
@@ -772,7 +1003,7 @@ def daily_mix(
 # ---------- پلی‌لیست‌ها ----------
 
 
-def owned_refs(track_ids: list[str]) -> dict[str, sqlite3.Row]:
+def owned_refs(track_ids: list[str], user_id: str = GUEST_ID) -> dict[str, sqlite3.Row]:
     """
     کدام از این ترک‌ها از قبل در کتابخانه‌اند — برای چت‌باتِ وایب.
 
@@ -787,11 +1018,12 @@ def owned_refs(track_ids: list[str]) -> dict[str, sqlite3.Row]:
         return {}
     marks = ", ".join("?" for _ in track_ids)
     rows = _query(
-        f"""SELECT id, track_id, lyrics_path, loudness, peak, bytes
-            FROM jobs
-            WHERE status = 'ready' AND path IS NOT NULL AND track_id IN ({marks})
-            ORDER BY bytes DESC""",
-        tuple(track_ids),
+        f"""SELECT jobs.id, jobs.track_id, jobs.lyrics_path, jobs.loudness, jobs.peak, jobs.bytes
+            FROM jobs JOIN job_owners o ON o.job_id = jobs.id
+            WHERE o.user_id = ? AND jobs.status = 'ready' AND jobs.path IS NOT NULL
+              AND jobs.track_id IN ({marks})
+            ORDER BY jobs.bytes DESC""",
+        (user_id, *track_ids),
     )
     found: dict[str, sqlite3.Row] = {}
     for row in rows:
@@ -799,10 +1031,24 @@ def owned_refs(track_ids: list[str]) -> dict[str, sqlite3.Row]:
     return found
 
 
-def create_playlist(playlist_id: str, name: str, kind: str, rule: dict | None, created_at: float) -> None:
+def create_playlist(
+    playlist_id: str,
+    name: str,
+    kind: str,
+    rule: dict | None,
+    created_at: float,
+    user_id: str = GUEST_ID,
+) -> None:
     _exec(
-        "INSERT INTO playlists (id, name, kind, rule_json, created_at) VALUES (?, ?, ?, ?, ?)",
-        (playlist_id, name, kind, json.dumps(rule, ensure_ascii=False) if rule else None, created_at),
+        "INSERT INTO playlists (id, name, kind, rule_json, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            playlist_id,
+            name,
+            kind,
+            json.dumps(rule, ensure_ascii=False) if rule else None,
+            created_at,
+            user_id,
+        ),
     )
 
 
@@ -821,14 +1067,21 @@ def delete_playlist(playlist_id: str) -> None:
     _exec("DELETE FROM playlists WHERE id = ?", (playlist_id,))
 
 
-def get_playlist(playlist_id: str) -> sqlite3.Row | None:
-    rows = _query("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
+def get_playlist(playlist_id: str, user_id: str = GUEST_ID) -> sqlite3.Row | None:
+    """
+    پلی‌لیستِ همین کاربر — پلی‌لیستِ دیگری «وجود ندارد» (نه ۴۰۳).
+
+    کاربر نباید بتواند از وجودِ نامِ پلی‌لیستِ حسابِ دیگر باخبر شود.
+    """
+    rows = _query(
+        "SELECT * FROM playlists WHERE id = ? AND user_id = ?", (playlist_id, user_id)
+    )
     return rows[0] if rows else None
 
 
-def playlists() -> list[sqlite3.Row]:
+def playlists(user_id: str = GUEST_ID) -> list[sqlite3.Row]:
     """
-    همه‌ی پلی‌لیست‌ها، تازه‌ترین اول.
+    پلی‌لیست‌های همین کاربر، تازه‌ترین اول.
 
     شمارشِ اعضا در همین کوئری می‌آید چون سرِ فهرست لازم است و بدونش به‌ازای هر
     پلی‌لیست یک کوئری اضافه می‌شد. پلی‌لیستِ هوشمند عضوِ ذخیره‌شده ندارد، پس
@@ -838,18 +1091,25 @@ def playlists() -> list[sqlite3.Row]:
         """SELECT p.*, (
                SELECT COUNT(*) FROM playlist_items i WHERE i.playlist_id = p.id
            ) AS item_count
-           FROM playlists p ORDER BY p.created_at DESC"""
+           FROM playlists p WHERE p.user_id = ? ORDER BY p.created_at DESC""",
+        (user_id,),
     )
 
 
-def playlist_jobs(playlist_id: str) -> list[sqlite3.Row]:
-    """اعضای یک پلی‌لیستِ دستی، به ترتیبی که کاربر چیده."""
+def playlist_jobs(playlist_id: str, user_id: str = GUEST_ID) -> list[sqlite3.Row]:
+    """
+    اعضای یک پلی‌لیستِ دستی، به ترتیبی که کاربر چیده.
+
+    JOIN روی مالکیت: اگر مالکیتِ یک جاب برداشته شود (کاربر ترک را از کتابخانه
+    حذف کند)، عضوِ پلی‌لیست هم دیده نمی‌شود بدونِ اینکه ردیفِ پلی‌لیست دست بخورد.
+    """
     return _query(
-        """SELECT j.* FROM playlist_items i
+        """SELECT j.*, o.favorite AS favorite FROM playlist_items i
            JOIN jobs j ON j.id = i.job_id
+           JOIN job_owners o ON o.job_id = j.id AND o.user_id = ?
            WHERE i.playlist_id = ? AND j.status = 'ready' AND j.path IS NOT NULL
            ORDER BY i.position""",
-        (playlist_id,),
+        (user_id, playlist_id),
     )
 
 
@@ -896,25 +1156,25 @@ def reorder_playlist(playlist_id: str, job_ids: list[str]) -> None:
 # مرتب‌سازی‌های مجازِ پلی‌لیستِ هوشمند. رشته مستقیم داخل SQL می‌رود، پس
 # whitelist لازم است — نه به‌خاطر کاربرِ بدخواه، به‌خاطر تایپوی خودمان.
 SMART_SORT = {
-    "recent": "created_at DESC",
-    "oldest": "created_at ASC",
-    "energy": "energy DESC",
-    "calm": "energy ASC",
-    "happy": "valence DESC",
-    "sad": "valence ASC",
+    "recent": "jobs.created_at DESC",
+    "oldest": "jobs.created_at ASC",
+    "energy": "jobs.energy DESC",
+    "calm": "jobs.energy ASC",
+    "happy": "jobs.valence DESC",
+    "sad": "jobs.valence ASC",
 }
 
 
-def smart_jobs(rule: dict) -> list[sqlite3.Row]:
+def smart_jobs(rule: dict, user_id: str = GUEST_ID) -> list[sqlite3.Row]:
     """
-    اجرای قانونِ یک پلی‌لیستِ هوشمند روی کتابخانه.
+    اجرای قانونِ یک پلی‌لیستِ هوشمند روی کتابخانه‌ی همین کاربر.
 
     همیشه در لحظه‌ی خواندن اجرا می‌شود، نه موقع ساخت: «شادهای پرانرژی» باید
     ترکی را که دیروز دانلود کرده‌ای هم شامل شود، بدون اینکه کسی چیزی را
     دوباره بسازد.
     """
-    where = ["status = 'ready'", "path IS NOT NULL"]
-    params: list = []
+    where = ["jobs.status = 'ready'", "jobs.path IS NOT NULL", "o.user_id = ?"]
+    params: list = [user_id]
 
     if (text := str(rule.get("query") or "").strip().lower()):
         where.append(f"search_text LIKE ? ESCAPE '{_LIKE_ESCAPE}'")
@@ -939,7 +1199,9 @@ def smart_jobs(rule: dict) -> list[sqlite3.Row]:
     order = SMART_SORT.get(str(rule.get("sort") or "recent"), SMART_SORT["recent"])
     limit = max(1, min(int(rule.get("limit") or 50), 200))
     return _query(
-        f"SELECT * FROM jobs WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?",
+        f"""SELECT jobs.*, o.favorite AS favorite
+            FROM jobs JOIN job_owners o ON o.job_id = jobs.id
+            WHERE {' AND '.join(where)} ORDER BY {order} LIMIT ?""",
         (*params, limit),
     )
 
@@ -1256,6 +1518,181 @@ def catalog_stats() -> tuple[int, int]:
     entities = int(_query("SELECT COUNT(*) c FROM catalog_entity")[0]["c"])
     searches = int(_query("SELECT COUNT(*) c FROM catalog_search")[0]["c"])
     return entities, searches
+
+# ---------- منبعِ متنِ انتخابی ----------
+
+def put_lyrics_preference(track_id: str, provider: str, now: float) -> None:
+    """ذخیرهٔ منبعِ انتخابیِ یک آهنگ. دوباره‌نویسی، ردیفِ قبلی را جایگزین می‌کند."""
+    conn = connect()
+    conn.execute(
+        """INSERT INTO lyrics_preferences (track_id, provider, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(track_id) DO UPDATE SET
+               provider = excluded.provider,
+               updated_at = excluded.updated_at""",
+        (track_id, provider, now),
+    )
+    conn.commit()
+
+def get_lyrics_preference(track_id: str) -> str | None:
+    """منبعِ انتخابی، یا `None` یعنی «خودکار»."""
+    rows = _query("SELECT provider FROM lyrics_preferences WHERE track_id = ?", (track_id,))
+    return rows[0]["provider"] if rows else None
+
+def clear_lyrics_preference(track_id: str) -> None:
+    """پاک‌کردنِ انتخاب → بازگشت به «خودکار»."""
+    conn = connect()
+    conn.execute("DELETE FROM lyrics_preferences WHERE track_id = ?", (track_id,))
+    conn.commit()
+
+
+# ---------- کاربران ----------
+
+
+def create_user(
+    user_id: str,
+    kind: str,
+    *,
+    username: str | None = None,
+    display_name: str = "",
+    email: str | None = None,
+    google_sub: str | None = None,
+    password_hash: str | None = None,
+    created_at: float | None = None,
+) -> sqlite3.Row:
+    """
+    کاربرِ تازه می‌سازد و ردیفش را برمی‌گرداند.
+
+    `IntegrityError` عمداً گرفته نمی‌شود: یکتاییِ نامِ کاربری و شناسه‌ی گوگل
+    قیدهای دیتابیس‌اند و رقابتِ دو درخواستِ هم‌زمان باید همان‌جا شکست بخورد،
+    نه در یک چکِ `SELECT`ِ جدا که بینش و `INSERT` فاصله می‌ماند.
+    """
+    _exec(
+        """INSERT INTO users
+             (id, kind, username, display_name, email, google_sub, password_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            user_id,
+            kind,
+            username,
+            display_name,
+            email,
+            google_sub,
+            password_hash,
+            time.time() if created_at is None else created_at,
+        ),
+    )
+    row = user_by_id(user_id)
+    assert row is not None  # تازه نوشتیمش
+    return row
+
+
+def user_by_id(user_id: str) -> sqlite3.Row | None:
+    rows = _query("SELECT * FROM users WHERE id = ?", (user_id,))
+    return rows[0] if rows else None
+
+
+def user_by_username(username: str) -> sqlite3.Row | None:
+    """بی‌توجه به بزرگی/کوچکیِ حروف — همان قاعده‌ی ایندکسِ یکتا."""
+    rows = _query("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username.strip(),))
+    return rows[0] if rows else None
+
+
+def user_by_google_sub(google_sub: str) -> sqlite3.Row | None:
+    rows = _query("SELECT * FROM users WHERE google_sub = ?", (google_sub,))
+    return rows[0] if rows else None
+
+
+def list_users() -> list[sqlite3.Row]:
+    """همه‌ی کاربران، قدیمی‌ترین اول. مهمان هم میانشان است."""
+    return _query("SELECT * FROM users ORDER BY created_at ASC")
+
+
+def set_user_username(user_id: str, username: str | None) -> None:
+    _exec("UPDATE users SET username = ? WHERE id = ?", (username, user_id))
+
+
+def set_user_display_name(user_id: str, display_name: str) -> None:
+    _exec("UPDATE users SET display_name = ? WHERE id = ?", (display_name, user_id))
+
+
+def set_user_avatar(
+    user_id: str,
+    *,
+    avatar_file: str | None,
+    avatar_url: str | None = None,
+) -> None:
+    """
+    آواتار را می‌نشاند.
+
+    `avatar_url` فقط وقتی پاک می‌شود که صریحاً `None` بدهی *و* فایل محلی هم
+    نباشد — وگرنه حذفِ عکسِ آپلودی، آدرسِ گوگل را هم می‌برد و کاربر بعدش
+    آواتارِ حرف‌اول را می‌بیند.
+    """
+    _exec(
+        "UPDATE users SET avatar_file = ?, avatar_url = COALESCE(?, avatar_url) WHERE id = ?",
+        (avatar_file, avatar_url, user_id),
+    )
+
+
+def clear_user_avatar(user_id: str) -> None:
+    """هر دو منبع را پاک می‌کند — «حذفِ عکس» یعنی بازگشت به حرفِ اول."""
+    _exec("UPDATE users SET avatar_file = NULL, avatar_url = NULL WHERE id = ?", (user_id,))
+
+
+# ---------- اعتبارنامه‌های شخصی ----------
+
+
+def get_user_secret(user_id: str, key: str) -> str | None:
+    """
+    مقدارِ ذخیره‌شده، یا `None` اگر هیچ ردیفی نیست.
+
+    تفاوتِ `None` با رشته‌ی خالی حیاتی است: `""` یعنی «کاربر عمداً پاکش کرد»
+    و نباید به مقدارِ سراسری برگردد.
+    """
+    rows = _query(
+        "SELECT value FROM user_secrets WHERE user_id = ? AND key = ?", (user_id, key)
+    )
+    return rows[0]["value"] if rows else None
+
+
+def user_secrets_all(user_id: str) -> dict[str, str]:
+    """همه‌ی رازهای یک حساب، در یک رفت‌وبرگشت."""
+    return {
+        row["key"]: row["value"]
+        for row in _query("SELECT key, value FROM user_secrets WHERE user_id = ?", (user_id,))
+    }
+
+
+def put_user_secrets(user_id: str, values: dict[str, str], now: float) -> list[str]:
+    """UPSERT دسته‌ای؛ فهرستِ کلیدهایی را برمی‌گرداند که واقعاً عوض شدند."""
+    if not values:
+        return []
+    old = user_secrets_all(user_id)
+    changed = [k for k, v in values.items() if old.get(k) != v]
+    if not changed:
+        return []
+    conn = connect()
+    conn.executemany(
+        """INSERT INTO user_secrets (user_id, key, value, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = excluded.updated_at""",
+        [(user_id, k, values[k], now) for k in changed],
+    )
+    conn.commit()
+    return changed
+
+
+def set_setup_done(user_id: str, now: float) -> None:
+    """ویزارد دیگر برای این حساب باز نمی‌شود — مستقل از اینکه کلیدی ذخیره شده یا نه."""
+    _exec("UPDATE users SET setup_done_at = COALESCE(setup_done_at, ?) WHERE id = ?", (now, user_id))
+
+
+def setup_done_at(user_id: str) -> float | None:
+    rows = _query("SELECT setup_done_at FROM users WHERE id = ?", (user_id,))
+    return rows[0]["setup_done_at"] if rows else None
 
 
 # ---------- کمکی ----------

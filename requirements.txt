@@ -1,0 +1,17 @@
+# وابستگی‌های «فقط بات تلگرام» — نه کل پروژه.
+#
+# این فایل برای میزبان‌هایی است که از ریشه‌ی مخزن بیلد می‌کنند و
+# `requirements.txt` را خودکار پیدا می‌کنند (مثلاً Botkeep). بات یک کلاینتِ
+# نازکِ HTTP روی API سرور است و هیچ‌وقت ffmpeg/yt-dlp/librosa لمس نمی‌کند؛
+# اگر `server/requirements.txt` را نصب کنی، ~۸۰۰MB و کلِ سقفِ دیسکِ پلن
+# رایگان را می‌بلعد.
+#
+#   سرور (خانه)  →  server/requirements.txt
+#   بات (Botkeep) →  همین فایل
+#
+# pydantic اینجا صریح آمده چون در server/requirements.txt از FastAPI
+# غیرمستقیم می‌رسید و از مسیرِ بات، FastAPI نصب نمی‌شود.
+httpx[socks]>=0.28
+pydantic>=2.9
+python-telegram-bot>=21,<22
+python-dotenv>=1.0

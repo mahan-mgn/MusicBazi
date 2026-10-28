@@ -14,7 +14,8 @@ const LENS_PAD = 6
 const COVER_VT = 'cover-art'
 
 interface Props {
-  active: Tab
+  /** `undefined` یعنی هیچ‌کدام — صفحه‌ی تنظیمات زیرِ هیچ مقصدی نیست */
+  active: Tab | undefined
   onHome: () => void
   onLibrary: () => void
   onStats: () => void
@@ -98,7 +99,10 @@ function GlassNavBar({ active, onHome, onLibrary, onStats, onSearch }: Props) {
   // Remember last selected grouped tab so that on Search, the left pill doesn't duplicate Search
   const lastGroupedTabRef = useRef<'home' | 'library' | 'stats'>('home')
   useEffect(() => {
-    if (active !== 'search') {
+    // `settings` و `undefined` هیچ‌کدام مقصدِ این نوار نیستند و نباید آخرین
+    // مقصدِ به‌خاطر‌سپرده‌شده را خراب کنند — وگرنه برگشتن از تنظیمات، قرص را
+    // روی یک جای اشتباه می‌نشاند
+    if (active === 'home' || active === 'library' || active === 'stats') {
       lastGroupedTabRef.current = active
     }
   }, [active])

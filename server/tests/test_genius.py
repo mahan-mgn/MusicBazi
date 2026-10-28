@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from app.providers import genius
+from app import config
 
 
 class TestBestUrl:
@@ -240,10 +241,10 @@ def _response(status: int, *, json_body=None, text: str = "") -> httpx.Response:
 class TestFetch:
     @pytest.fixture(autouse=True)
     def token(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
     def test_no_token_short_circuits_without_a_request(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
         monkeypatch.setattr(genius.httpx, "Client", lambda **_: (_ for _ in ()).throw(AssertionError("should not connect")))
 
         assert genius.fetch("Barf", "Farhad", None, 0) is None
@@ -352,10 +353,10 @@ class TestFetch:
 class TestSongInfo:
     @pytest.fixture(autouse=True)
     def token(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "test-token")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
 
     def test_no_token_short_circuits_without_a_request(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
         monkeypatch.setattr(
             genius.httpx, "Client", lambda **_: (_ for _ in ()).throw(AssertionError("should not connect"))
         )
@@ -456,6 +457,39 @@ class TestSongInfo:
 
         assert genius.song_info("Barf", "Farhad") is None
 
+    @pytest.mark.parametrize("status", [404, 429, 500, 503])
+    def test_an_error_status_on_search_returns_none(self, monkeypatch, status):
+        """
+        `_search` از ۲B.0.1 به بعد به‌جای `[]` یک `ProviderError` می‌دهد. این
+        مصرف‌کننده (`main.py:554` → `GET /api/songinfo`) قرارداد *قدیمیِ*
+        خودش را دارد: هر خطایی `None` می‌شود، چون endpoint با ۴۰۴ جواب می‌دهد
+        نه ۵۰۰. اگر ProviderError از اینجا درز کند، endpoint ۵۰۰ می‌دهد و
+        کارتِ اطلاعاتِ بات به‌جای «چیزی پیدا نشد» می‌شکند.
+        """
+
+        def handler(url, params, headers):
+            return _response(status)
+
+        monkeypatch.setattr(genius.httpx, "Client", lambda **_: _FakeClient(handler))
+
+        assert genius.song_info("Barf", "Farhad") is None
+
+    def test_a_timeout_on_search_returns_none(self, monkeypatch):
+        def handler(url, params, headers):
+            raise httpx.ConnectTimeout("timed out")
+
+        monkeypatch.setattr(genius.httpx, "Client", lambda **_: _FakeClient(handler))
+
+        assert genius.song_info("Barf", "Farhad") is None
+
+    def test_a_malformed_search_body_returns_none(self, monkeypatch):
+        def handler(url, params, headers):
+            return _response(200, text="{not json")
+
+        monkeypatch.setattr(genius.httpx, "Client", lambda **_: _FakeClient(handler))
+
+        assert genius.song_info("Barf", "Farhad") is None
+
     def test_missing_credits_become_empty_lists(self, monkeypatch):
         search_body = {
             "response": {
@@ -490,9 +524,103 @@ class TestSongInfo:
 
 class TestEnabled:
     def test_true_when_token_is_set(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", "x")
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "x")
         assert genius.enabled() is True
 
     def test_false_without_a_token(self, monkeypatch):
-        monkeypatch.setattr(genius, "GENIUS_ACCESS_TOKEN", None)
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", None)
         assert genius.enabled() is False
+
+
+class TestVersionWordPenalty:
+    """
+    Genius از یک عنوان چند نسخه دارد: استودیو، لایو، ریمیکس، آکوستیک. قبلاً
+    همپوشانیِ کلمات کافی بود، پس ترکِ «Barf» می‌توانست با «Barf (Live)» بخورد
+    — دو خط اول یکی‌اند ولی بقیه‌ی متن نه.
+
+    فیلدِ مدت در پاسخ‌های `/search` گینس وجود ندارد، پس تنها سیگنالِ «این نسخه‌ی
+    دیگری‌ست» خودِ کلمه‌ی نسخه در عنوان است.
+    """
+
+    # «(Remastered)» عمداً اینجا نیست: ریمستر همان ضبط است و متنش هم همان است
+    _HARD_VERSION_WORDS = ("live", "remix", "acoustic", "unplugged", "instrumental")
+
+    @pytest.mark.parametrize("marker", _HARD_VERSION_WORDS)
+    def test_a_marked_version_is_rejected_when_a_plain_title_exists(self, marker):
+        hits = [
+            _hit(f"Barf ({marker})", "Farhad", "https://genius.com/version"),
+            _hit("Barf", "Farhad", "https://genius.com/studio"),
+        ]
+
+        assert genius._best_url(hits, "Barf", "Farhad") == "https://genius.com/studio"
+
+    @pytest.mark.parametrize("marker", _HARD_VERSION_WORDS)
+    def test_a_marked_version_is_still_used_when_it_is_all_genius_has(self, marker):
+        """رد کردنِ نسخه‌ی تنها یعنی هیچ متنی — و متنی با برچسبِ نسخه بهتر از
+        هیچ است، چون کاربر دست‌کم متن را می‌بیند و خودش می‌فهمد کدام نسخه است."""
+        hits = [_hit(f"Barf ({marker})", "Farhad", "https://genius.com/only")]
+
+        assert genius._best_url(hits, "Barf", "Farhad") == "https://genius.com/only"
+
+    def test_a_remastered_version_is_not_penalised(self):
+        """ریمستر همان ضبط است؛ متنش عوض نشده. جریمه‌کردنش یعنی از دست دادنِ
+        نسخه‌ی درست در کاتالوگی که فقط همین را دارد."""
+        hits = [
+            _hit("Barf (Remastered)", "Farhad", "https://genius.com/remaster"),
+            _hit("Barf", "Farhad", "https://genius.com/plain"),
+        ]
+
+        # هر دو پذیرفتنی‌اند؛ مهم این است که ریمستر حذف نمی‌شود
+        assert genius._best_url(hits, "Barf", "Farhad") in (
+            "https://genius.com/remaster",
+            "https://genius.com/plain",
+        )
+
+    def test_a_version_marker_in_the_wanted_title_is_not_a_penalty(self):
+        """وقتی کاربر خودش نسخه‌ی لایو را می‌خواهد، نسخه‌ی لایو درست است نه
+        نسخه‌ی استودیو. قاعده باید نسبت به عنوانِ درخواستی بسنجد، نه مطلق."""
+        hits = [
+            _hit("Barf (Live)", "Farhad", "https://genius.com/live"),
+            _hit("Barf", "Farhad", "https://genius.com/studio"),
+        ]
+
+        assert genius._best_url(hits, "Barf (Live)", "Farhad") == "https://genius.com/live"
+
+
+class TestDurationIsNotASignal:
+    """
+    `/search` گینس مدت نمی‌دهد و `/songs/{id}` هم فقط متن و اعتبار می‌دهد.
+    این تست‌ها قفل می‌کنند که امضای `duration_ms` بدونِ اینکه بی‌دلیل بشکند
+    باقی بماند و نبود/خرابیِ مدت باعث شکستِ تطبیق نشود.
+    """
+
+    def test_a_zero_duration_still_matches(self, monkeypatch):
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
+
+        def handler(url, params, headers):
+            if url.endswith("/search"):
+                return _response(200, json_body={"response": {"hits": [_hit("Barf", "Farhad", "https://genius.com/barf")]}})
+            return _response(200, text='<div data-lyrics-container="true">line</div>')
+
+        monkeypatch.setattr(genius.httpx, "Client", lambda **_: _FakeClient(handler))
+
+        assert genius.fetch("Barf", "Farhad", None, 0) is not None
+
+    def test_a_garbage_duration_does_not_break_matching(self, monkeypatch):
+        monkeypatch.setattr(config, "GENIUS_ACCESS_TOKEN", "test-token")
+
+        def handler(url, params, headers):
+            if url.endswith("/search"):
+                return _response(200, json_body={"response": {"hits": [_hit("Barf", "Farhad", "https://genius.com/barf")]}})
+            return _response(200, text='<div data-lyrics-container="true">line</div>')
+
+        monkeypatch.setattr(genius.httpx, "Client", lambda **_: _FakeClient(handler))
+
+        assert genius.fetch("Barf", "Farhad", None, -1) is not None
+
+    def test_the_search_hit_body_is_used_verbatim(self):
+        """هر فیلدِ اضافه‌ای که فرض کرده بودیم در hit هست، نباید لازم باشد."""
+        hit = _hit("Barf", "Farhad", "https://genius.com/barf")
+        assert "duration" not in hit["result"]
+
+        assert genius._best_url([hit], "Barf", "Farhad") == "https://genius.com/barf"

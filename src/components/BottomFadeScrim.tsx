@@ -6,6 +6,12 @@ import { memo } from 'react'
  * cubic ease-in curve matching BitChord's BottomFadeScrim.
  *
  * Height dynamically animates between 180px (default/inline) and 254px (with expanded player).
+ *
+ * محو به `--page-*` است و نه به `--bg`: این لایه کفِ *همه‌ی* صفحه‌ها را می‌پوشاند،
+ * پس اگر به مشکیِ تم محو شود، در ویوهای تصویرمحور یک نوارِ مشکی روی صفحه‌ی
+ * رنگی می‌کشد — و همین یکی بزرگ‌ترین منبعِ «ناحیه‌ی مشکیِ خالی» بود. روی
+ * صفحه‌های بی‌تم مقدارِ اولیه‌ی `--page-*` همان `--bg` است، پس رفتارِ قبلی
+ * مو‌به‌مو حفظ می‌شود.
  */
 function BottomFadeScrim() {
   // 16 color stops using EaseInCubic (t^3)
@@ -13,7 +19,7 @@ function BottomFadeScrim() {
     const t = i / 15
     const alphaPct = (Math.pow(t, 3) * 100).toFixed(2)
     const posPct = (t * 100).toFixed(1)
-    return `color-mix(in srgb, var(--bg) ${alphaPct}%, transparent) ${posPct}%`
+    return `color-mix(in srgb, rgb(var(--page-r) var(--page-g) var(--page-b)) ${alphaPct}%, transparent) ${posPct}%`
   }).join(', ')
 
   return (

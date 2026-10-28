@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from typing import Mapping
 
 from .config import PATH_TEMPLATE
 from .downloader import safe_name
@@ -22,6 +23,69 @@ _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 # جداکننده‌هایی که وقتی مقدارِ کنارشان خالی می‌ماند، تنها و بی‌معنی می‌شوند
 _DANGLING = re.compile(r"^[\s\-–_]+|[\s\-–_]+$")
+
+
+def is_single_release(track: Track, album_counts: Mapping[str, int] | None = None) -> bool:
+    """
+    آیا این ترک یک تک‌آهنگِ مستقل از کاتالوگ است (نه عضوی از یک آلبوم چندترکه)؟
+
+    - اگر ترک اصلاً آلبوم نداشته باشد -> تک‌آهنگ است.
+    - اگر در بسته چند ترک با همین آلبوم باشند -> آلبوم واقعی است و تک‌آهنگ نیست.
+    - اگر شماره ترک بیش از ۱ باشد -> قطعاً عضو یک آلبوم است.
+    - اگر نام آلبوم همان عنوان ترک (با یا بدون پسوند Single) باشد و ترک دیگری
+      همان نام را نداشته باشد -> تک‌آهنگِ مستقل است.
+    """
+    if not track.album or not track.album.strip():
+        return True
+
+    norm_album = track.album.strip().lower()
+
+    if album_counts is not None and album_counts.get(norm_album, 0) > 1:
+        return False
+
+    if track.trackNumber and track.trackNumber > 1:
+        return False
+
+    clean_album = re.sub(r"\s*[-–—]\s*single$", "", track.album.strip(), flags=re.IGNORECASE).strip().lower()
+    clean_title = re.sub(r"\s*[-–—]\s*single$", "", track.title.strip(), flags=re.IGNORECASE).strip().lower()
+
+    if clean_album == clean_title:
+        return True
+
+    if re.search(r"\s*[-–—]\s*single$", track.album.strip(), flags=re.IGNORECASE):
+        if album_counts is None or album_counts.get(norm_album, 0) <= 1:
+            return True
+
+    return False
+
+
+def render_archive_path(
+    track: Track,
+    ext: str,
+    *,
+    is_album: bool = True,
+    primary_artist: str | None = None,
+) -> str:
+    """
+    تولید مسیر ترک درون آرشیو ZIP بر اساس کاتالوگ هنرمند:
+
+    - ترک‌های آلبوم: `{هنرمند}/{آلبوم}/{شماره} - {عنوان}.mp3`
+    - تک‌آهنگ‌های کاتالوگ: `{هنرمند}/{عنوان}.mp3` (مستقیماً در پوشه‌ی هنرمند)
+    """
+    artist_name = (primary_artist or track.albumArtist or track.artist).strip()
+    artist_seg = safe_name(artist_name) or "Artist"
+
+    if is_album:
+        album_name = (track.album or "").strip()
+        album_seg = safe_name(album_name) or "Album"
+        if track.trackNumber:
+            file_seg = safe_name(f"{track.trackNumber:02d} - {track.title}") + ext
+        else:
+            file_seg = safe_name(track.title) + ext
+        return f"{artist_seg}/{album_seg}/{file_seg}"
+
+    file_seg = safe_name(track.title) + ext
+    return f"{artist_seg}/{file_seg}"
 
 
 def _values(track: Track) -> dict[str, str]:

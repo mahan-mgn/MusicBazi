@@ -78,6 +78,13 @@ export interface Track {
   valence?: number
   energy?: number
   views?: string | null
+  /**
+   * شناسه‌هایی که فقط بعضی منابعِ متن لازم دارند، نه کلِ اپ. `videoId` کلیدِ
+   * SimpMusic است و `isrc` کلیدِ تطبیقِ دقیق در چند منبعِ دیگر. هیچ‌کدام هویتِ
+   * ترک نیستند؛ اختیاری‌اند و آینهٔ `Track` در سرور (`app/models.py`).
+   */
+  videoId?: string | null
+  isrc?: string | null
 }
 
 export interface Artist {
@@ -150,6 +157,8 @@ export interface ArtistDiscographyContext {
 export interface ArtistDetail extends Artist {
   topTracks: Track[]
   albums: Album[]
+  /** حضور در آثار دیگران / کالکشن‌ها (اسپاتیفای و اپل موزیک) */
+  appearsOn?: Album[]
   /** تفکیک تک‌آهنگ‌ها/EPها برای کاتالوگ دقیق (یوتیوب موزیک و ساندکلاد) */
   singles?: Album[]
   /** ویدیوهای رسمی هنرمند (یوتیوب موزیک و کانال یوتیوب) */
@@ -202,7 +211,17 @@ export interface DownloadProgress {
   status: JobStatus
   /** ۰ تا ۱۰۰ — فقط در downloading معنادار است */
   percent: number
-  /** پیام خطا در صورت status === 'error' */
+  /**
+   * شناسه‌ی جاب سمت سرور — با اولین پیام بعد از POST می‌آید. فرانت آن را روی
+   * Job ذخیره می‌کند تا لایک/آمار پخش و re-attach بعد از رفرش با شناسه‌ی
+   * درست کار کنند، نه شناسه‌ی محلیِ فرانت.
+   */
+  jobId?: string
+  /**
+   * کد خطای شناخته‌شده (مثل «connection-lost») یا پیام خام سرور.
+   * کدها قبل از نمایش به رشته‌ی ترجمه‌شده نگاشت می‌شوند — اینجا متن فارسی
+   * هاردکد نمی‌شود چون UI دو زبانه است.
+   */
   error?: string
   /** لینک فایل آماده در صورت status === 'ready' */
   fileUrl?: string
@@ -512,6 +531,13 @@ export interface MusicApi {
    */
   download(req: DownloadRequest, onProgress: (p: DownloadProgress) => void): () => void
   /**
+   * وصل‌شدن دوباره به جریانِ پیشرفتِ یک جابِ موجود — بعد از رفرش صفحه که صف از
+   * حافظه‌ی دائمی برمی‌گردد ولی اتصال‌ها نه. سرور با هر وصل‌شدن، وضعیت فعلی
+   * جاب را می‌فرستد، پس چیزی گم نمی‌شود.
+   * تعریف‌نشده یعنی این لایه re-attach ندارد (مود دمو).
+   */
+  attach?(jobId: string, onProgress: (p: DownloadProgress) => void): () => void
+  /**
    * نسخه‌های موجود برای یک ترک.
    *
    * `source` را ندهی یعنی سریع‌ترین منبع؛ ساندکلاد فقط با درخواست صریح زده
@@ -580,6 +606,78 @@ export interface MusicApi {
   unfollow(chatId: number, artistId: string): Promise<void>
   /** فایل استریم را در کش آماده می‌کند؛ وقتی آماده شد true و در خطا false برمی‌گرداند. */
   prefetchStream?(track: Track, quality?: Quality | null): Promise<boolean>
+
+  // ---------- حساب کاربری ----------
+
+  /**
+   * چه راه‌های ورودی روی این سرور زنده‌اند.
+   *
+   * بدونش دکمه‌ی گوگل روی سروری که کلیدش را ندارد هم نشان داده می‌شود و
+   * کاربر به صفحه‌ی خطا می‌رسد.
+   */
+  authProviders(signal?: AbortSignal): Promise<AuthProviders>
+  /** پروفایلِ کاربرِ لاگین‌شده. توکن نباشد `AuthRequired` پرت می‌شود. */
+  authMe(signal?: AbortSignal): Promise<AuthUser>
+  authRegister(input: { username: string; password: string; displayName?: string }): Promise<AuthSession>
+  authLogin(input: { username: string; password: string }): Promise<AuthSession>
+  /** فقط برای تقارن؛ توکن خودبسنده است و سمتِ سرور باطل نمی‌شود. */
+  authLogout(): Promise<void>
+  authUpdateProfile(patch: { displayName?: string; username?: string }): Promise<AuthUser>
+  /**
+   * توکنِ کوتاه‌عمر برای آدرس‌هایی که هدر نمی‌فرستند
+   * (`<audio src>`، `<img>`، `EventSource`).
+   */
+  authMediaToken(): Promise<MediaToken>
+  authUploadAvatar(file: File): Promise<AuthUser>
+  authRemoveAvatar(): Promise<AuthUser>
+}
+
+/** پروفایلِ کاربر — همان چیزی که سرور می‌فرستد. */
+export interface AuthUser {
+  id: string
+  kind: 'local' | 'google' | 'guest' | string
+  username: string | null
+  displayName: string
+  email: string | null
+  /** آدرسِ آماده‌ی `<img>`؛ سرور بین فایلِ محلی و عکسِ گوگل انتخاب می‌کند */
+  avatarUrl: string | null
+  hasPassword: boolean
+  createdAt: number
+}
+
+export interface AuthSession {
+  token: string
+  expiresAt: number
+  user: AuthUser
+}
+
+export interface AuthProviders {
+  google: boolean
+  /**
+   * چرا گوگل نیست. `not_configured` یعنی کلیدها نیستند؛ `needs_https` یعنی
+   * آدرسِ بازگشت روی دامنه‌ی فعلی را گوگل قبول نمی‌کند — و این دومی چیزی است
+   * که کاربر باید بداند تا بتواند کاری بکند.
+   */
+  googleReason: 'not_configured' | 'needs_https' | null
+}
+
+export interface MediaToken {
+  token: string
+  expiresAt: number
+}
+
+/**
+ * توکن نبود یا باطل بود.
+ *
+ * از `Error` جدا است چون واکنشِ درست فرق دارد: خطای معمولی یعنی «دوباره
+ * تلاش کن»، این یعنی «برو تو لاگین شو». بدونِ تفکیک، یک توکنِ منقضی در همه‌ی
+ * صفحه‌ها به‌شکلِ «چیزی خراب شد» دیده می‌شود.
+ */
+export class AuthRequired extends Error {
+  constructor(message = 'برای این کار باید وارد حساب شوی') {
+    super(message)
+    this.name = 'AuthRequired'
+  }
 }
 
 /**

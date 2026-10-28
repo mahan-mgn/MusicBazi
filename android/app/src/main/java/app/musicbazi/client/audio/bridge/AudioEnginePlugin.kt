@@ -97,6 +97,36 @@ class AudioEnginePlugin : Plugin() {
     }
 
     @PluginMethod
+    fun setNext(call: PluginCall) {
+        val urlString = call.getString("url")
+        if (urlString.isNullOrEmpty()) {
+            audioEngine.setNext(null)
+            call.resolve()
+            return
+        }
+
+        val streamTypeStr = call.getString("streamType") ?: "PROGRESSIVE"
+        val streamType = runCatching { StreamType.valueOf(streamTypeStr.uppercase()) }.getOrDefault(StreamType.PROGRESSIVE)
+
+        val stream = ResolvedAudioStream(
+            uri = Uri.parse(urlString),
+            mimeType = call.getString("mimeType"),
+            codec = call.getString("codec"),
+            bitrateBps = call.getInt("bitrate"),
+            sampleRateHz = call.getInt("sampleRate"),
+            bitDepth = call.getInt("bitDepth"),
+            durationMs = call.getDouble("duration")?.let { (it * 1000).toLong() },
+            isLossless = call.getBoolean("isLossless", false) ?: false,
+            gainDb = call.getDouble("gainDb")?.toFloat(),
+            sourceId = call.getString("sourceId") ?: "",
+            streamType = streamType,
+        )
+
+        audioEngine.setNext(stream)
+        call.resolve()
+    }
+
+    @PluginMethod
     fun pause(call: PluginCall) {
         audioEngine.pause()
         call.resolve()

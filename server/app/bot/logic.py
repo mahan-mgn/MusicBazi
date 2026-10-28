@@ -22,9 +22,9 @@ PROFILE_URL_RE = re.compile(
         | (?:www\.)?deezer\.com/(?:[a-z]{2}/)?(?:artist|profile)/
         | open\.spotify\.com/(?:intl-[a-z]{2}/)?(?:artist|user)/
         # ساندکلاد و یوتیوب بخشِ ثابتی برای «هنرمند» ندارند: پروفایلِ ساندکلاد
-        # دقیقاً یک بخش دارد (ترک و ست بیشتر) و کانالِ یوتیوب با @/channel/c/user
+        # یا تب‌های رسمی‌اش (/tracks, /albums, ...) و کانالِ یوتیوب با @/channel/c/user
         # شروع می‌شود، نه با watch یا playlist
-        | soundcloud\.com/[\w.\-]+/?(?:[?\#].*)?$
+        | soundcloud\.com/[\w.\-]+(?:\/(?:tracks|albums|sets|popular-tracks|reposts|likes))?/?(?:[?\#].*)?$
         | youtube\.com/(?:@[\w.\-]+|channel/[\w\-]+|c/[\w.\-]+|user/[\w.\-]+)(?:/[a-z]+)?/?(?:[?\#].*)?$
     )""",
     re.IGNORECASE | re.VERBOSE,

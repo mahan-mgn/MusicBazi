@@ -14,6 +14,7 @@ import pathlib
 import subprocess
 
 from app import identify
+from app import config
 
 
 def _result(score, title, artists=("Farhad Mehrad",), duration=185.0):
@@ -62,8 +63,8 @@ def test_result_count_is_capped():
 
 
 def test_without_a_key_nothing_is_attempted(monkeypatch, tmp_path):
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", None)
-    monkeypatch.setattr(identify.audd, "AUDD_TOKEN", None)
+    monkeypatch.setattr(config, "ACOUSTID_KEY", None)
+    monkeypatch.setattr(config, "AUDD_TOKEN", None)
     assert identify.identify(tmp_path / "clip.ogg") == []
 
 
@@ -96,13 +97,13 @@ def test_missing_names_the_piece_that_is_absent(monkeypatch):
     «نشناختم» و «اصلاً تنظیم نشده» دو چیزند و قبلاً از بیرون یکسان دیده
     می‌شدند؛ این پیام تنها چیزی است که به کاربر می‌گوید بعدش چه کند.
     """
-    monkeypatch.setattr(identify.audd, "AUDD_TOKEN", None)
+    monkeypatch.setattr(config, "AUDD_TOKEN", None)
 
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", None)
     assert "fpcalc" in identify.missing()
 
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", None)
+    monkeypatch.setattr(config, "ACOUSTID_KEY", None)
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     assert "ACOUSTID" in identify.missing()
 
@@ -111,7 +112,7 @@ def test_missing_names_the_piece_that_is_absent(monkeypatch):
 
 
 def test_nothing_missing_when_configured(monkeypatch):
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     assert identify.missing() == ""
 
@@ -121,9 +122,9 @@ def test_audd_alone_is_enough(monkeypatch):
     توکنِ AudD به‌تنهایی شناسایی را روشن می‌کند — fpcalc فقط برای مسیرِ
     AcoustID لازم است.
     """
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", None)
+    monkeypatch.setattr(config, "ACOUSTID_KEY", None)
     monkeypatch.setattr(identify, "FPCALC", None)
-    monkeypatch.setattr(identify.audd, "AUDD_TOKEN", "t")
+    monkeypatch.setattr(config, "AUDD_TOKEN", "t")
     assert identify.available()
     assert identify.missing() == ""
 
@@ -140,10 +141,11 @@ def test_audd_is_tried_before_acoustid(monkeypatch, tmp_path):
     monkeypatch.setattr(
         identify.audd,
         "recognize",
-        lambda path: called.append("audd") or identify.audd.AuddMatch(title="A", artist="B"),
+        lambda path, uid=None: called.append("audd")
+        or identify.audd.AuddMatch(title="A", artist="B"),
     )
     monkeypatch.setattr(
-        identify, "_by_acoustid", lambda path, fp=None: called.append("acoustid") or []
+        identify, "_by_acoustid", lambda path, fp=None, uid=None: called.append("acoustid") or []
     )
 
     found = identify.identify(clip)
@@ -156,7 +158,7 @@ def test_audd_match_has_no_fake_confidence(monkeypatch, tmp_path):
     clip = tmp_path / "clip.ogg"
     clip.write_bytes(b"x")
     monkeypatch.setattr(
-        identify.audd, "recognize", lambda path: identify.audd.AuddMatch(title="A", artist="B")
+        identify.audd, "recognize", lambda path, uid=None: identify.audd.AuddMatch(title="A", artist="B")
     )
     assert identify.identify(clip)[0].score is None
 
@@ -164,9 +166,9 @@ def test_audd_match_has_no_fake_confidence(monkeypatch, tmp_path):
 def test_falls_back_to_acoustid_when_audd_finds_nothing(monkeypatch, tmp_path):
     clip = tmp_path / "clip.mp3"
     clip.write_bytes(b"x")
-    monkeypatch.setattr(identify.audd, "recognize", lambda path: None)
+    monkeypatch.setattr(identify.audd, "recognize", lambda path, uid=None: None)
     monkeypatch.setattr(
-        identify, "_by_acoustid", lambda path, fp=None: [identify.Match("T", "A", 0.9)]
+        identify, "_by_acoustid", lambda path, fp=None, uid=None: [identify.Match("T", "A", 0.9)]
     )
     assert identify.identify(clip)[0].title == "T"
 
@@ -188,7 +190,7 @@ def test_invalid_key_is_not_reported_as_no_match(monkeypatch, tmp_path):
     """
     clip = tmp_path / "song.mp3"
     clip.write_bytes(b"x")
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "bad")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "bad")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     monkeypatch.setattr(identify, "fingerprint", lambda p: (200, "FP"))
     monkeypatch.setattr(
@@ -206,7 +208,7 @@ def test_invalid_key_is_not_reported_as_no_match(monkeypatch, tmp_path):
 def test_network_failure_is_not_a_no_match(monkeypatch, tmp_path):
     clip = tmp_path / "song.mp3"
     clip.write_bytes(b"x")
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     monkeypatch.setattr(identify, "fingerprint", lambda p: (200, "FP"))
 
@@ -222,7 +224,7 @@ def test_real_empty_result_is_still_a_plain_no_match(monkeypatch, tmp_path):
     """سرویس سالم جواب داده و چیزی نداشته — این خطا نیست."""
     clip = tmp_path / "song.mp3"
     clip.write_bytes(b"x")
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     monkeypatch.setattr(identify, "fingerprint", lambda p: (200, "FP"))
     monkeypatch.setattr(identify.httpx, "post", lambda *a, **k: _Res({"status": "ok", "results": []}))
@@ -234,11 +236,11 @@ def test_audd_rejection_surfaces_when_acoustid_finds_nothing(monkeypatch, tmp_pa
     clip = tmp_path / "clip.ogg"
     clip.write_bytes(b"x")
 
-    def reject(path):
+    def reject(path, uid=None):
         raise identify.audd.AuddError("AudD: Wrong API token")
 
     monkeypatch.setattr(identify.audd, "recognize", reject)
-    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None: [])
+    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None, uid=None: [])
 
     with pytest.raises(identify.ServiceError, match="Wrong API token"):
         identify.identify(clip)
@@ -252,11 +254,11 @@ def test_a_working_path_hides_the_broken_one(monkeypatch, tmp_path):
     clip = tmp_path / "song.mp3"
     clip.write_bytes(b"x")
 
-    def reject(path):
+    def reject(path, uid=None):
         raise identify.audd.AuddError("AudD: Wrong API token")
 
     monkeypatch.setattr(identify.audd, "recognize", reject)
-    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None: [identify.Match("T", "A", 0.9)])
+    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None, uid=None: [identify.Match("T", "A", 0.9)])
 
     assert identify.identify(clip)[0].title == "T"
 
@@ -270,15 +272,15 @@ def test_full_file_tries_the_free_path_first(monkeypatch, tmp_path):
     song.write_bytes(b"x")
     order = []
 
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     monkeypatch.setattr(identify, "fingerprint", lambda p: (240, "FP"))
     monkeypatch.setattr(
         identify,
         "_by_acoustid",
-        lambda p, fp=None: order.append("acoustid") or [identify.Match("T", "A", 0.9)],
+        lambda p, fp=None, uid=None: order.append("acoustid") or [identify.Match("T", "A", 0.9)],
     )
-    monkeypatch.setattr(identify, "_by_audd", lambda p: order.append("audd") or [])
+    monkeypatch.setattr(identify, "_by_audd", lambda p, uid=None: order.append("audd") or [])
 
     identify.identify(song)
     assert order == ["acoustid"]
@@ -290,12 +292,12 @@ def test_short_clip_goes_straight_to_audd(monkeypatch, tmp_path):
     clip.write_bytes(b"x")
     order = []
 
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     monkeypatch.setattr(identify, "fingerprint", lambda p: (15, "FP"))
-    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None: order.append("acoustid") or [])
+    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None, uid=None: order.append("acoustid") or [])
     monkeypatch.setattr(
-        identify, "_by_audd", lambda p: order.append("audd") or [identify.Match("T", "A", None)]
+        identify, "_by_audd", lambda p, uid=None: order.append("audd") or [identify.Match("T", "A", None)]
     )
 
     identify.identify(clip)
@@ -308,12 +310,12 @@ def test_long_file_still_falls_through_to_audd(monkeypatch, tmp_path):
     song.write_bytes(b"x")
     order = []
 
-    monkeypatch.setattr(identify, "ACOUSTID_KEY", "k")
+    monkeypatch.setattr(config, "ACOUSTID_KEY", "k")
     monkeypatch.setattr(identify, "FPCALC", "fpcalc")
     monkeypatch.setattr(identify, "fingerprint", lambda p: (240, "FP"))
-    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None: order.append("acoustid") or [])
+    monkeypatch.setattr(identify, "_by_acoustid", lambda p, fp=None, uid=None: order.append("acoustid") or [])
     monkeypatch.setattr(
-        identify, "_by_audd", lambda p: order.append("audd") or [identify.Match("T", "A", None)]
+        identify, "_by_audd", lambda p, uid=None: order.append("audd") or [identify.Match("T", "A", None)]
     )
 
     assert identify.identify(song)[0].title == "T"

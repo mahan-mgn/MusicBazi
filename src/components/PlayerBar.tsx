@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { dominantColor, tintVars } from '../lib/artColor'
+import { tintVars } from '../lib/artColor'
+import { useArtworkTheme } from '../lib/useArtworkTheme'
 import { cleanArtist, digits, duration as fmtDuration } from '../lib/format'
 import { haptic } from '../lib/native'
 import { useI18n } from '../lib/i18n'
@@ -21,6 +22,7 @@ import {
   PrevIcon,
   RepeatIcon,
   ShuffleIcon,
+  Spinner,
   VolumeIcon,
   WarnIcon,
 } from './icons'
@@ -37,6 +39,7 @@ export default function PlayerBar() {
     repeat,
     shuffle,
     failed,
+    buffering,
     toggle,
     next,
     prev,
@@ -77,18 +80,21 @@ export default function PlayerBar() {
    * `dominantColor` کش دارد، پس برگشتن به ترکِ قبلی رایگان است؛ null یعنی
    * کاور نبود یا بوم tainted شد → نوار همان تمِ --panel/--accent می‌ماند.
    */
-  const [tint, setTint] = useState<[number, number, number] | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    // رنگِ قبلی روی صفحه می‌ماند تا رنگِ تازه برسد — یک فریم null یعنی
-    // چشمکِ سفید/خاکستری وسطِ تعویضِ ترک، حتی وقتی نتیجه کش‌شده است
-    void dominantColor(item?.track.artworkUrl ?? null).then((c) => {
-      if (!cancelled) setTint(c)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [item?.track.artworkUrl])
+  /*
+   * نوار پخش فقط به رنگِ *واقعاً استخراج‌شده* کار دارد: اگر کاوری نبود یا
+   * استخراج نشد، `extracted` تهی می‌ماند و نوار مثلِ قبل تمِ پیش‌فرض را
+   * می‌گیرد. به همین دلیل از `theme.extracted` استفاده می‌شود و نه
+   * `theme.source` (که در آن حالت پالتِ سید است).
+   *
+   * سید این‌جا بی‌اثر است — `pageTheme` فقط وقتی به آن می‌رسد که رنگی نباشد و
+   * نوار آن شاخه را مصرف نمی‌کند — ولی همان سیدِ بقیه‌ی صفحه‌ها داده می‌شود تا
+   * اگر روزی کسی `theme.accent` را این‌جا خواست، رفتار یکدست بماند.
+   */
+  const theme = useArtworkTheme(
+    item?.track.artworkUrl ?? null,
+    item?.track.albumId ?? item?.track.id ?? 'player',
+  )
+  const tint = theme.extracted
 
   const tintCss = tint ? tintVars(tint) : null
   const tintStyle = tintCss
@@ -220,7 +226,9 @@ export default function PlayerBar() {
                 aria-label={playing ? t.pause : t.play}
                 className="player-hero-btn grid size-10 shrink-0 place-items-center rounded-full"
               >
-                {playing ? (
+                {buffering ? (
+                  <Spinner className="size-5" />
+                ) : playing ? (
                   <PauseIcon className="size-5" />
                 ) : (
                   <PlayIcon className="size-5" />
@@ -313,7 +321,9 @@ export default function PlayerBar() {
                   title={playing ? t.pause : t.play}
                   className="player-hero-btn grid size-10 place-items-center rounded-full"
                 >
-                  {playing ? (
+                  {buffering ? (
+                    <Spinner className="size-4.5" />
+                  ) : playing ? (
                     <PauseIcon className="size-4.5" />
                   ) : (
                     <PlayIcon className="size-4.5" />

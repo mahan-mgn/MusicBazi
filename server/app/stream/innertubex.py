@@ -143,6 +143,7 @@ class InnerTubeXResolver:
         purpose: str = "playback",
         quality: str | None = None,
         refresh_visitor: bool = False,
+        cookie: str | None = None,
     ) -> ResolvedStream:
         """
         استخراج آدرس استریم صوتی و مشخصات فنی از طریق InnerTubeX.
@@ -160,6 +161,7 @@ class InnerTubeXResolver:
             "purpose": purpose,
             "quality": quality,
             "refresh_visitor": refresh_visitor,
+            "cookie": cookie,
         }
 
         start_time = time.time()

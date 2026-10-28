@@ -13,6 +13,24 @@
 :root,
 [data-theme='dark'] {
   --bg: #070707;
+  /*
+   * همان --bg به‌صورت سه‌گانه‌ی RGB خام. جایی لازم است که آلفا می‌خواهیم ولی
+   * نمی‌خواهیم به color-mix تکیه کنیم (گاردِ متنیِ تمِ پویا در پایینِ همین
+   * فایل). تنها منبعِ حقیقت همان --bg است؛ این دو باید هم‌زمان عوض شوند.
+   */
+  --bg-rgb: 7 7 7;
+  /*
+   * همان `--bg` برای لایه‌های سطحِ صفحه (گاردِ متنی، کفِ صفحه، لایه‌ی تم).
+   *
+   * جدا از `--bg-rgb` است چون روی صفحه‌های تم‌دار بازنویسی می‌شود و باید
+   * *همان‌جا* مقدارِ درستِ هر تم را داشته باشد: `@property` نمی‌تواند مقدارِ
+   * اولیه‌اش را از یک متغیر بگیرد، و یک `initial-value` ثابت در تمِ روشن
+   * لایه‌ها را مشکی می‌کرد.
+   */
+  --page-rgb: 7 7 7;
+  --page-r: 7;
+  --page-g: 7;
+  --page-b: 7;
   --panel: #101010;
   --panel-2: #161616;
   --line: #232323;
@@ -41,6 +59,11 @@
 
 [data-theme='light'] {
   --bg: #f7f7f5;
+  --bg-rgb: 247 247 245;
+  --page-rgb: 247 247 245;
+  --page-r: 247;
+  --page-g: 247;
+  --page-b: 245;
   --panel: #ffffff;
   --panel-2: #f1f1ee;
   --line: #e2e2dd;
@@ -787,6 +810,14 @@ body.nav-inline .bottom-fade-scrim {
  */
 .app-shell {
   min-height: calc(100dvh - var(--player-h) - max(var(--tab-h), var(--safe-b)));
+  /*
+   * `isolation` این‌جا لازم است و نه تزئینی: لایه‌ی پس‌زمینه‌ی تمام‌صفحه
+   * (`.page-tint`) `z-index: -1` دارد و اگر شل stacking context نباشد آن ۱-
+   * تا ریشه‌ی سند بالا می‌رود و پشتِ `background`ِ `body` می‌افتد — یعنی
+   * لایه ساخته می‌شود ولی هیچ‌وقت دیده نمی‌شود. `overflow` عمداً نیامده تا
+   * هیچ عنصرِ چسبان/شناوری بریده نشود.
+   */
+  isolation: isolate;
 }
 
 /*
@@ -819,7 +850,6 @@ body.nav-inline .bottom-fade-scrim {
  * روشناییِ ~۰٫۵۵ نرمال شده و متنِ مشکی روی همه‌شان کنتراست دارد.
  */
 .player-dock[data-tint] {
-  --accent: var(--pb-strong);
   --accent-fg: #0b0b0b;
   /*
    * تعویضِ نرمِ رنگ بین دو ترک. خودِ داک دیگر پس‌زمینه ندارد — سطحِ شیشه‌ای
@@ -836,12 +866,18 @@ body.nav-inline .bottom-fade-scrim {
 }
 /*
  * مرورگری که color-mix ندارد (fallbackِ Lightning رنگِ خام می‌داد — متن
- * رویش خوانا نمی‌ماند) همان --panel/--line تم می‌ماند و فقط اکسنت همرنگ
- * کاور می‌شود؛ --pb-strong خودِ color-mix است، پس آن‌جا invalid می‌شود
- * و --accent هم پیش‌فرض می‌ماند. بی‌خطر.
+ * رویش خوانا نمی‌ماند) همان --panel/--line تم را نگه می‌دارد.
+ *
+ * اکسنت هم عمداً همین‌جا و داخلِ @supports است: `--pb-strong` را JS به‌صورت
+ * inline می‌نویسد و مقدارش خودِ color-mix است. برای یک متغیرِ سفارشی آن رشته
+ * توکنِ *معتبر* است، پس بیرونِ @supports برنده می‌شد و `--accent` مقدارِ
+ * محاسبه‌شده‌ی نامعتبر می‌گرفت — یعنی پرکننده‌ی نوار پیشرفت بی‌رنگ می‌شد، نه
+ * این‌که به اکسنتِ تم برگردد. این‌جا که باشد، آن مرورگرها اکسنتِ تم را نگه
+ * می‌دارند و همان --accent-fg مشکی رویش کنتراست دارد.
  */
 @supports (color: color-mix(in srgb, red 50%, blue)) {
   .player-dock[data-tint] {
+    --accent: var(--pb-strong);
     --panel: color-mix(in srgb, rgb(var(--pb-rgb)) 16%, var(--bg));
     --panel-2: color-mix(in srgb, rgb(var(--pb-rgb)) 26%, var(--bg));
     --line: color-mix(in srgb, rgb(var(--pb-rgb)) 40%, var(--bg));
@@ -871,6 +907,234 @@ body.nav-inline .bottom-fade-scrim {
     --accent-fg: #0b0b0b;
   }
 }
+/*
+ * ------------------------------------------------------------------
+ * تمِ پویا بر پایه‌ی تصویر — صفحه‌ی هنرمند، آلبوم و «در حال پخش».
+ * ------------------------------------------------------------------
+ *
+ * قرارداد: هر ویو یک سه‌گانه‌ی رنگ را به‌صورت `--tint-*` و `--mesh*-*` روی
+ * ریشه‌ی *خودش* می‌گذارد (lib/pageTheme.ts → pageThemeVars) و CSS همان‌جا
+ * مصرفش می‌کند. هیچ‌چیز روی :root نوشته نمی‌شود، پس تمِ یک صفحه به صفحه‌ی
+ * دیگر نشت نمی‌کند — همان اصلی که `--pb-rgb` نوار پخش هم دارد.
+ *
+ * چرا `@property`؟
+ * گرادیان درون‌یابی‌شدنی نیست: با عوض‌شدنِ `--tint-r` رشته‌ی گرادیان تازه
+ * می‌شود و مرورگر آن را یک‌باره می‌پراند؛ `transition` روی
+ * `background-image` هیچ اثری ندارد. ولی وقتی خودِ مؤلفه‌ها به‌عنوان
+ * `<number>` ثبت شده باشند، مرورگر *عددها* را درون‌یابی می‌کند و گرادیانی که
+ * از آن‌ها ساخته می‌شود نرم عوض می‌شود.
+ *
+ * مرورگرِ بدونِ `@property` (فایرفاکس پیش از ۱۲۸) رنگ را یک‌باره عوض می‌کند —
+ * یعنی همان رفتارِ امروزِ پروژه. نه خطایی، نه شکستِ چیدمانی.
+ *
+ * چهار سه‌گانه لازم است و نه یکی: واشِ صفحه باید روشنایی‌مهارشده باشد
+ * (`--tint-*`) ولی اتمسفرِ نوریِ «در حال پخش» باید رنگِ خامِ خودش را نگه دارد
+ * (`--mesh1-*`)؛ اگر یکی شوند، یا خواناییِ هیرو یا هویتِ بصریِ شیت قربانی
+ * می‌شود.
+ */
+@property --tint-r { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --tint-g { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --tint-b { syntax: '<number>'; inherits: true; initial-value: 107; }
+/*
+ * مقدارِ اولیه فقط تورِ ایمنی است؛ مقدارِ واقعی از بلوک‌های تم می‌آید.
+ *
+ * `initial-value` در زمانِ *ثبت* تجزیه می‌شود و `var()` در آن مجاز نیست، پس
+ * نمی‌تواند به `--page-rgb` اشاره کند. در عوض `--page-r/g/b` در هر دو بلوکِ
+ * تم مقدارِ خودشان را دارند (بالای همین فایل) و صفحه‌های تم‌دار با استایلِ
+ * درون‌خطی روی `.app-shell` بازنویسی‌شان می‌کنند.
+ *
+ * چرا اصلاً مهم است: با مقدارِ ثابتِ ۷، صفحه‌ی بی‌تم در تمِ روشن گاردِ متنی و
+ * کفِ صفحه را به مشکی محو می‌کرد — یک باگِ دیداری که فقط با دیدن قابلِ کشف بود.
+ */
+@property --page-r { syntax: '<number>'; inherits: true; initial-value: 7; }
+@property --page-g { syntax: '<number>'; inherits: true; initial-value: 7; }
+@property --page-b { syntax: '<number>'; inherits: true; initial-value: 7; }
+@property --mesh1-r { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh1-g { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh1-b { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh2-r { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh2-g { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh2-b { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh3-r { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh3-g { syntax: '<number>'; inherits: true; initial-value: 107; }
+@property --mesh3-b { syntax: '<number>'; inherits: true; initial-value: 107; }
+
+/*
+ * ترنزیشن روی همان عنصری می‌نشیند که متغیرها را می‌گیرد (ریشه‌ی هیرو یا شیتِ
+ * «در حال پخش»). `inherits: true` عمدی است تا فرزندانِ همان ویو هم مقدارِ
+ * درون‌یابی‌شده را ببینند — هاله‌ی پشتِ کاور یکی از همان‌هاست.
+ */
+/*
+ * فهرست عمداً در هر دو قانون صریح تکرار شده و پشتِ یک `var()` پنهان نشده.
+ *
+ * اول با یک متغیرِ مشترک (`--tint-ease`) نوشته شده بود؛ Lightning CSS سرِ
+ * بیلد اعلانِ متغیر را از `.tint-scope` حذف کرد ولی
+ * `transition: var(--tint-ease)` را دست‌نخورده گذاشت. نتیجه:
+ * `transition` در زمانِ محاسبه نامعتبر می‌شد و گذارِ نرمِ هیروها بی‌سروصدا
+ * از کار می‌افتاد. دوازده خط تکرار، بهایِ قطعی‌بودن است.
+ */
+.tint-scope {
+  transition:
+    --tint-r 0.6s ease,
+    --tint-g 0.6s ease,
+    --tint-b 0.6s ease,
+    --page-r 0.6s ease,
+    --page-g 0.6s ease,
+    --page-b 0.6s ease,
+    --mesh1-r 0.7s ease,
+    --mesh1-g 0.7s ease,
+    --mesh1-b 0.7s ease,
+    --mesh2-r 0.7s ease,
+    --mesh2-g 0.7s ease,
+    --mesh2-b 0.7s ease,
+    --mesh3-r 0.7s ease,
+    --mesh3-g 0.7s ease,
+    --mesh3-b 0.7s ease;
+}
+/*
+ * شیتِ «در حال پخش» پس‌زمینه‌ی ماتِ خودش را دارد، پس گذارِ `background-color`
+ * را هم می‌خواهد. قبلاً گذارش inline بود؛ حالا این‌جاست چون ترنزیشنِ inline
+ * ترنزیشنِ کلاس را کنار می‌زد و مؤلفه‌های ثبت‌شده هرگز انیمیت نمی‌شدند.
+ */
+.tint-scope-sheet {
+  transition:
+    background-color 0.8s ease,
+    --tint-r 0.6s ease,
+    --tint-g 0.6s ease,
+    --tint-b 0.6s ease,
+    --page-r 0.6s ease,
+    --page-g 0.6s ease,
+    --page-b 0.6s ease,
+    --mesh1-r 0.7s ease,
+    --mesh1-g 0.7s ease,
+    --mesh1-b 0.7s ease,
+    --mesh2-r 0.7s ease,
+    --mesh2-g 0.7s ease,
+    --mesh2-b 0.7s ease,
+    --mesh3-r 0.7s ease,
+    --mesh3-g 0.7s ease,
+    --mesh3-b 0.7s ease;
+}
+
+/*
+ * گاردِ متنیِ پایینِ هیرو.
+ *
+ * رنگی که هیرو از کاور می‌گیرد می‌تواند روشن باشد و متنِ تم رویش خوانا نماند
+ * — همان کاری که شیتِ «در حال پخش» با سه scrimِ تیره‌اش می‌کند. سه نکته
+ * این‌جا عمدی است:
+ *
+ *  ۱. رنگ از `--page-*` می‌آید، نه از `--bg-rgb`: در تمِ روشن باید *روشن*
+ *     باشد تا متنِ تیره‌ی همان تم خوانا بماند، و روی صفحه‌های تم‌دار باید
+ *     *همان رنگِ صفحه* باشد وگرنه نیمه‌ی پایینِ هیرو یک نوارِ مشکیِ دیدنی
+ *     می‌شود — دقیقاً همان «ناحیه‌ی مشکیِ خالی» که این کار می‌خواهد حذف کند.
+ *     روی صفحه‌های بی‌تم، مقدارِ اولیه‌ی `--page-*` همان `--bg-rgb` است، پس
+ *     رفتارِ قبلی مو‌به‌مو حفظ می‌شود.
+ *  ۲. نیمه‌ی پایینی‌اش آلفای *تخت* دارد. اگر کلِ نوار یک گرادیانِ ساده بود،
+ *     «تضمینِ کنتراست» بسته به نقطه‌ای که متن افتاده معنا عوض می‌کرد؛ با
+ *     آلفای تخت یک عددِ واحد روی کلِ باندِ متن حاکم است و تستِ کنتراست در
+ *     lib/pageTheme.test.ts روی همان حساب می‌کند (TEXT_GUARD_ALPHA = 0.52).
+ *     پله‌ی میانی هم عمدی است: بدونِ آن، لبه‌ی بالاییِ نوار یک برشِ دیدنی
+ *     می‌شد.
+ *  ۳. به‌جای `color-mix(in srgb, var(--bg) 52%, transparent)` از
+ *     `rgb(var(--bg-rgb) / 0.52)` استفاده می‌شود. هر دو یک نتیجه می‌دهند، ولی
+ *     دومی هیچ‌جای زنجیره (نه مرورگر، نه Lightning) به fallbackِ جایگزین
+ *     نیاز ندارد و آلفایش دقیقاً همان ۰٫۵۲ می‌ماند — همان عددی که تست می‌سنجد.
+ *
+ * آلفا یک‌بار ۰٫۷ بود؛ آن‌قدر سنگین که تقریباً تمامِ ۶۰٪ پایینِ هیرو مشکی
+ * می‌شد و رنگِ کاور در تصویرِ واقعی دیده نمی‌شد. ۰٫۵۲ با حاشیه‌ی امن از
+ * قراردادِ کنتراست رد می‌شود و رنگ را نگه می‌دارد.
+ */
+.tint-text-guard {
+  background: linear-gradient(
+    to top,
+    rgb(var(--page-r) var(--page-g) var(--page-b) / 0.52) 0%,
+    rgb(var(--page-r) var(--page-g) var(--page-b) / 0.52) 50%,
+    rgb(var(--page-r) var(--page-g) var(--page-b) / 0.26) 75%,
+    rgb(var(--page-r) var(--page-g) var(--page-b) / 0) 100%
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .tint-scope,
+  .tint-scope-sheet,
+  .page-tint {
+    transition: none;
+  }
+}
+
+/*
+ * ------------------------------------------------------------------
+ * پس‌زمینه‌ی تمام‌صفحه‌ی ویوهای تصویرمحور.
+ * ------------------------------------------------------------------
+ *
+ * چرا این‌جا در شل و نه روی ریشه‌ی خودِ ویو: ریشه‌ی ویو داخلِ
+ * `<main class="… max-w-5xl">` می‌نشیند، پس هر پس‌زمینه‌ای که بگیرد فقط عرضِ
+ * ستون را می‌پوشاند و ستون‌های کناریِ صفحه‌ی عریض مشکی می‌مانند. `fixed` هم
+ * از داخلِ ویو جواب نمی‌دهد چون `.page-drill-in` با `will-change: transform`
+ * یک containing block می‌سازد و `fixed` را به جعبه‌ی خودش می‌چسباند.
+ *
+ * پس لایه این‌جاست: اولین فرزندِ `.app-shell`، `fixed` و تمام‌قاب. این دو کار
+ * را می‌کند — یک پایه‌ی ماتِ *رنگی* می‌کشد (نه `--bg`ِ مشکی؛ `pageBase` در
+ * lib/pageTheme.ts) و رویش یک رمپِ عمودی از واشِ رنگِ تصویر می‌گذارد که در
+ * ۷۲٪ ارتفاعِ دید به صفر می‌رسد.
+ *
+ * `opacity` است و نه حذف/افزودنِ عنصر: گذارِ ۰.۵ ثانیه‌ای روی ورود به این
+ * صفحه‌ها نرم می‌شود. صفحه‌های بی‌تم (`data-page-tint` ندارند، پس `--page-*`
+ * هم رویشان نوشته نمی‌شود) دقیقاً رفتارِ امروز را نگه می‌دارند.
+ *
+ * `z-index: -1` روی این عنصر به `.app-shell` تکیه دارد؛ `isolation: isolate`
+ * روی شل (پایین‌تر در همین فایل) نمی‌گذارد زنجیره از شل بیرون بزند و زیرِ
+ * `background`ِ `body` گم شود.
+ */
+.page-tint {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: rgb(var(--page-r) var(--page-g) var(--page-b));
+  /*
+   * آلفاها آینه‌ی PAGE_RAMP_ALPHA / PAGE_RAMP_STOPS در lib/pageTheme.ts هستند و
+   * قراردادِ خوانایی روی *همه‌ی* ارتفاعِ رمپ تست می‌شود، نه فقط روی یک نقطه.
+   * `dvh` است نه پیکسل: روی گوشیِ کوتاه و تبلتِ بلند شکلِ یکسانی می‌دهد.
+   */
+  background-image: linear-gradient(
+    to bottom,
+    rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.12) 0%,
+    rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0.06) 40dvh,
+    rgb(var(--tint-r) var(--tint-g) var(--tint-b) / 0) 72dvh
+  );
+  background-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+.app-shell[data-page-tint] .page-tint {
+  opacity: 1;
+}
+
+/*
+ * ریشه‌ی ویو.
+ *
+ * پس‌زمینه‌اش حالا کارِ `.page-tint` است؛ این کلاس فقط دو چیز را نگه می‌دارد.
+ *
+ * `isolation` تنها محافظِ یک باگِ دیداریِ خاموش است و حذفش هیچ تستِ DOM‌ای را
+ * نمی‌شکند، پس کامنتش را جدی بگیر: هیرو یک لایه‌ی بلورِ `-z-10` دارد
+ * (ArtistView/AlbumView). بدونِ این خط آن لایه تا `.page-drill-in` بالا می‌رفت
+ * و طبقِ ترتیبِ نقاشی — که descendantِ z-index منفی را *قبل* از پس‌زمینه‌ی
+ * یک بلوکِ معمولی می‌کشد — بی‌سروصدا ناپدید می‌شد. حالا که لایه‌ی صفحه هم
+ * `z-index: -1` است، این مهار دو برابر لازم است.
+ * `position: relative` عمداً نیامده تا containing blockِ هیچ descendantِ
+ * abspos عوض نشود.
+ *
+ * `min-height` برای صفحه‌های کوتاه است تا ستون پیش از فوتر به ته برسد؛
+ * با همان توکن‌های چیدمانِ بالای فایل نوشته شده تا با تغییرِ ارتفاعِ
+ * هدر/نوارها خودکار دنبال کند.
+ */
+.tint-page {
+  isolation: isolate;
+  min-height: calc(
+    100dvh - var(--header-h) - var(--player-h) - max(var(--tab-h), var(--safe-b)) - 2rem
+  );
+}
+
 
 /*
  * لمسی در برابر ماوس.

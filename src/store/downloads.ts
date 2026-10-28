@@ -1,12 +1,22 @@
 import { create } from 'zustand'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import { api } from '../lib/api'
 import { useI18n } from '../lib/i18n'
+import { onIdentityChange } from '../lib/identity'
+import { readStored, scopedKey } from '../lib/storage'
 import type { DownloadProgress, JobStatus, Quality, Track } from '../lib/types'
 import { useNet } from './net'
+import { useSettings } from './settings'
 import { useToasts } from './toasts'
 
 export interface Job {
   id: string
+  /**
+   * شناسه‌ی جاب سمت سرور — از اولین پیامِ SSE بعد از POST می‌آید. لایک و
+   * ثبتِ پخش باید با همین شناسه زده شوند؛ شناسه‌ی محلیِ بالا سرور آن را
+   * نمی‌شناسد و درخواست ۴۰۴ می‌خورد.
+   */
+  jobId?: string
   batchId: string
   track: Track
   quality: Quality
@@ -60,6 +70,25 @@ export const isWaiting = (s: JobStatus) => s === 'deferred'
 export const isDone = (s: JobStatus) => s === 'ready'
 
 /**
+ * کاری که شناسه‌ی (ترک، کیفیت)‌اش هنوز آزاد نشده — در جریان یا منتظرِ
+ * اینترنت. dedupe باید روی همین باشد، نه فقط فعال‌ها: وگرنه دوباره‌کلیکِ
+ * «دانلود همه» حینِ قطعی، یک ستِ کامل دومی ثبت می‌کرد و وقتی اینترنت
+ * برمی‌گشت هر دو ست با هم دانلود می‌شدند.
+ */
+export const isUnfinished = (s: JobStatus) => isActive(s) || isWaiting(s)
+
+/** کدِ خطای شناخته‌شده → رشته‌ی ترجمه‌شده؛ پیام‌های ناشناخته همان‌طور نشان داده می‌شوند */
+export function jobErrorText(
+  error: string | undefined,
+  t: { connectionLost: string; unknownError: string },
+): string {
+  if (!error) return t.unknownError
+  if (error === 'connection-lost') return t.connectionLost
+  if (error === 'unknown-error') return t.unknownError
+  return error
+}
+
+/**
  * پیامِ «رفت تو صف».
  *
  * در حالتِ اینترانت همان صف معنیِ دیگری دارد و باید صریح گفته شود: دانلود
@@ -75,8 +104,18 @@ function queuedToast(title: string): void {
 /** کنسل‌کننده‌ی هر کار، بیرون از state نگه داشته می‌شود */
 const cancelers = new Map<string, () => void>()
 
-/** سقف دانلودهای فعال هم‌زمان در فرانت — جلوگیری از اشباع ۶ سوکت HTTP/1.1 مرورگر */
-const MAX_CONCURRENT_ACTIVE_DOWNLOADS = 3
+/**
+ * سقفِ دانلودهای فعالِ هم‌زمان در فرانت — جلوگیری از اشباعِ ۶ سوکتِ HTTP/1.1
+ * مرورگر. از تنظیمات خوانده می‌شود نه از یک ثابت، تا کاربر با گوشی/شبکه‌ی
+ * قوی‌تر بتواند بالا ببردش.
+ *
+ * لحظه‌ای خوانده می‌شود (نه یک بار در سطحِ ماژول) چون مقدارش وسطِ کار عوض
+ * می‌شود و `drainQueue` چندین بار صدا زده می‌شود؛ مقدارِ کش‌شده یعنی تنظیمِ
+ * تازه تا رفرشِ بعدی بی‌اثر بماند.
+ */
+function activeDownloadCap(): number {
+  return useSettings.getState().maxConcurrentDownloads
+}
 
 let batchSeq = 0
 
@@ -110,16 +149,32 @@ interface DownloadState {
   dismissBatch: (batchId: string) => void
   clearFinished: () => void
   setCollapsed: (v: boolean) => void
+  /**
+   * صف را دوباره پر کن.
+   *
+   * `drainQueue` یک تابعِ داخلیِ closure است و از بیرون دیده نمی‌شود؛ صفحه‌ی
+   * تنظیمات بعد از بالا بردنِ سقفِ دانلود این را صدا می‌زند تا کارهای
+   * «در انتظار» همان لحظه راه بیفتند، نه در رویدادِ بعدیِ صف.
+   */
+  pump: () => void
+  /**
+   * بعد از رفرشِ صفحه: به جاب‌های نیمه‌کاره‌ی دارای شناسه‌ی سروری دوباره وصل
+   * می‌شود و بقیه را خطای قابلِ retry می‌دهد. توسط persist بعد از rehydrate
+   * صدا زده می‌شود — بخشی از API عمومیِ استور نیست.
+   */
+  resumeStaleJobs: () => void
 }
 
-export const useDownloads = create<DownloadState>((set, get) => {
+export const useDownloads = create<DownloadState>()(
+  persist(
+    (set, get) => {
   function drainQueue() {
     const currentJobs = get().jobs
     // تعداد کارهای فعال که همین الان اتصال زنده با سرور دارند
     const runningCount = currentJobs.filter(
       (j) => cancelers.has(j.id) && isActive(j.status),
     ).length
-    const availableSlots = MAX_CONCURRENT_ACTIVE_DOWNLOADS - runningCount
+    const availableSlots = activeDownloadCap() - runningCount
     if (availableSlots <= 0) return
 
     const pending = currentJobs.filter((j) => j.status === 'queued' && !cancelers.has(j.id))
@@ -128,33 +183,37 @@ export const useDownloads = create<DownloadState>((set, get) => {
     }
   }
 
-  function start(job: Job) {
-    const req = { track: job.track, quality: job.quality, candidateUrl: job.candidateUrl }
-    const stop = api.download(req, (p: DownloadProgress) => {
-      set({
-        jobs: get().jobs.map((j) =>
-          j.id === job.id
-            ? {
-                ...j,
-                status: p.status,
-                percent: p.percent,
-                error: p.error,
-                fileUrl: p.fileUrl,
-                streamUrl: p.streamUrl,
-                format: p.format ?? j.format,
-                warning: p.warning ?? j.warning,
-                lyricsUrl: p.lyricsUrl ?? j.lyricsUrl,
-                gainDb: p.gainDb ?? j.gainDb,
-                startedAt:
-                  p.status === 'downloading' && !j.startedAt ? Date.now() : j.startedAt,
-                finishedAt: p.status === 'ready' ? Date.now() : j.finishedAt,
-              }
-            : j,
-        ),
-      })
-      const { t } = useI18n.getState()
-      if (p.status === 'ready') {
-        cancelers.delete(job.id)
+  /**
+   * هر پیام پیشرفت — چه از `download` تازه و چه از `attach` بعد از رفرش — از
+   * همین‌جا به state می‌رود. `silent` برای resume اولیه است: اگر بیست کار
+   * نیمه‌کاره بعد از رفرش یک‌جا «آماده» شوند، بیست توست پشت‌سرهم آزاردهنده است.
+   */
+  function handleProgress(id: string, p: DownloadProgress, silent = false) {
+    set({
+      jobs: get().jobs.map((j) =>
+        j.id === id
+          ? {
+              ...j,
+              status: p.status,
+              percent: p.percent,
+              error: p.error,
+              jobId: p.jobId ?? j.jobId,
+              fileUrl: p.fileUrl,
+              streamUrl: p.streamUrl,
+              format: p.format ?? j.format,
+              warning: p.warning ?? j.warning,
+              lyricsUrl: p.lyricsUrl ?? j.lyricsUrl,
+              gainDb: p.gainDb ?? j.gainDb,
+              startedAt: p.status === 'downloading' && !j.startedAt ? Date.now() : j.startedAt,
+              finishedAt: p.status === 'ready' ? Date.now() : j.finishedAt,
+            }
+          : j,
+      ),
+    })
+    const { t } = useI18n.getState()
+    if (p.status === 'ready') {
+      cancelers.delete(id)
+      if (!silent) {
         /*
          * «آماده شد» تا امروز فقط خبر بود و بن‌بست: فایل روی دیسک نشسته بود
          * و کاربر باید خودش راهش را به کتابخانه پیدا می‌کرد. حالا همان توست
@@ -164,20 +223,29 @@ export const useDownloads = create<DownloadState>((set, get) => {
          * دارد نه باید داشته باشد، و `App` تنها جایی است که می‌داند «رفتن به
          * کتابخانه» یعنی چه.
          */
-        useToasts.getState().push(t.toastReady(job.track.title), 'success', {
+        const current = get().jobs.find((j) => j.id === id)
+        useToasts.getState().push(t.toastReady(current?.track.title ?? ''), 'success', {
           label: t.goToLibrary,
           run: () => window.dispatchEvent(new CustomEvent('musicbazi:open-library')),
         })
-        drainQueue()
-      } else if (p.status === 'error') {
-        cancelers.delete(job.id)
-        useToasts.getState().push(t.toastFailed(job.track.title), 'error')
-        drainQueue()
-      } else if (p.status === 'canceled') {
-        cancelers.delete(job.id)
-        drainQueue()
       }
-    })
+      drainQueue()
+    } else if (p.status === 'error') {
+      cancelers.delete(id)
+      if (!silent) {
+        const current = get().jobs.find((j) => j.id === id)
+        useToasts.getState().push(t.toastFailed(current?.track.title ?? ''), 'error')
+      }
+      drainQueue()
+    } else if (p.status === 'canceled') {
+      cancelers.delete(id)
+      drainQueue()
+    }
+  }
+
+  function start(job: Job) {
+    const req = { track: job.track, quality: job.quality, candidateUrl: job.candidateUrl }
+    const stop = api.download(req, (p) => handleProgress(job.id, p))
     cancelers.set(job.id, stop)
   }
 
@@ -200,8 +268,10 @@ export const useDownloads = create<DownloadState>((set, get) => {
   ): boolean {
     // کیفیت هم بخشی از هویت کار است — سرور هم با همین جفت (ترک، کیفیت) کش می‌کند.
     // بدون آن، گرفتنِ همان ترک با کیفیت دیگر «قبلاً در صف است» می‌گرفت.
+    // کارِ معوق هم حساب می‌شود وگرنه حینِ قطعی، دوباره‌ثبتِ همان ترک یک جابِ
+    // دوم می‌ساخت که بعد از برگشتنِ اینترنت موازی با اولی دانلود می‌شد.
     const existing = get().jobs.find(
-      (j) => j.track.id === track.id && j.quality === quality && isActive(j.status),
+      (j) => j.track.id === track.id && j.quality === quality && isUnfinished(j.status),
     )
     if (existing) {
       if (!quiet) {
@@ -251,7 +321,7 @@ export const useDownloads = create<DownloadState>((set, get) => {
         const key = `${track.id}-${quality}`
         if (seen.has(key)) continue
         const existing = currentJobs.find(
-          (j) => j.track.id === track.id && j.quality === quality && isActive(j.status),
+          (j) => j.track.id === track.id && j.quality === quality && isUnfinished(j.status),
         )
         if (existing) continue
         seen.add(key)
@@ -266,7 +336,12 @@ export const useDownloads = create<DownloadState>((set, get) => {
         })
       }
 
-      if (!newJobs.length) return
+      if (!newJobs.length) {
+        // همه از قبل در صف‌اند — سکوت این‌جا یعنی کاربر فکر می‌کند دکمه کار
+        // نکرده. همان پیامِ «از قبل تو صفه» که enqueue تکی می‌دهد.
+        useToasts.getState().push(useI18n.getState().t.toastAlready(batch.title), 'info')
+        return
+      }
       set({
         jobs: [...currentJobs, ...newJobs],
         batches: [batch, ...get().batches],
@@ -312,6 +387,11 @@ export const useDownloads = create<DownloadState>((set, get) => {
         fileUrl: undefined,
         streamUrl: undefined,
         lyricsUrl: undefined,
+        gainDb: undefined,
+        // جابِ سرورِ قبلی مرده؛ تلاشِ دوباره جابِ تازه می‌سازد و شناسه‌اش با
+        // اولین پیام SSE می‌آید. نگه‌داشتنِ شناسه‌ی کهنه یعنی لایک/ZIP به جابِ
+        // مرده زده می‌شد.
+        jobId: undefined,
         startedAt: undefined,
         finishedAt: undefined,
       }
@@ -341,13 +421,80 @@ export const useDownloads = create<DownloadState>((set, get) => {
     },
 
     clearFinished: () => {
-      const jobs = get().jobs.filter((j) => isActive(j.status))
-      const liveBatches = new Set(jobs.map((j) => j.batchId))
-      set({ jobs, batches: get().batches.filter((b) => liveBatches.has(b.id)) })
+      // کارِ معوق (منتظرِ اینترنت) «تمام‌شده» نیست — پاک‌کردنش یعنی ردیفی که
+      // هنوز سمت سرور زنده است از UI می‌افتد، EventSource‌اش بی‌صاحب می‌ماند
+      // و وقتی آماده شد توستش برای ردیفی می‌آید که دیگر وجود ندارد.
+      const kept = get().jobs.filter((j) => isUnfinished(j.status))
+      for (const j of get().jobs) {
+        if (!kept.some((k) => k.id === j.id) && cancelers.has(j.id)) {
+          cancelers.get(j.id)?.()
+          cancelers.delete(j.id)
+        }
+      }
+      const liveBatches = new Set(kept.map((j) => j.batchId))
+      set({ jobs: kept, batches: get().batches.filter((b) => liveBatches.has(b.id)) })
     },
 
     setCollapsed: (collapsed) => set({ collapsed }),
+
+    pump: () => drainQueue(),
+
+    resumeStaleJobs: () => {
+      for (const job of get().jobs) {
+        if (isDone(job.status) || job.status === 'error' || job.status === 'canceled') continue
+        if (job.jobId && api.attach) {
+          cancelers.set(job.id, api.attach(job.jobId, (p) => handleProgress(job.id, p, true)))
+        } else {
+          // جابِ بدونِ شناسه‌ی سروری یعنی POST هرگز جواب نداد — ادامه‌اش قابل
+          // بازیابی نیست؛ خطای قابلِ retry می‌گیرد تا کاربر دوباره بزند
+          handleProgress(job.id, { status: 'error', percent: 0, error: 'connection-lost' }, true)
+        }
+      }
+    },
   }
+},
+{
+  // کلید حساب‌محور: صفِ حسابِ قبلی (با شناسه‌ی جاب‌هایش) نباید در حسابِ تازه
+  // بالا بیاید — جابِ حسابِ دیگر ۴۰۴ می‌دهد و صف پر از ردیفِ شکست‌خورده می‌شود.
+  // استور در سطحِ ماژول ساخته می‌شود، پس این کلید در لحظه‌ی لود حسابِ همان
+  // نشست را می‌گیرد؛ تعویضِ حساب کلیدِ جدیدی می‌سازد.
+  name: scopedKey('musicbazi-downloads'),
+      storage: createJSONStorage(() => localStorage),
+      // فقط داده‌ها — اکشن‌ها و باز/بسته‌بودنِ پنل مالِ همین نشست‌اند
+      partialize: (s) => ({ jobs: s.jobs, batches: s.batches }) as DownloadState,
+      onRehydrateStorage: () => (state) => state?.resumeStaleJobs(),
+    },
+  ),
+)
+
+/*
+ * تعویضِ حساب بدونِ رفرش.
+ *
+ * سه کار که هیچ‌کدام اختیاری نیست:
+ *
+ *  ۱. اتصال‌های زنده بسته می‌شوند. `EventSource` به جابِ حسابِ قبلی وصل است؛
+ *     اگر باز بماند، پیام‌هایش تا آخر عمر صفحه می‌آید و — بدتر — `drainQueue`
+ *     جای سوکت را اشغال‌شده می‌بیند.
+ *  ۲. کلیدِ ماندگاری به حسابِ تازه اشاره می‌کند *پیش از* هر نوشتنی. `persist`
+ *     کلید را در لحظه‌ی ساختِ استور می‌بندد، پس بدونِ `setOptions` هر نوشتنِ
+ *     بعدی (از جمله خالی‌کردنِ زیر) زیرِ نامِ حسابِ قبلی می‌رفت و صفش را
+ *     نابود می‌کرد — دقیقاً همان چیزی که خروج نباید بکند.
+ *  ۳. صف از کلیدِ حسابِ تازه خوانده می‌شود، نه خالی‌کردنِ کور. اگر آن حساب صفی
+ *     داشت برمی‌گردد؛ اگر نه، `rehydrate` چیزی پیدا نمی‌کند و صف خالی می‌ماند.
+ *     (`setState` نمی‌شود، چون خودش بلافاصله در `localStorage` می‌نویسد و
+ *     صفِ ذخیره‌شده‌ی مقصد را قبل از خواندنش پاک می‌کند.)
+ */
+onIdentityChange(() => {
+  for (const cancel of cancelers.values()) cancel()
+  cancelers.clear()
+  const name = scopedKey('musicbazi-downloads')
+  useDownloads.persist.setOptions({ name })
+  // `localStorage` همگام است، پس این خواندن و `rehydrate` هر دو فوری‌اند.
+  // تفکیکِ دو حالت لازم است چون `setState` همیشه می‌نویسد: اگر ذخیره‌شده‌ای
+  // هست باید اول خوانده شود (وگرنه با خالی‌کردن پاک می‌شد)، و اگر نیست
+  // باید حافظه خالی شود (وگرنه صفِ حسابِ قبلی می‌ماند).
+  if (readStored(name)) void useDownloads.persist.rehydrate()
+  else useDownloads.setState({ jobs: [], batches: [] })
 })
 
 /**

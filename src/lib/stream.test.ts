@@ -40,9 +40,28 @@ describe('stream utilities', () => {
     }
     const item = toPlayItem(mockTrack, downloadedJob)
     expect(item.id).toBe(mockTrack.id)
-    expect(item.streamUrl).toBe('/api/downloads/job-999/stream')
-    expect(item.lyricsUrl).toBe('/api/downloads/job-999/lyrics')
+    expect(item.streamUrl).toContain('/api/downloads/job-999/stream')
+    expect(item.lyricsUrl).toContain('/api/downloads/job-999/lyrics')
     expect(item.gainDb).toBe(-2.5)
+  })
+
+  it('findBestJob falls back to trackDedupeKey when trackId differs between single and album', () => {
+    const albumVersionJob = {
+      track: { id: 'sp:track:album-ver', title: 'Test Song', artist: 'Test Artist' },
+      quality: '320',
+      createdAt: 200,
+    }
+    const jobs = [albumVersionJob]
+
+    // Querying with the single version's track id, but providing the track metadata
+    const singleTrack: Track = {
+      ...mockTrack,
+      id: 'sp:track:single-ver',
+    }
+
+    const matched = findBestJob(jobs, singleTrack.id, '320', singleTrack)
+    expect(matched).toBeDefined()
+    expect(matched?.track.id).toBe('sp:track:album-ver')
   })
 
   it('toPlayItem returns online stream item when not downloaded', () => {
@@ -76,5 +95,44 @@ describe('stream utilities', () => {
 
     const preferred = findBestJob(jobs, mockTrack.id, '320')
     expect(preferred?.quality).toBe('320')
+  })
+
+  it('findBestJob rejects cached library jobs with duration mismatch (>5s and >3.5%)', () => {
+    // جاب قدیمی در کتابخانه با طول ۲۲۹ ثانیه (۳:۴۹ slowed)
+    const slowedJob = {
+      track: { id: 'sp:track:havasam', title: 'Havasam', artist: 'Tlkhoon', durationMs: 229000 },
+      quality: '320',
+      createdAt: 100,
+    }
+    // ترکی که در حال حاضر درخواست پخش آن داده شده با طول ۱۹۹ ثانیه (۳:۱۹ اصلی)
+    const officialTrack: Track = {
+      ...mockTrack,
+      id: 'sp:track:havasam',
+      title: 'Havasam',
+      artist: 'Tlkhoon',
+      durationMs: 199000,
+    }
+
+    const matched = findBestJob([slowedJob], officialTrack.id, '320', officialTrack)
+    expect(matched).toBeUndefined()
+  })
+
+  it('toPlayItem ignores downloadedJob with duration mismatch and streams fresh', () => {
+    const slowedJob = {
+      track: { id: 'sp:track:havasam', title: 'Havasam', artist: 'Tlkhoon', durationMs: 229000 },
+      streamUrl: '/api/downloads/slowed-job/stream',
+    }
+    const officialTrack: Track = {
+      ...mockTrack,
+      id: 'sp:track:havasam',
+      title: 'Havasam',
+      artist: 'Tlkhoon',
+      durationMs: 199000,
+    }
+
+    const item = toPlayItem(officialTrack, slowedJob, '320')
+    expect(item.id).toBe('stream:sp:track:havasam')
+    expect(item.streamUrl).toContain('/api/stream?')
+    expect(item.streamUrl).not.toContain('/api/downloads/slowed-job/stream')
   })
 })

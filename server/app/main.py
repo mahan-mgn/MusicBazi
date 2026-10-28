@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -10,18 +11,23 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
+from typing import Annotated
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from . import (
     artblur,
     artcache,
+    auth,
+    auth_api,
+    avatar,
     catalog,
     clientlog,
     catcache,
+    credentials,
     db,
     downloader,
     identify,
@@ -54,6 +60,7 @@ from .config import (
     GEMINI_API_KEY,
     GEMINI_MODEL,
     HTTP_TIMEOUT,
+    INTRANET_DETAIL,
     JS_RUNTIME,
     LOUDNESS_ENABLED,
     LYRICS_ENABLED,
@@ -62,8 +69,11 @@ from .config import (
     PROXY,
 )
 from .downloader import safe_name
+from .lyrics import sources as sources_mod
+from .lyrics.sources import lyrics_sources
+from .lyrics.manager import lyrics_manager
 from .stream.feature_flags import is_stream_v2_enabled
-from .stream.playback import get_live_playback
+from .stream.playback import extract_youtube_video_id, get_live_playback
 from .jobs import TERMINAL, manager
 
 log = logging.getLogger(__name__)
@@ -140,6 +150,7 @@ async def lifespan(app: FastAPI):
     # صفِ تلگرام هم همین‌طور: ردیفی که دستِ باتِ رفته مانده، دوباره در انتظار
     db.requeue_telegram()
     await asyncio.to_thread(jobs.sweep_disk)
+    await asyncio.to_thread(stream_cache.purge_stale_havasam_files)
 
     # حلقه‌های پس‌زمینه. `reach` باید اول باشد: بقیه بر اساسِ وضعیتی که او
     # می‌سنجد تصمیم می‌گیرند، و تا اولین پروبش تمام نشده همه خوش‌بینانه
@@ -160,6 +171,12 @@ async def lifespan(app: FastAPI):
     for task in background:
         task.cancel()
     await app.state.http.aclose()
+    try:
+        from .stream import playback as stream_playback
+        if stream_playback._live_playback is not None:
+            await stream_playback._live_playback.aclose()
+    except Exception:
+        pass
     db.close()
 
 
@@ -169,6 +186,9 @@ app = FastAPI(title="MusicBazi API", lifespan=lifespan)
 # اندپوینت‌هایش بی‌احراز هویت‌اند (عمدی — تصمیمِ کاربر) و کلیدها را بیرون
 # نمی‌دهند، فقط ماسکِ ۴ رقمِ آخر.
 app.include_router(setup.router)
+
+# حساب کاربری و ورود. مثل ویزارد جدا نگه داشته شده تا `main.py` بزرگ‌تر نشود.
+app.include_router(auth_api.router)
 
 # فرانت در دِو روی 5174 است و از پروکسی Vite می‌آید، ولی اجرای مستقیم هم باید کار کند
 app.add_middleware(
@@ -185,7 +205,9 @@ app.add_middleware(
 
 
 @app.get("/api/health")
-async def health() -> dict:
+async def health(
+    user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> dict:
     # آمارِ کش دو تا COUNT(*) است و `catalog_entity` می‌تواند ده‌ها هزار ردیف
     # شود؛ در نخِ جدا می‌رود تا حلقه‌ی asyncio — که همان لحظه استریمِ صوت را هم
     # سرو می‌کند — پشتش نایستد
@@ -201,7 +223,7 @@ async def health() -> dict:
         "proxy": ydl.proxy_label(),
         # یوتیوب هر سه را می‌خواهد؛ اگر یکی نباشد عملاً فقط ساندکلاد می‌ماند
         "youtube": {
-            "cookies": ydl.has_cookies(),
+            "cookies": bool(ydl.auth_opts(user_id).get("cookiefile")),
             "poToken": ydl.has_potoken(),
             "jsRuntime": JS_RUNTIME or False,
         },
@@ -218,24 +240,24 @@ async def health() -> dict:
         # این‌ها اختیاری‌اند و نبودنشان فقط قابلیت را خاموش می‌کند، نه سرور را
         "features": {
             "lyrics": LYRICS_ENABLED,
-            "geniusLyrics": genius.enabled(),
+            "geniusLyrics": genius.enabled(user_id),
             "pathTemplate": PATH_TEMPLATE,
             "m3u": M3U_ENABLED,
-            "spotify": spotify.enabled(),
-            "acoustid": verify.available(),
+            "spotify": spotify.enabled(user_id),
+            "acoustid": verify.available(user_id),
             # شناسایی دو مسیر دارد و کاملاً یک کار نمی‌کنند: AudD روی ضبطِ
             # میکروفون، AcoustID روی فایلِ کامل (پایین‌تر در README)
-            "identify": identify.available(),
-            "identifyMic": audd.enabled(),
-            "identifyFile": identify.acoustid_available(),
+            "identify": identify.available(user_id),
+            "identifyMic": audd.enabled(user_id),
+            "identifyFile": identify.acoustid_available(user_id),
             "loudness": LOUDNESS_ENABLED and bool(FFMPEG_LOCATION),
             "split": bool(FFMPEG_LOCATION),
             "fileRetentionDays": round(FILE_RETENTION_SECONDS / 86400, 1),
             # بدون این، چت‌بات وایب فقط با نگاشت کلیدواژه‌ای کار می‌کند
-            "vibeLlm": bool(GEMINI_API_KEY),
+            "vibeLlm": credentials.gemini_key(user_id) is not None,
             # نامِ مدل فقط وقتی کلید هست معنا دارد؛ فرانت با آن می‌گوید
             # «Gemini فعال است» یا «حالتِ ساده (کلیدواژه)»
-            "vibeModel": GEMINI_MODEL if GEMINI_API_KEY else None,
+            "vibeModel": GEMINI_MODEL if credentials.gemini_key(user_id) else None,
         },
     }
 
@@ -325,6 +347,31 @@ async def net_check() -> dict:
 # اسکرول در کتابخانه ده‌ها درخواستِ ۳۰۴ به سرورِ خانگی می‌زد.
 ART_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
+# آواتار برخلاف کاور *عوض می‌شود*، پس نمی‌شود تا ابد کشش کرد. `?v=<mtime>` که
+# سرور در `avatar.public_url` می‌سازد، آدرس را با هر تغییر تازه می‌کند و این
+# هدر لایه‌ی دوم است.
+AVATAR_CACHE_CONTROL = "public, max-age=3600"
+
+
+@app.get("/api/avatar/{user_id}")
+async def avatar_file(user_id: str):
+    """
+    عکسِ پروفایل از دیسک.
+
+    عمداً بی‌احراز هویت است: `<img src>` هدر نمی‌فرستد و این تصویر چیزی جز
+    خودِ عکسِ پروفایل نیست. آدرسش هم شناسه‌ی کاربر است که از قبل در پاسخ‌های
+    عمومی می‌آید.
+    """
+    path = await asyncio.to_thread(avatar.path_for, user_id)
+    if path is None:
+        # نبودنش خطا نیست — `Artwork` در فرانت گرادیانِ حرفِ اول را نشان می‌دهد
+        raise HTTPException(404, "این کاربر عکس پروفایل ندارد")
+    return FileResponse(
+        path,
+        media_type=avatar.media_type(path),
+        headers={"cache-control": AVATAR_CACHE_CONTROL},
+    )
+
 
 @app.get("/api/art/{sha}")
 async def artwork_file(sha: str):
@@ -388,12 +435,6 @@ def _artwork_stats() -> dict:
     return {"stored": done, "pending": todo, "bytes": size}
 
 
-# پیامی که در حالتِ اینترانت به‌جای خطای شبکه بالا می‌رود. کد ۵۰۳ عمدی است و
-# نه ۵۰۲: مشکل از بالادست نیست، این *سرویس* موقتاً نمی‌تواند کاری بکند — و
-# فرانت با همین کد تشخیص می‌دهد که پیامِ «اینترانت» نشان بدهد نه «خطا».
-INTRANET_DETAIL = "اینترنت بین‌الملل در دسترس نیست — فقط چیزهای ذخیره‌شده باز می‌شوند"
-
-
 def _intranet() -> HTTPException:
     """خطای «اینترانت» — صداکننده خودش `raise` می‌کند تا زنجیره‌ی علت حفظ شود."""
     return HTTPException(503, INTRANET_DETAIL)
@@ -426,7 +467,9 @@ async def _still_offline() -> bool:
 
 
 @app.get("/api/search", response_model=SearchResults)
-async def search(q: str, request: Request) -> SearchResults:
+async def search(
+    q: str, request: Request, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> SearchResults:
     """
     جستجوی زنده، با برگشت به کشِ محلی وقتی بین‌الملل قطع است.
 
@@ -440,19 +483,19 @@ async def search(q: str, request: Request) -> SearchResults:
         raise HTTPException(400, "عبارت جستجو خالی است")
 
     if CATALOG_CACHE_ENABLED and not reach.online():
-        cached = await asyncio.to_thread(catcache.search, query)
+        cached = await asyncio.to_thread(catcache.search, query, user_id)
         # کشی که جواب دارد، جواب است — پروبِ اضافه فقط تأخیر می‌شد
         if _has_rows(cached) or await _still_offline():
             return artcache.localize(cached)
         # اشتباه می‌کردیم؛ بیفت روی مسیرِ زنده
 
     try:
-        results = await catalog.search(request.app.state.http, query)
+        results = await catalog.search(request.app.state.http, query, user_id)
     except HTTPException:
         raise
     except Exception as exc:
         if CATALOG_CACHE_ENABLED and reach.note_unreachable(exc):
-            return artcache.localize(await asyncio.to_thread(catcache.search, query))
+            return artcache.localize(await asyncio.to_thread(catcache.search, query, user_id))
         raise HTTPException(502, f"جستجو ناموفق بود: {exc}") from exc
 
     reach.note_reachable()
@@ -463,7 +506,9 @@ async def search(q: str, request: Request) -> SearchResults:
 
 
 @app.post("/api/vibe", response_model=VibeSuggestion)
-async def vibe_suggest(req: VibeRequest, request: Request) -> VibeSuggestion:
+async def vibe_suggest(
+    req: VibeRequest, request: Request, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> VibeSuggestion:
     """چت‌بات پیشنهاد پلی‌لیست: پیامِ آزاد یا کلیدِ یک چیپ، پلی‌لیستِ پیشنهادی برمی‌گردد."""
     if not (req.message or "").strip() and not req.vibe:
         raise HTTPException(400, "متن یا وایب باید مشخص باشد")
@@ -472,11 +517,13 @@ async def vibe_suggest(req: VibeRequest, request: Request) -> VibeSuggestion:
     if req.message and len(req.message) > 500:
         req.message = req.message[:500]
 
-    return artcache.localize(await vibe.build_playlist(request.app.state.http, req))
+    return artcache.localize(await vibe.build_playlist(request.app.state.http, req, user_id))
 
 
 @app.get("/api/album", response_model=AlbumDetail)
-async def album(ref: str, request: Request) -> AlbumDetail:
+async def album(
+    ref: str, request: Request, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> AlbumDetail:
     """آلبوم/پلی‌لیست/تک‌آهنگ — در حالتِ اینترانت از کشِ همان صفحه."""
     if CATALOG_CACHE_ENABLED and not reach.online():
         if cached := await asyncio.to_thread(catcache.album, ref):
@@ -485,7 +532,7 @@ async def album(ref: str, request: Request) -> AlbumDetail:
             raise _intranet()
 
     try:
-        detail = await catalog.resolve_ref(request.app.state.http, ref)
+        detail = await catalog.resolve_ref(request.app.state.http, ref, user_id)
     except Exception as exc:
         if CATALOG_CACHE_ENABLED and reach.note_unreachable(exc):
             if cached := await asyncio.to_thread(catcache.album, ref):
@@ -502,7 +549,9 @@ async def album(ref: str, request: Request) -> AlbumDetail:
 
 
 @app.get("/api/artist", response_model=ArtistDetail)
-async def artist(ref: str, request: Request) -> ArtistDetail:
+async def artist(
+    ref: str, request: Request, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> ArtistDetail:
     """
     صفحه‌ی هنرمند — آنلاین همیشه از پلتفرم تازه می‌آید.
 
@@ -516,7 +565,7 @@ async def artist(ref: str, request: Request) -> ArtistDetail:
             raise _intranet()
 
     try:
-        detail = await catalog.resolve_artist(request.app.state.http, ref)
+        detail = await catalog.resolve_artist(request.app.state.http, ref, user_id)
     except Exception as exc:
         if CATALOG_CACHE_ENABLED and reach.note_unreachable(exc):
             if cached := await asyncio.to_thread(catcache.artist, ref):
@@ -533,39 +582,51 @@ async def artist(ref: str, request: Request) -> ArtistDetail:
 
 
 @app.get("/api/artist/discography", response_model=list[Track])
-async def artist_discography(ref: str, request: Request) -> list[Track]:
+async def artist_discography(
+    ref: str, request: Request, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> list[Track]:
     """تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها و تک‌آهنگ‌ها) — برای دانلود یا پخش کامل."""
     try:
-        tracks = await catalog.resolve_artist_discography(request.app.state.http, ref)
+        tracks = await catalog.resolve_artist_discography(request.app.state.http, ref, user_id)
     except Exception as exc:
         raise HTTPException(502, f"دریافت دیسکوگرافی ناموفق بود: {exc}") from exc
     return [artcache.localize(t) for t in tracks]
 
 
 @app.get("/api/songinfo", response_model=SongInfo)
-async def song_info(title: str, artist: str) -> SongInfo:
+async def song_info(
+    title: str,
+    artist: str,
+    user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST,
+) -> SongInfo:
     """
     آهنگساز/تهیه‌کننده/آلبوم — فقط Genius این‌ها را می‌دهد، هیچ کاتالوگ دیگری نه.
     بات تلگرام برای کارتِ اطلاعاتِ کنار فایل استفاده می‌کند؛ وب چیزی از این
     نمی‌خواهد، پس اینجا مصرف‌کننده‌ی دیگری ندارد.
     """
-    if not genius.enabled():
+    if not genius.enabled(user_id):
         raise HTTPException(404, "Genius تنظیم نشده")
-    info = await asyncio.to_thread(genius.song_info, title, artist)
+    info = await asyncio.to_thread(genius.song_info, title, artist, user_id)
     if info is None:
         raise HTTPException(404, "چیزی پیدا نشد")
     return SongInfo(**info.__dict__)
 
 
 @app.post("/api/downloads", response_model=DownloadAccepted)
-async def create_download(req: DownloadRequest, request: Request) -> DownloadAccepted:
-    track = await _track_for(request, req)
-    job, reused = manager.create(track, req.quality, req.candidateUrl)
+async def create_download(
+    req: DownloadRequest, request: Request, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> DownloadAccepted:
+    track = await _track_for(request, req, user_id)
+    job, reused = manager.create(track, req.quality, req.candidateUrl, user_id)
     return DownloadAccepted(jobId=job.id, reused=reused)
 
 
 @app.post("/api/candidates", response_model=list[CandidateOption])
-async def candidates(req: CandidateRequest, request: Request) -> list[CandidateOption]:
+async def candidates(
+    req: CandidateRequest,
+    request: Request,
+    user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST,
+) -> list[CandidateOption]:
     """
     نسخه‌های موجود برای یک ترک — وقتی انتخاب خودکار اشتباه بوده.
 
@@ -575,9 +636,9 @@ async def candidates(req: CandidateRequest, request: Request) -> list[CandidateO
     if req.source and req.source not in AUDIO_SOURCES:
         raise HTTPException(400, "این منبع فعال نیست")
 
-    track = await _track_for(request, req)
+    track = await _track_for(request, req, user_id)
     try:
-        found = await asyncio.to_thread(resolver.browse, track, req.source)
+        found = await asyncio.to_thread(resolver.browse, track, req.source, user_id)
     except Exception as exc:
         raise HTTPException(502, f"جستجوی نسخه‌ها ناموفق بود: {exc}") from exc
 
@@ -629,10 +690,15 @@ def _library_item(row) -> LibraryItem:
 
 
 @app.get("/api/library", response_model=LibraryPage)
-async def library(q: str = "", limit: int = 50, offset: int = 0) -> LibraryPage:
+async def library(
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST,
+) -> LibraryPage:
     limit = max(1, min(limit, 200))
     rows, total, total_bytes = await asyncio.to_thread(
-        db.library, q, limit, max(0, offset)
+        db.library, q, limit, max(0, offset), user_id
     )
 
     # ردیفی که فایلش دیگر نیست نباید در کتابخانه دیده شود. حذفش از خروجی کافی
@@ -665,16 +731,27 @@ async def library(q: str = "", limit: int = 50, offset: int = 0) -> LibraryPage:
 
 
 @app.delete("/api/library/{job_id}")
-async def library_delete(job_id: str) -> dict:
-    if not manager.forget(job_id):
+async def library_delete(job_id: str, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST) -> dict:
+    """
+    حذف از کتابخانه‌ی *همین* کاربر.
+
+    فایل و ردیفِ جاب فقط وقتی پاک می‌شوند که مالکِ دیگری نمانده باشد — دو
+    حساب می‌توانند همان ترک را داشته باشند و همان فایل را share کنند.
+    """
+    if not db.owns_job(user_id, job_id):
         raise HTTPException(404, "این مورد در کتابخانه نبود")
+
+    if db.disown(job_id, user_id) and db.owner_count(job_id) == 0:
+        manager.forget(job_id)
     return {"ok": True}
 
 
 @app.put("/api/library/{job_id}/favorite")
-async def library_favorite(job_id: str, favorite: bool) -> dict:
+async def library_favorite(
+    job_id: str, favorite: bool, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> dict:
     """قلبِ کنارِ ردیف — True یعنی لایک، False یعنی برداشتنش."""
-    if not await asyncio.to_thread(db.set_favorite, job_id, favorite):
+    if not await asyncio.to_thread(db.set_favorite, job_id, favorite, user_id):
         raise HTTPException(404, "این مورد در کتابخانه نبود")
     return {"ok": True, "favorite": favorite}
 
@@ -683,16 +760,19 @@ async def library_favorite(job_id: str, favorite: bool) -> dict:
 
 
 @app.post("/api/plays")
-async def record_play(req: PlayEvent) -> dict:
+async def record_play(req: PlayEvent, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST) -> dict:
     """
     فرانت موقع شروعِ پخشِ یک ترکِ کتابخانه این را می‌فرستد.
 
     متادیتا از خودِ جاب خوانده می‌شود نه از درخواست: فرانت ممکن است ترک را از
     مسیرهای مختلف (کتابخانه، پلی‌لیست، رادیو) پخش کند و متادیتای همراهش کامل
     نباشد. جاب منبع حقیقت است.
+
+    پخشِ ترکی که در کتابخانه‌ی این کاربر نیست پذیرفته نمی‌شود — وگرنه هر کسی
+    می‌توانست با حدسِ شناسه، آمارِ حسابِ دیگری را آلوده کند.
     """
     row = await asyncio.to_thread(db.get_job, req.jobId)
-    if row is None:
+    if row is None or not db.owns_job(user_id, req.jobId):
         raise HTTPException(404, "این مورد در کتابخانه نبود")
 
     track = Track.model_validate_json(row["track_json"])
@@ -708,21 +788,22 @@ async def record_play(req: PlayEvent) -> dict:
         track.durationMs,
         max(0, seconds),
         time.time(),
+        user_id,
     )
     return {"ok": True}
 
 
 @app.get("/api/stats", response_model=Stats)
-async def listening_stats(days: int = 7) -> Stats:
+async def listening_stats(days: int = 7, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST) -> Stats:
     """آمارِ گوش‌دادن برای یک بازه — پیش‌فرض هفت روز."""
     days = max(1, min(days, 365))
     since = time.time() - days * 86400
 
     def build() -> Stats:
-        plays, seconds, unique = db.play_totals(since)
-        tracks = db.top_tracks(since, 20)
-        artists = db.top_artists(since, 10)
-        recent = db.recent_plays(30)
+        plays, seconds, unique = db.play_totals(since, user_id)
+        tracks = db.top_tracks(since, 20, user_id)
+        artists = db.top_artists(since, 10, user_id)
+        recent = db.recent_plays(30, user_id)
         return Stats(
             plays=plays,
             seconds=seconds,
@@ -768,13 +849,13 @@ async def listening_stats(days: int = 7) -> Stats:
 
 
 @app.get("/api/favorites", response_model=list[LibraryItem])
-async def favorites() -> list[LibraryItem]:
+async def favorites(user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST) -> list[LibraryItem]:
     """ترک‌های لایک‌شده — فایل‌های آماده‌ای که قلب خورده‌اند."""
 
     def build() -> list[LibraryItem]:
         return [
             _library_item(row)
-            for row in db.favorite_jobs()
+            for row in db.favorite_jobs(user_id)
             if row["path"] and Path(row["path"]).exists()
         ]
 
@@ -782,7 +863,9 @@ async def favorites() -> list[LibraryItem]:
 
 
 @app.get("/api/mix", response_model=DailyMix)
-async def daily_mix(limit: int = 20, days: int = 7) -> DailyMix:
+async def daily_mix(
+    limit: int = 20, days: int = 7, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> DailyMix:
     """
     میکسِ روزانه: انتخابِ سرور بر اساسِ سلیقه‌ی خودِ کاربر.
 
@@ -798,12 +881,15 @@ async def daily_mix(limit: int = 20, days: int = 7) -> DailyMix:
     def build() -> DailyMix:
         centers = [
             (float(r["valence"]), float(r["energy"]))
-            for r in db.favorite_jobs()
+            for r in db.favorite_jobs(user_id)
             if r["valence"] is not None and r["energy"] is not None
         ]
         source = "favorites" if centers else "none"
         if not centers:
-            centers = [(float(r["valence"]), float(r["energy"])) for r in db.recent_moods(since, 30)]
+            centers = [
+                (float(r["valence"]), float(r["energy"]))
+                for r in db.recent_moods(since, 30, user_id)
+            ]
             if centers:
                 source = "recent"
 
@@ -812,8 +898,8 @@ async def daily_mix(limit: int = 20, days: int = 7) -> DailyMix:
             if centers
             else None
         )
-        exclude = {r["track_id"] for r in db.top_tracks(since, 100)}
-        rows = db.daily_mix(center, exclude, limit)
+        exclude = {r["track_id"] for r in db.top_tracks(since, 100, user_id)}
+        rows = db.daily_mix(center, exclude, limit, user_id)
         items = [_library_item(r) for r in rows if r["path"] and Path(r["path"]).exists()]
         # کتابخانه‌ی خالی یا بی‌سیگنال: فرانت باید بداند که چیزی برای نشان‌دادن نیست
         return DailyMix(source=source if items else "none", items=items)
@@ -866,6 +952,7 @@ async def create_zip(req: ZipRequest) -> ZipReady:
     entries: list[tuple[Path, str]] = []  # (روی دیسک، مسیر داخل آرشیو)
     playlist: list[tuple[Track, str]] = []
     seen: set[Path] = set()
+    valid_jobs: list[jobs.Job] = []
 
     for job_id in req.jobIds:
         job = manager.get(job_id)
@@ -876,8 +963,46 @@ async def create_zip(req: ZipRequest) -> ZipReady:
         if job.path in seen:
             continue
         seen.add(job.path)
+        valid_jobs.append(job)
 
-        arcname = unique(paths.render(job.track, job.path.suffix))
+    if not valid_jobs:
+        raise HTTPException(404, "هیچ فایل آماده‌ای برای بسته‌بندی نبود")
+
+    # نام هنرمند اصلی پکیج و شمارش آلبوم‌ها برای تفکیک تمیز آلبوم‌های چندترکه از تک‌آهنگ‌های کاتالوگ
+    name_clean = req.name.strip() if req.name else ""
+    is_generic_name = not name_clean or name_clean.lower() in ("musicbazi", "library", "کتابخانه")
+
+    artist_counts: collections.Counter[str] = collections.Counter()
+    album_counts: collections.Counter[str] = collections.Counter()
+    for j in valid_jobs:
+        a_name = (j.track.albumArtist or j.track.artist or "").strip()
+        if a_name:
+            artist_counts[a_name] += 1
+        if j.track.album and j.track.album.strip():
+            album_counts[j.track.album.strip().lower()] += 1
+
+    # نامِ آرشیو برچسبِ ZIP است، نه لزوماً نام هنرمند: کلاینت برای آلبوم
+    # «هنرمند - آلبوم» می‌فرستد و برای آرشیو کتابخانه نام دلخواه کاربر را.
+    # پس فقط وقتی نام واقعاً «هنرمند - ...» است از آن هنرمند می‌گیریم؛ در بقیهٔ
+    # حالت‌ها هنرمندِ غالبِ همان ترک‌ها مرجع است، وگرنه پوشه‌ای به نامِ آرشیو
+    # ساخته می‌شد («Album/…») که هیچ کتابخانه‌ای آن را به‌عنوان هنرمند نمی‌فهمد.
+    primary_artist: str | None = None
+    if not is_generic_name and " - " in name_clean:
+        primary_artist = name_clean.split(" - ", 1)[0].strip() or None
+    if not primary_artist and artist_counts:
+        primary_artist = artist_counts.most_common(1)[0][0]
+
+    for job in valid_jobs:
+        is_single = paths.is_single_release(job.track, album_counts)
+        is_album = not is_single
+        arcname = unique(
+            paths.render_archive_path(
+                job.track,
+                job.path.suffix,
+                is_album=is_album,
+                primary_artist=primary_artist,
+            )
+        )
         entries.append((job.path, arcname))
         playlist.append((job.track, arcname))
 
@@ -887,9 +1012,6 @@ async def create_zip(req: ZipRequest) -> ZipReady:
             entries.append(
                 (job.lyrics_path, str(PurePosixPath(arcname).with_suffix(".lrc")))
             )
-
-    if not entries:
-        raise HTTPException(404, "هیچ فایل آماده‌ای برای بسته‌بندی نبود")
 
     # پلی‌لیست فقط وقتی معنی دارد که چند ترک باشد؛ برای یک فایل نویز است
     m3u_name = f"{safe_name(req.name)}.m3u" if M3U_ENABLED and len(playlist) > 1 else None
@@ -930,9 +1052,11 @@ async def fetch_zip(token: str) -> FileResponse:
 
 
 @app.get("/api/downloads/{job_id}/events")
-async def download_events(job_id: str, request: Request) -> StreamingResponse:
+async def download_events(
+    job_id: str, request: Request, user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST
+) -> StreamingResponse:
     job = manager.get(job_id)
-    if job is None:
+    if job is None or not db.owns_job(user_id, job_id):
         raise HTTPException(404, "این کار پیدا نشد")
 
     queue = await manager.subscribe(job)
@@ -974,9 +1098,9 @@ async def cancel_download(job_id: str, purge: bool = False) -> dict:
 
 
 @app.get("/api/downloads/{job_id}/file")
-async def download_file(job_id: str) -> FileResponse:
+async def download_file(job_id: str, user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST) -> FileResponse:
     job = manager.get(job_id)
-    if job is None or job.path is None or not job.path.exists():
+    if job is None or job.path is None or not job.path.exists() or not db.owns_job(user_id, job_id):
         raise HTTPException(404, "فایل آماده نیست")
     return FileResponse(
         job.path,
@@ -1000,7 +1124,7 @@ AUDIO_MIME = {
 
 
 @app.get("/api/downloads/{job_id}/stream")
-async def stream_file(job_id: str) -> FileResponse:
+async def stream_file(job_id: str, user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST) -> FileResponse:
     """
     همان فایل، ولی برای `<audio>`.
 
@@ -1009,7 +1133,7 @@ async def stream_file(job_id: str) -> FileResponse:
     جواب می‌دهد، پس جابه‌جایی روی نوار پخش بدون دانلود کل فایل کار می‌کند.
     """
     job = manager.get(job_id)
-    if job is None or job.path is None or not job.path.exists():
+    if job is None or job.path is None or not job.path.exists() or not db.owns_job(user_id, job_id):
         raise HTTPException(404, "فایل آماده نیست")
     return FileResponse(
         job.path,
@@ -1046,9 +1170,13 @@ async def stream_audio(
     source: str = "spotify",
     source_url: str = "",
     quality: str | None = None,
+    user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST,
 ) -> Response:
     """
     استریم آنلاین و بلادرنگ صوت بدون نیاز به دانلود دائمی در کتابخانه با بالاترین کیفیت ممکن.
+
+    کوکیِ یوتیوب و کلیدهای Genius شخصی‌اند، پس کاربر از توکنِ مدیا (`?mt=`) یا
+    هدرِ نشست می‌آید — `<audio>` هدر نمی‌فرستد.
     """
     valid_source = (
         source
@@ -1074,7 +1202,7 @@ async def stream_audio(
             if ready_file is None:
                 try:
                     live = await get_live_playback().stream_response(
-                        track, range_header=range_header, quality=quality
+                        track, range_header=range_header, quality=quality, user_id=user_id
                     )
                     if live is not None:
                         return live
@@ -1087,7 +1215,7 @@ async def stream_audio(
                         exc.__class__.__name__,
                     )
         return await stream_cache.get_stream_response(
-            track, range_header=range_header, quality=quality
+            track, range_header=range_header, quality=quality, user_id=user_id
         )
     except Exception as exc:
         if not reach.online():
@@ -1119,16 +1247,21 @@ async def hls_segment(session_id: str, index: int, request: Request = None):  # 
     return response
 
 
-@app.get("/api/stream/lyrics")
-async def stream_lyrics(
+def _lyrics_track(
     track_id: str,
     title: str,
     artist: str,
-    album: str | None = None,
-    duration_ms: int = 0,
-) -> Response:
-    """متن ترانه همگام برای ترک استریم‌شده."""
-    track = Track(
+    album: str | None,
+    duration_ms: int,
+    videoId: str | None = None,
+    isrc: str | None = None,
+) -> Track:
+    """
+    Trackِ مسیرِ متن — یک‌جا ساخته می‌شود تا هر سه endpoint یک هویت ببینند.
+
+    اگر `videoId` نیامده باشد از `track_id` استخراج می‌شود (بدونِ حدس).
+    """
+    return Track(
         id=track_id,
         title=title,
         artist=artist,
@@ -1136,15 +1269,203 @@ async def stream_lyrics(
         durationMs=duration_ms,
         source="spotify",
         sourceUrl=f"https://musicbazi.local/track/{track_id}",
+        videoId=videoId or _video_id_from_track_id(track_id),
+        isrc=isrc,
     )
-    content = await stream_cache.get_or_fetch_lyrics(track)
+
+
+@app.get("/api/lyrics/sources")
+async def lyrics_sources_endpoint(
+    track_id: str,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_ms: int = 0,
+    videoId: str | None = None,
+    isrc: str | None = None,
+    user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST,
+) -> dict:
+    """
+    فهرستِ منابعِ متن برای یک آهنگ — **بدونِ هیچ درخواستی به Providerها**.
+
+    فرانت هنگام باز کردنِ منوی «منبعِ متن» این را صدا می‌زند؛ اگر اینجا
+    درخواستی زده می‌شد، باز کردنِ منو به ازای هر Provider یک رفت‌وبرگشت
+    می‌شد.
+    """
+    track = _lyrics_track(track_id, title, artist, album, duration_ms, videoId, isrc)
+    return {
+        "trackId": track_id,
+        "preferred": db.get_lyrics_preference(track_id),
+        "sources": lyrics_sources.list_sources(track, user_id),
+    }
+
+
+@app.get("/api/lyrics/preference")
+async def get_lyrics_preference(track_id: str) -> dict:
+    """منبعِ ذخیره‌شدهٔ یک آهنگ؛ `provider=None` یعنی «خودکار»."""
+    return {"trackId": track_id, "provider": db.get_lyrics_preference(track_id)}
+
+
+@app.put("/api/lyrics/preference")
+async def put_lyrics_preference(track_id: str, provider: str) -> dict:
+    """
+    ذخیرهٔ منبعِ انتخابیِ یک آهنگ. `provider=""` انتخاب را پاک می‌کند
+    (بازگشت به «خودکار»).
+
+    نامِ ناشناخته ۴۰۰ می‌گیرد تا فهرستِ ذخیره‌شده با واقعیتِ رجیستری نخواند.
+    """
+    if not provider:
+        db.clear_lyrics_preference(track_id)
+        return {"trackId": track_id, "provider": None}
+    entry = lyrics_manager.registry.get(provider)
+    if entry is None:
+        raise HTTPException(400, "منبعِ متنِ ناشناخته")
+    db.put_lyrics_preference(track_id, provider, time.time())
+    return {"trackId": track_id, "provider": provider}
+
+
+@app.delete("/api/lyrics/preference")
+async def clear_lyrics_preference(track_id: str) -> dict:
+    """بازگشتِ یک آهنگ به «خودکار»."""
+    db.clear_lyrics_preference(track_id)
+    return {"trackId": track_id, "provider": None}
+
+
+# کدِ ماشین‌خوانِ خطا → (کدِ HTTP، متنِ فارسیِ detail).
+#
+# `detail` عیناً همان چیزی است که قبلاً برمی‌گشت، تا کلاینتِ قدیمی نشکند؛
+# `code` فیلدِ تازه است که فرانت واقعاً به آن تصمیم می‌گیرد.
+_PROVIDER_ERRORS: dict[str, tuple[int, str]] = {
+    "unknown-provider": (404, "منبعِ متنِ ناشناخته"),
+    "unknown_provider": (404, "منبعِ متنِ ناشناخته"),
+    "blocked": (403, "این منبع قابلِ استفاده نیست"),
+    "disabled": (409, "این منبع خاموش است"),
+    "needs-setup": (409, "این منبع پیکربندی نشده است"),
+    "needs_setup": (409, "این منبع پیکربندی نشده است"),
+    "rate_limited": (429, "منبعِ متن فعلاً درخواست‌ها را محدود کرده است"),
+    "not_found": (404, "متنی برای این آهنگ یافت نشد"),
+}
+
+
+def _provider_error_response(result, provider: str) -> JSONResponse:
+    """
+    خطای منبع‌محور → JSON با کدِ ماشین‌خوان.
+
+    فیلدها: `detail` (سازگاریِ عقب‌رو)، `code` (تصمیمِ فرانت)، `provider`
+    (نامِ رجیستری)، و `http_status` فقط وقتی Provider عددی داده باشد.
+    هیچ URL، کلید یا متنی از آهنگ اینجا نیست.
+    """
+    # نام‌ها روی مرزِ HTTP یکدست می‌شوند: سرویس با خطِ تیره (`unknown-provider`)
+    # حرف می‌زند و قرارداد با زیرخط — تا فرانت یک شکل ببیند.
+    error = (result.error or "provider_error").replace("-", "_")
+    # یک HTTP ۴۲۹ از خودِ Provider، «محدودیتِ نرخ» است نه «سرویس خراب» —
+    # کاربر باید «بعداً دوباره امتحان کن» ببیند، نه «خطا».
+    if error in ("http", "network", "body") and result.http_status == 429:
+        error = "rate_limited"
+    status, detail = _PROVIDER_ERRORS.get(error, (502, "منبعِ متن پاسخ نداد"))
+    body: dict[str, object] = {
+        "detail": detail,
+        # کدهای سرویسی (`http`/`network`/`body`) همه به یک نامِ معنادار برای
+        # فرانت نگاشت می‌شوند؛ بقیه نامِ خودشان را نگه می‌دارند.
+        "code": "provider_error" if error in ("http", "network", "body") else error,
+        "provider": provider,
+    }
+    if result.http_status is not None:
+        body["http_status"] = result.http_status
+    return JSONResponse(status_code=status, content=body)
+
+
+def _video_id_from_track_id(track_id: str) -> str | None:
+    """
+    videoId از قالبِ شناسهٔ ترک — بدونِ حدس.
+
+    قالب‌های پروژه `source:type:key` هستند (`ytm:track:<id>`)، پس منبع از خودِ
+    شناسه خوانده می‌شود و همان استخراج‌کنندهٔ قطعیِ مسیرِ پخش صدا زده می‌شود.
+    اگر قالب یوتیوب نبود، `None` — هیچ حدسی زده نمی‌شود.
+    """
+    lowered = (track_id or "").lower()
+    if not lowered.startswith(("yt:", "ytm:")):
+        return None
+    source = "youtube_music" if lowered.startswith("ytm:") else "youtube"
+    return extract_youtube_video_id(
+        Track(
+            id=track_id,
+            title="",
+            artist="",
+            durationMs=0,
+            source=source,  # type: ignore[arg-type]
+            sourceUrl="",
+        )
+    )
+
+
+@app.get("/api/stream/lyrics")
+async def stream_lyrics(
+    track_id: str,
+    title: str,
+    artist: str,
+    album: str | None = None,
+    duration_ms: int = 0,
+    videoId: str | None = None,
+    isrc: str | None = None,
+    provider: str | None = None,
+    force: bool = False,
+    user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST,
+) -> Response:
+    """
+    متن ترانه همگام برای ترک استریم‌شده.
+
+    `videoId`/`isrc` اختیاری‌اند و رفتارِ قبلی را عوض نمی‌کنند: نبودشان یعنی
+    «نمی‌دانیم». بعضی منابع (SimpMusic با `videoId`) بدونشان کار نمی‌کنند و
+    بقیه نادیده‌شان می‌گیرند.
+
+    اگر فرانت `videoId` نفرستد، سرور خودش از `track_id` استخراجش می‌کند —
+    همان استخراج‌کننده‌ی قطعیِ مسیرِ پخش (`stream/playback.py`). این کار از
+    نگه‌داشتنِ یک regex دوم در فرانت جلوگیری می‌کند.
+
+    `provider` اختیاری است: نبودش **دقیقاً** رفتارِ قبلی (زنجیرهٔ خودکار +
+    کشِ روی دیسک) است. بودنش یعنی «فقط همین منبع» و نتیجه از کشِ حافظهٔ
+    سرویسِ منابع می‌آید، نه از `.lrc`ِ پیش‌فرض — تا انتخابِ دستی کشِ
+    زنجیرهٔ خودکار را آلوده نکند.
+    """
+    track = _lyrics_track(track_id, title, artist, album, duration_ms, videoId, isrc)
+
+    if provider:
+        result = await lyrics_sources.fetch_from(provider, track, user_id, force=force)
+        if result.error is not None:
+            return _provider_error_response(result, provider)
+        if result.lyrics is None:
+            return _provider_error_response(
+                sources_mod.SourceResult(provider=provider, lyrics=None, error="not_found"),
+                provider,
+            )
+        return Response(
+            content=_render_lyrics(result.lyrics),
+            media_type="text/plain; charset=utf-8",
+            headers={"x-lyrics-source": provider},
+        )
+
+    content = await stream_cache.get_or_fetch_lyrics(track, user_id)
     if not content:
         raise HTTPException(404, "متنی برای این آهنگ یافت نشد")
     return Response(content=content, media_type="text/plain; charset=utf-8")
 
 
+def _render_lyrics(found) -> str:
+    """
+    همان قاعده‌ی رندرِ کشِ استریم، برای مسیرِ منبعِ دستی.
+
+    `synced` دست‌نخورده می‌رود؛ در نبودش `lines` به LRC تبدیل می‌شود (خطی،
+    یا تقویت‌شده اگر فلگ روشن باشد) — همان `_rendered_lrc` که یک‌جا این
+    تصمیم را می‌گیرد.
+    """
+    return stream_cache._rendered_lrc(found) or ""
+
+
 @app.post("/api/stream/prefetch")
-async def stream_prefetch(req: TrackRef) -> dict:
+async def stream_prefetch(
+    req: TrackRef, user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST
+) -> dict:
     """فایل کامل ترک را در کش آماده می‌کند تا پخش هنگام نوبتش منتظر دانلود نماند."""
     if not (req.title and req.artist):
         raise HTTPException(400, "عنوان و نام هنرمند برای آماده‌سازی استریم لازم است")
@@ -1164,7 +1485,14 @@ async def stream_prefetch(req: TrackRef) -> dict:
         sourceUrl=req.sourceUrl or f"https://musicbazi.local/track/{req.trackId}",
     )
     try:
-        await stream_cache.get_or_fetch(track, quality=req.quality)
+        # در مسیر v2 استریم زنده، کافی است URL رزولوشن‌شده در کش آماده باشد؛
+        # نیازی به دانلود کامل چند ده مگابایت روی دیسک نیست مگر اینکه v2 خاموش باشد
+        # یا استخراج زنده شکست بخورد (که در آن صورت به صورت فال‌بک به کش دیسک می‌رود).
+        if is_stream_v2_enabled():
+            warmed = await get_live_playback().warm(track, quality=req.quality, user_id=user_id)
+            if warmed:
+                return {"ok": True, "warm": "resolved"}
+        await stream_cache.get_or_fetch(track, quality=req.quality, user_id=user_id)
     except Exception as exc:
         log.warning(
             "stream prefetch failed for track %s (%s)",
@@ -1176,7 +1504,7 @@ async def stream_prefetch(req: TrackRef) -> dict:
 
 
 @app.get("/api/downloads/{job_id}/thumb")
-async def download_thumb(job_id: str) -> Response:
+async def download_thumb(job_id: str, user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST) -> Response:
     """
     کاورِ همین فایل، در ابعادی که تلگرام برای thumbnail قبول می‌کند.
 
@@ -1186,7 +1514,7 @@ async def download_thumb(job_id: str) -> Response:
     از همان فایل خوانده می‌شود، پس تا وقتی فایل هست، تصویر هم هست.
     """
     job = manager.get(job_id)
-    if job is None or job.path is None or not job.path.exists():
+    if job is None or job.path is None or not job.path.exists() or not db.owns_job(user_id, job_id):
         raise HTTPException(404, "فایل آماده نیست")
     thumb = await asyncio.to_thread(downloader.thumbnail, job.path, job.track.artworkUrl)
     if thumb is None:
@@ -1200,9 +1528,14 @@ async def download_thumb(job_id: str) -> Response:
 
 
 @app.get("/api/downloads/{job_id}/lyrics")
-async def download_lyrics(job_id: str) -> FileResponse:
+async def download_lyrics(job_id: str, user_id: Annotated[str, Depends(auth.media_user)] = auth.GUEST) -> FileResponse:
     job = manager.get(job_id)
-    if job is None or job.lyrics_path is None or not job.lyrics_path.exists():
+    if (
+        job is None
+        or job.lyrics_path is None
+        or not job.lyrics_path.exists()
+        or not db.owns_job(user_id, job_id)
+    ):
         raise HTTPException(404, "متن هم‌زمان‌شده‌ای برای این آهنگ نیست")
     return FileResponse(
         job.lyrics_path,
@@ -1211,7 +1544,7 @@ async def download_lyrics(job_id: str) -> FileResponse:
     )
 
 
-async def _track_for(request: Request, req: TrackRef) -> Track:
+async def _track_for(request: Request, req: TrackRef, user_id: str = auth.GUEST) -> Track:
     """
     فرانت فقط trackId و sourceUrl می‌فرستد. اگر متادیتا همراهش آمده باشد از آن
     استفاده می‌کنیم، وگرنه از روی id بازسازی‌اش می‌کنیم تا تگ‌ها درست دربیایند.
@@ -1236,7 +1569,7 @@ async def _track_for(request: Request, req: TrackRef) -> Track:
             genre=req.genre,
         )
 
-    if found := await _lookup_track(request, req):
+    if found := await _lookup_track(request, req, user_id):
         return found
 
     raise HTTPException(400, "متادیتای این آهنگ پیدا نشد")
@@ -1253,7 +1586,9 @@ def _source_of(track_id: str) -> str:
     }.get(prefix, "youtube")
 
 
-async def _lookup_track(request: Request, req: TrackRef) -> Track | None:
+async def _lookup_track(
+    request: Request, req: TrackRef, user_id: str = auth.GUEST
+) -> Track | None:
     """بازیابی متادیتای ترک از روی شناسه‌ی داخلی."""
     client = request.app.state.http
     provider, _, ident = (req.trackId.split(":", 2) + ["", ""])[:3]
@@ -1275,12 +1610,12 @@ async def _lookup_track(request: Request, req: TrackRef) -> Track | None:
                 from .providers.deezer import _track
 
                 return _track(row)
-        elif provider == "sp" and spotify.enabled():
-            detail = await spotify.track(client, ident)
+        elif provider == "sp" and spotify.enabled(user_id):
+            detail = await spotify.track(client, ident, user_id)
             if detail and detail.tracks:
                 return detail.tracks[0]
         elif provider in ("yt", "sc"):
-            detail = await catalog.resolve_ref(client, req.sourceUrl)
+            detail = await catalog.resolve_ref(client, req.sourceUrl, user_id)
             if detail and detail.tracks:
                 return detail.tracks[0]
     except Exception:
@@ -1296,7 +1631,11 @@ MAX_IDENTIFY_BYTES = 25 * 1024 * 1024
 
 
 @app.post("/api/identify", response_model=IdentifyResult)
-async def identify_audio(request: Request, file: UploadFile = File(...)) -> IdentifyResult:
+async def identify_audio(
+    request: Request,
+    file: UploadFile = File(...),
+    user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST,
+) -> IdentifyResult:
     """
     «این چه آهنگی بود؟» — یک تکه صدا/ویدیو بالا می‌آید و ترکِ شناسایی‌شده
     به‌همراه نتایجِ قابل‌دانلودش برمی‌گردد.
@@ -1304,10 +1643,10 @@ async def identify_audio(request: Request, file: UploadFile = File(...)) -> Iden
     فایل روی دیسک نوشته می‌شود نه در حافظه: fpcalc و ffmpeg هر دو مسیر
     می‌خواهند، و ویدیوی چند مگابایتی در حافظه نگه داشتن دلیلی ندارد.
     """
-    if not identify.available():
+    if not identify.available(user_id):
         # پیامِ دقیق، نه یک «تنظیم نشده»ی کلی: تفاوتِ «کلید نیست» و «fpcalc
         # نصب نشده» تنها چیزی است که به کاربر می‌گوید بعدش چه کار کند
-        raise HTTPException(503, identify.missing())
+        raise HTTPException(503, identify.missing(user_id))
 
     suffix = Path(file.filename or "clip").suffix[:10] or ".bin"
     handle, tmp_name = tempfile.mkstemp(suffix=suffix, dir=DOWNLOAD_DIR)
@@ -1322,7 +1661,7 @@ async def identify_audio(request: Request, file: UploadFile = File(...)) -> Iden
                 out.write(chunk)
 
         try:
-            matches = await asyncio.to_thread(identify.identify, tmp)
+            matches = await asyncio.to_thread(identify.identify, tmp, user_id)
         except identify.ServiceError as exc:
             # ردِ سرویس با «چیزی پیدا نشد» یکی نیست و کاربر باید تفاوتش را ببیند
             raise HTTPException(502, str(exc)) from exc
@@ -1333,7 +1672,7 @@ async def identify_audio(request: Request, file: UploadFile = File(...)) -> Iden
         best = matches[0]
         try:
             found = await catalog.search(
-                request.app.state.http, f"{best.artist} {best.title}".strip()
+                request.app.state.http, f"{best.artist} {best.title}".strip(), user_id
             )
             tracks = found.tracks[:8]
         except Exception:
@@ -1358,12 +1697,14 @@ async def identify_audio(request: Request, file: UploadFile = File(...)) -> Iden
 
 
 @app.get("/api/chapters", response_model=ChaptersInfo)
-async def chapters(ref: str) -> ChaptersInfo:
+async def chapters(
+    ref: str, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> ChaptersInfo:
     """
     چپترهای یک لینک. لیستِ خالی یعنی چپتری نداشت — که خطا نیست، فقط یعنی
     دکمه‌ی «تکه‌اش کن» نباید نشان داده شود.
     """
-    source = await asyncio.to_thread(split.probe, ref)
+    source = await asyncio.to_thread(split.probe, ref, user_id)
     if source is None:
         raise HTTPException(404, "این لینک باز نشد")
     return artcache.localize(_chapters_info(source))
@@ -1391,7 +1732,9 @@ def _chapters_info(source: split.SplitSource) -> ChaptersInfo:
 
 
 @app.post("/api/downloads/split", response_model=SplitStatus)
-async def create_split(req: SplitRequest) -> SplitStatus:
+async def create_split(
+    req: SplitRequest, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> SplitStatus:
     source = await asyncio.to_thread(split.probe, req.url)
     if source is None:
         raise HTTPException(404, "این لینک باز نشد")
@@ -1403,12 +1746,14 @@ async def create_split(req: SplitRequest) -> SplitStatus:
     if not chosen:
         raise HTTPException(400, "هیچ تکه‌ای انتخاب نشده")
 
-    task = split.start(source, chosen, req.quality)
+    task = split.start(source, chosen, req.quality, user_id)
     return await asyncio.to_thread(_split_status, task)
 
 
 @app.get("/api/downloads/split/{task_id}", response_model=SplitStatus)
-async def split_status(task_id: str) -> SplitStatus:
+async def split_status(
+    task_id: str, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> SplitStatus:
     """
     پیشرفتِ تکه‌کردن.
 
@@ -1417,7 +1762,7 @@ async def split_status(task_id: str) -> SplitStatus:
     ارزان‌تر از نگه‌داشتنِ یک اتصالِ باز و یک صفِ مشترک برای هر کلاینت است.
     """
     task = split.get(task_id)
-    if task is None:
+    if task is None or task.user_id != user_id:
         raise HTTPException(404, "این کار پیدا نشد یا منقضی شده")
     # یک کوئری و یک `exists()` به‌ازای هر چپتر، و فرانت هر ثانیه می‌پرسد
     return await asyncio.to_thread(_split_status, task)
@@ -1457,27 +1802,30 @@ def _rule_of(row) -> dict | None:
         return None
 
 
-def _playlist_rows(row) -> list:
+def _playlist_rows(row, user_id: str) -> list:
     """
     اعضای یک پلی‌لیست — دستی از جدول، هوشمند از اجرای قانون.
 
     ردیفی که فایلش دیگر روی دیسک نیست کنار گذاشته می‌شود ولی حذف نمی‌شود:
     پاک‌سازیِ ردیف کارِ `/api/library` و sweep دیسک است، نه کارِ خواندنِ یک
     پلی‌لیست.
+
+    `user_id` لازم است حتی برای پلی‌لیستِ هوشمند: قانون روی کتابخانه‌ی *همین*
+    کاربر اجرا می‌شود، نه روی فایل‌های همه‌ی حساب‌ها.
     """
     if row["kind"] == "smart":
-        return db.smart_jobs(_rule_of(row) or {})
-    return db.playlist_jobs(row["id"])
+        return db.smart_jobs(_rule_of(row) or {}, user_id)
+    return db.playlist_jobs(row["id"], user_id)
 
 
-def _playlist_items(row) -> list[LibraryItem]:
+def _playlist_items(row, user_id: str) -> list[LibraryItem]:
     # روی کلِ فهرست، نه تک‌تکِ ردیف‌ها: هر صداکردنِ `localize` یک نوشتنِ
     # دسته‌ای در SQLite است و به‌ازای هر ترک صدا زدنش، یک پلی‌لیستِ صدتایی را
     # به صد تراکنشِ ریز تبدیل می‌کرد
     return artcache.localize(
         [
             _library_item(job)
-            for job in _playlist_rows(row)
+            for job in _playlist_rows(row, user_id)
             if job["path"] and Path(job["path"]).exists()
         ]
     )
@@ -1496,17 +1844,22 @@ def _playlist_model(row, items: list[LibraryItem]) -> UserPlaylist:
 
 
 @app.get("/api/playlists", response_model=list[UserPlaylist])
-async def list_playlists() -> list[UserPlaylist]:
+async def list_playlists(user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST) -> list[UserPlaylist]:
     # هر پلی‌لیست یک کوئریِ عضوگیری است و هر عضو یک `exists()` — سنگین‌ترین
     # مسیرِ این فایل. یک نخ برای همه‌شان، نه فقط برای گرفتنِ خودِ ردیف‌ها.
     def build() -> list[UserPlaylist]:
-        return [_playlist_model(row, _playlist_items(row)) for row in db.playlists()]
+        return [
+            _playlist_model(row, _playlist_items(row, user_id))
+            for row in db.playlists(user_id)
+        ]
 
     return await asyncio.to_thread(build)
 
 
 @app.post("/api/playlists", response_model=UserPlaylist)
-async def create_playlist(req: PlaylistCreate) -> UserPlaylist:
+async def create_playlist(
+    req: PlaylistCreate, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> UserPlaylist:
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "اسم پلی‌لیست خالی است")
@@ -1524,36 +1877,44 @@ async def create_playlist(req: PlaylistCreate) -> UserPlaylist:
             req.kind,
             req.rule.model_dump() if req.rule else None,
             time.time(),
+            user_id,
         )
         if req.kind == "manual" and req.jobIds:
-            db.add_to_playlist(playlist_id, req.jobIds, time.time())
-        row = db.get_playlist(playlist_id)
-        return _playlist_model(row, _playlist_items(row))
+            # فقط جاب‌هایی که در کتابخانه‌ی همین کاربر‌اند — شناسه‌ی حسابِ
+            # دیگری نباید از این راه وارد پلی‌لیست شود
+            owned = [jid for jid in req.jobIds if db.owns_job(user_id, jid)]
+            db.add_to_playlist(playlist_id, owned, time.time())
+        row = db.get_playlist(playlist_id, user_id)
+        return _playlist_model(row, _playlist_items(row, user_id))
 
     return await asyncio.to_thread(build)
 
 
 @app.get("/api/playlists/{playlist_id}", response_model=UserPlaylistDetail)
-async def get_playlist(playlist_id: str) -> UserPlaylistDetail:
-    row = await asyncio.to_thread(db.get_playlist, playlist_id)
+async def get_playlist(
+    playlist_id: str, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> UserPlaylistDetail:
+    row = await asyncio.to_thread(db.get_playlist, playlist_id, user_id)
     if row is None:
         raise HTTPException(404, "این پلی‌لیست پیدا نشد")
-    items = await asyncio.to_thread(_playlist_items, row)
+    items = await asyncio.to_thread(_playlist_items, row, user_id)
     return UserPlaylistDetail(**_playlist_model(row, items).model_dump(), items=items)
 
 
 @app.patch("/api/playlists/{playlist_id}", response_model=UserPlaylist)
-async def patch_playlist(playlist_id: str, req: PlaylistUpdate) -> UserPlaylist:
+async def patch_playlist(
+    playlist_id: str, req: PlaylistUpdate, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> UserPlaylist:
     def build() -> UserPlaylist | None:
-        if db.get_playlist(playlist_id) is None:
+        if db.get_playlist(playlist_id, user_id) is None:
             return None
         db.update_playlist(
             playlist_id,
             name=req.name.strip() if req.name and req.name.strip() else None,
             rule=req.rule.model_dump() if req.rule else None,
         )
-        row = db.get_playlist(playlist_id)
-        return _playlist_model(row, _playlist_items(row))
+        row = db.get_playlist(playlist_id, user_id)
+        return _playlist_model(row, _playlist_items(row, user_id))
 
     updated = await asyncio.to_thread(build)
     if updated is None:
@@ -1562,24 +1923,33 @@ async def patch_playlist(playlist_id: str, req: PlaylistUpdate) -> UserPlaylist:
 
 
 @app.delete("/api/playlists/{playlist_id}")
-async def remove_playlist(playlist_id: str) -> dict:
-    if db.get_playlist(playlist_id) is None:
+async def remove_playlist(
+    playlist_id: str, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> dict:
+    if db.get_playlist(playlist_id, user_id) is None:
         raise HTTPException(404, "این پلی‌لیست پیدا نشد")
     db.delete_playlist(playlist_id)
     return {"ok": True}
 
 
 @app.post("/api/playlists/{playlist_id}/items")
-async def add_playlist_items(playlist_id: str, req: PlaylistItemsRequest) -> dict:
-    row = db.get_playlist(playlist_id)
+async def add_playlist_items(
+    playlist_id: str, req: PlaylistItemsRequest, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> dict:
+    row = db.get_playlist(playlist_id, user_id)
     if row is None:
         raise HTTPException(404, "این پلی‌لیست پیدا نشد")
     if row["kind"] == "smart":
         raise HTTPException(400, "پلی‌لیست هوشمند عضوِ دستی نمی‌گیرد — قانونش را عوض کن")
 
     # شناسه‌ای که در کتابخانه نیست نباید وارد شود، وگرنه پلی‌لیست به ردیفی
-    # اشاره می‌کند که هیچ‌وقت پخش نمی‌شود
-    valid = [jid for jid in req.jobIds if (job := db.get_job(jid)) and job["status"] == "ready"]
+    # اشاره می‌کند که هیچ‌وقت پخش نمی‌شود — و «در کتابخانه» یعنی کتابخانه‌ی
+    # همین کاربر
+    valid = [
+        jid
+        for jid in req.jobIds
+        if (job := db.get_job(jid)) and job["status"] == "ready" and db.owns_job(user_id, jid)
+    ]
     if not valid:
         raise HTTPException(400, "هیچ‌کدام از این‌ها در کتابخانه آماده نیست")
     added = db.add_to_playlist(playlist_id, valid, time.time())
@@ -1587,15 +1957,21 @@ async def add_playlist_items(playlist_id: str, req: PlaylistItemsRequest) -> dic
 
 
 @app.delete("/api/playlists/{playlist_id}/items/{job_id}")
-async def remove_playlist_item(playlist_id: str, job_id: str) -> dict:
+async def remove_playlist_item(
+    playlist_id: str, job_id: str, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> dict:
+    if db.get_playlist(playlist_id, user_id) is None:
+        raise HTTPException(404, "این پلی‌لیست پیدا نشد")
     if not db.remove_from_playlist(playlist_id, job_id):
         raise HTTPException(404, "این آهنگ در پلی‌لیست نبود")
     return {"ok": True}
 
 
 @app.put("/api/playlists/{playlist_id}/order")
-async def reorder_playlist(playlist_id: str, req: PlaylistItemsRequest) -> dict:
-    if db.get_playlist(playlist_id) is None:
+async def reorder_playlist(
+    playlist_id: str, req: PlaylistItemsRequest, user_id: Annotated[str, Depends(auth.optional_user)] = auth.GUEST
+) -> dict:
+    if db.get_playlist(playlist_id, user_id) is None:
         raise HTTPException(404, "این پلی‌لیست پیدا نشد")
     db.reorder_playlist(playlist_id, req.jobIds)
     return {"ok": True}

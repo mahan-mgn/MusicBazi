@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
-from ytmusicapi import YTMusic
+
+try:
+    from ytmusicapi import YTMusic
+except ImportError:
+    YTMusic = None  # type: ignore[assignment, misc]
 
 from ..config import PROXY, YOUTUBE_MUSIC_ENABLED
 from ..models import Album, AlbumDetail, Artist, ArtistDetail, Playlist, SearchResults, Track
@@ -23,7 +28,7 @@ _client: YTMusic | None = None
 
 def enabled() -> bool:
     """آیا کاتالوگ یوتیوب موزیک در جستجو فعال است؟"""
-    return YOUTUBE_MUSIC_ENABLED
+    return YOUTUBE_MUSIC_ENABLED and YTMusic is not None
 
 
 def _get_client() -> YTMusic:
@@ -33,6 +38,22 @@ def _get_client() -> YTMusic:
         proxies = {"http": PROXY, "https": PROXY} if PROXY else None
         _client = YTMusic(proxies=proxies)
     return _client
+
+
+def _reset_client() -> YTMusic:
+    """
+    دور انداختن نمونه‌ی فعلی و ساختن یکی تازه.
+
+    نمونه‌ی عمومیِ ytmusicapi بعد از مدتی بی‌کار می‌ماند و کانتکستش
+    (`visitorData`) باطل می‌شود؛ از آن به بعد `browse` بدنه‌ی خالی و
+    `noindex` می‌دهد و پارسر روی همان می‌شکند — درحالی‌که `search` سالم است،
+    پس قالبِ آلبوم بی‌دلیل از کار می‌افتد و صفحه‌ی هنرمند ۵۰۲ می‌گیرد.
+    کلاینتِ نو همان درخواست را درست جواب می‌دهد، پس فقط باید نمونه را عوض
+    کرد؛ هیچ چیز دیگری در این ماژول حالت ندارد.
+    """
+    global _client
+    _client = None
+    return _get_client()
 
 
 def _best_thumb(item: dict[str, Any]) -> str | None:
@@ -54,12 +75,24 @@ def _clean_artists(artists: list[dict[str, Any]] | None) -> str:
     return ", ".join(names) if names else "ناشناس"
 
 
+def _clean_studio_video_id(item: dict[str, Any], video_id: str | None) -> str | None:
+    """
+    شناسهٔ نسخهٔ تمیزِ استودیویی، وقتی ردیف آلبوم به موزیک‌ویدیو (OMV) اشاره می‌کند.
+
+    یوتیوب‌موزیک برای ترک‌های OMV یک `creditsBrowseId` با پیشوند `MPTC` می‌دهد که
+    ۴ کاراکتر اولش پیشوند است و بقیه خودِ شناسهٔ ویدیوی ترکِ استودیویی. پخش
+    نسخهٔ OMV یعنی شنیدن افکت و دیالوگ کلیپ به‌جای آهنگ.
+    """
+    credits_id = str(item.get("creditsBrowseId") or "")
+    if credits_id.startswith("MPTC") and len(credits_id) == 15:
+        return credits_id[4:]
+    return video_id
+
+
 def _item_to_track(item: dict[str, Any], default_artist: str | None = None) -> Track | None:
     """تبدیل ردیف آهنگ YouTube Music به مدل استاندارد Track."""
     video_id = item.get("videoId")
-    credits_id = str(item.get("creditsBrowseId") or "")
-    if credits_id.startswith("MPTC") and len(credits_id) == 15:
-        video_id = credits_id[4:]
+    video_id = _clean_studio_video_id(item, video_id)
     if not video_id:
         return None
 
@@ -241,11 +274,54 @@ def search(query: str, limit: int = 20) -> SearchResults:
     return SearchResults(query=query, tracks=tracks, albums=albums, artists=artists)
 
 
+def _album_raw(browse_id: str, attempts: int = 3) -> bool:
+    """
+    آیا صفحه‌ی آلبوم واقعاً محتوا دارد؟ با تلاشِ دوباره.
+
+    یوتیوب موزیک برای آلبوم‌های همین‌تازه‌منتشرشده گاهی بدنه‌ی خالی برمی‌گرداند
+    (فقط `noindex`، بدون `contents`) و `ytmusicapi` روی همان پارس می‌شکند. تا
+    حالا یک استثنا به `resolve_ref` می‌رسید و کاربر ۵۰۲ می‌گرفت درحالی‌که
+    خودِ آلبوم سالم بود.
+
+    دو علتِ مستقل دارد و هر دو همین‌جا پوشش داده می‌شود: پاسخِ گذرا (که با
+    تلاشِ دوباره درست می‌شود) و کانتکستِ باطل‌شده‌ی نمونه‌ی بی‌کارمانده (که با
+    نمونه‌ی نو درست می‌شود — نگاه کن به `_reset_client`).
+    """
+    if _album_raw_with(_get_client(), browse_id, attempts) is not None:
+        return True
+    # همان نمونه جواب نداد؛ پیش از نتیجه‌گرفتنِ «آلبوم نیست»، نمونه‌ی نو را
+    # امتحان کن. اگر آن هم خالی برگرداند، آلبوم واقعاً در دسترس نیست.
+    return _album_raw_with(_reset_client(), browse_id, 1) is not None
+
+
+def _album_raw_with(client: Any, browse_id: str, attempts: int = 3) -> dict[str, Any] | None:
+    """
+    هسته‌ی `_album_raw` روی کلاینتی که داده می‌شود.
+
+    جدا شده تا تست بتواند کلاینتِ جعلی بدهد و شبکه نخورد؛ منطقِ تلاشِ دوباره
+    همان‌جاست که قرار است آزمایش شود.
+    """
+    for attempt in range(attempts):
+        try:
+            raw = client._send_request("browse", {"browseId": browse_id})
+            if isinstance(raw, dict) and raw.get("contents"):
+                return raw
+        except Exception as exc:
+            log.debug("album browse %s attempt %d failed: %s", browse_id, attempt + 1, exc)
+        if attempt + 1 < attempts:
+            time.sleep(0.35 * (attempt + 1))
+    return None
+
+
 def get_album(browse_id: str) -> AlbumDetail | None:
     """دریافت جزییات کامل آلبوم از YouTube Music."""
     clean_id = browse_id.removeprefix("ytm:album:").removeprefix("yt:album:")
     try:
         client = _get_client()
+        # پیش‌بررسی فقط وقتی معنی دارد که کلاینت `_send_request` داشته باشد؛
+        # کلاینتِ جعلیِ تست‌ها ندارد و بی‌آنکه چیزی بدانیم نباید آلبوم را رد کنیم.
+        if callable(getattr(client, "_send_request", None)) and _album_raw(clean_id) is None:
+            return None
         alb = client.get_album(clean_id)
         if not alb:
             return None
@@ -254,10 +330,7 @@ def get_album(browse_id: str) -> AlbumDetail | None:
         art_url = _best_thumb(alb)
         tracks: list[Track] = []
         for t in alb.get("tracks") or []:
-            vid = t.get("videoId")
-            credits_id = str(t.get("creditsBrowseId") or "")
-            if credits_id.startswith("MPTC") and len(credits_id) == 15:
-                vid = credits_id[4:]
+            vid = _clean_studio_video_id(t, t.get("videoId"))
             if not vid:
                 continue
             tracks.append(
@@ -298,12 +371,36 @@ def get_album(browse_id: str) -> AlbumDetail | None:
 
 
 def resolve_handle_to_channel_id(handle_or_url: str) -> str | None:
-    """تبدیل هندل یوتیوب (مانند @Gxcciflame) به channel_id (با پیشوند UC)."""
+    """تبدیل هندل یوتیوب (مانند @Tlkhoon یا @KooroshOfficial) به channel_id (با پیشوند UC)."""
     clean = handle_or_url.strip()
     if "/@" in clean:
         clean = "@" + clean.split("/@")[-1].split("?")[0].split("/")[0]
     elif not clean.startswith("@") and not clean.startswith("UC"):
         clean = f"@{clean}"
+
+    if clean.startswith("UC") and len(clean) == 24:
+        return clean
+
+    # ۱. جستجوی مستقیم هنرمند در یوتیوب موزیک — دقیق‌ترین شناسه بومی یوتیوب موزیک را برمی‌گرداند
+    try:
+        client = _get_client()
+        artists = client.search(clean, filter="artists", limit=3)
+        if artists and artists[0].get("browseId"):
+            return artists[0]["browseId"]
+    except Exception as exc:
+        log.debug("YTM artist search for handle %s failed: %s", clean, exc)
+
+    # ۲. استخراج از طریق yt-dlp (با کوکی و بدون برخورد به صفحه رضایت گوگل)
+    try:
+        from yt_dlp import YoutubeDL
+        from .. import ydl
+        opts = ydl.opts("local", extract_flat="in_playlist", skip_download=True, quiet=True)
+        with YoutubeDL(opts) as y:
+            info = y.extract_info(f"https://www.youtube.com/{clean}", download=False)
+            if info and info.get("channel_id"):
+                return info["channel_id"]
+    except Exception as exc:
+        log.debug("yt-dlp handle resolution for %s failed: %s", clean, exc)
 
     url = f"https://www.youtube.com/{clean}" if clean.startswith("@") else f"https://www.youtube.com/channel/{clean}"
     try:
@@ -347,6 +444,168 @@ def _fetch_channel_avatar(channel_id: str) -> str | None:
     except Exception as exc:
         log.debug("Failed to fetch channel avatar for %s: %s", channel_id, exc)
     return None
+
+
+def _ytm_artist_id(top_tracks: list[Track], clean_id: str) -> str:
+    """
+    شناسه‌ی هنرمند در یوتیوب موزیک، از روی خودِ ترک‌ها.
+
+    کانالِ یوتیوب و هنرمندِ یوتیوب موزیک دو شناسه‌ی متفاوت دارند: صفحه‌ی
+    `youtube.com/channel/UC0DXllI…` را یوتیوب موزیک زیر `UCSsq6HUy…` می‌شناسد.
+    `get_artist` شناسه‌ی *یوتیوب* را پس می‌دهد (همان که صدازده شد)، ولی نتایجِ
+    جستجو ترک را به شناسه‌ی *یوتیوب موزیک* نسبت می‌دهند — پس تطبیق دادنشان با
+    هم هیچ‌وقت نمی‌گیرد و تکمیلِ انتشارها بی‌اثر می‌ماند.
+
+    شناسه از روی `artistId` ترک‌ها شمرده می‌شود و پرتکرارترین برنده است، نه
+    اولین. دو دلیلی که «اولین» غلط است: ترکِ فیچردار ممکن است هنرمندِ مهمان را
+    اول بیاورد، و «شناسه‌ای که با `clean_id` یکی نیست» وقتی خودِ `clean_id`
+    شناسه‌ی یوتیوب‌موزیک باشد جوابِ درست را دور می‌ریزد. پرتکرارترین شناسه
+    هم در مسیرِ یوتیوب و هم در مسیرِ یوتیوب‌موزیک درست از آب درمی‌آید.
+    """
+    counts: dict[str, int] = {}
+    for track in top_tracks:
+        ident = track.artistId.rsplit(":", 1)[-1] if track.artistId else ""
+        if ident:
+            counts[ident] = counts.get(ident, 0) + 1
+    if not counts:
+        return clean_id
+    return max(counts, key=lambda k: counts[k])
+
+
+def _supplement_releases(
+    client: YTMusic,
+    channel_id: str,
+    name: str,
+    seen_release_ids: set[str],
+    singles_list: list[Album],
+) -> None:
+    """
+    انتشارهایی که کاروسلِ صفحه‌ی هنرمند ندارد را از جستجو اضافه می‌کند.
+
+    برای هر آلبومی که در جستجو به همین هنرمند نسبت داده شده ولی `browseId`اش
+    در `seen_release_ids` نیست، یک ردیفِ سبکِ آلبوم می‌سازد. عمداً `get_album`
+    صدا زده نمی‌شود: صفحه‌ی هنرمند نباید برای هر انتشار یک درخواستِ اضافه بزند،
+    و همان عنوان و شناسه برای باز شدنِ صفحه کافی است — `resolve_ref` وقتی
+    کاربر روی آن کلیک کرد جزئیات را می‌گیرد.
+
+    تک‌آهنگ‌ها به `singles_list` می‌روند که در انتها با `albums_list` جمع می‌شود،
+    پس هم در تبِ Releases دیده می‌شوند و هم زیر فیلترِ Singles & EPs می‌آیند.
+
+    تاریخِ انتشار را از `get_song` می‌گیرد، نه از ردیفِ جستجو — آن ردیف `year`
+    ندارد و بدون تاریخ، انتشارِ تازه‌منتشرشده ته لیست می‌افتد درحالی‌که جدیدترین
+    اثرِ هنرمند است. درخواست فقط برای انتشارهای جامانده زده می‌شود (معمولاً یکی-
+    دو تا)، نه برای هر ۳۶ انتشار.
+    """
+    try:
+        found = client.search(name, filter="songs", limit=50)
+    except Exception as exc:
+        log.warning("YouTube Music search supplement failed for %s: %s", channel_id, exc)
+        return
+
+    # عنوان‌های نرمال‌شده‌ای که از قبل (در کاروسل) هستند تا آپلودِ تکراریِ
+    # همان تک‌آهنگ دوباره اضافه نشود. یوتیوب‌موزیک گاهی یک تک‌آهنگ را زیر دو
+    # `browseId` جدا دارد (`KAASH` در برابر `Kaash`) با همان `videoId`؛
+    # مقایسه‌ی شناسه چیزی نمی‌گیرد، ولی عنوانِ نرمال‌شده می‌گیرد.
+    seen_titles = {_release_title_key(a.title) for a in singles_list}
+
+    for item in found or []:
+        if not isinstance(item, dict):
+            continue
+        artist_ids = {a.get("id") for a in item.get("artists") or []}
+        if channel_id not in artist_ids:
+            continue
+        alb = item.get("album") or {}
+        bid = alb.get("id")
+        title = alb.get("name")
+        if not bid or not title or bid in seen_release_ids:
+            continue
+        release_date = _release_date(client, item.get("videoId"))
+        year = _year_of(release_date) or int(item.get("year") or 0)
+        title_key = _release_title_key(title)
+        if title_key in seen_titles:
+            log.debug(
+                "YouTube Music: skipping duplicate upload %r (%s) — already listed",
+                title,
+                bid,
+            )
+            seen_release_ids.add(bid)
+            continue
+        seen_release_ids.add(bid)
+        seen_titles.add(title_key)
+        release = Album(
+            id=f"ytm:album:{bid}",
+            title=title,
+            artist=_clean_artists(item.get("artists")) or name,
+            year=year,
+            trackCount=1,
+            artworkUrl=_best_thumb(item),
+            source="youtube_music",
+            sourceUrl=f"https://music.youtube.com/browse/{bid}",
+            artistId=f"ytm:artist:{channel_id}",
+            # جستجو نوعِ انتشار را نمی‌دهد؛ تک‌آهنگ حدسِ درست برای ردیفِ
+            # نتیجه‌ی songs است و `resolve_ref` موقع باز شدن تصحیحش می‌کند
+            releaseType="single",
+            releaseDate=release_date,
+        )
+        singles_list.append(release)
+
+
+_FEATURE_RE = re.compile(
+    r"\s*[\(\[](?:feat\.?|ft\.?|with|prod\.?|official|video|audio|track|visualizer|visual)[^\)\]]*[\)\]]",
+    re.IGNORECASE,
+)
+
+
+def _release_title_key(title: str) -> str:
+    """
+    عنوانِ نرمال‌شده — کلیدِ یکتاسازیِ آپلودهای هم‌نام.
+
+    پرانتزهای فیچرینگ، نشانه‌های رسمی، علائم نگارشی و فاصله‌ها حذف می‌شوند تا
+    عناوینی مانند «CATALAN (feat. ...)» و «CATALAN» هم‌نام شناخته شده و
+    آپلود تکراری ثبت نشوند.
+    """
+    clean = _FEATURE_RE.sub("", title or "")
+    clean = re.sub(r"[\(\[].*?[\)\]]", " ", clean)
+    clean = re.sub(r"[^\w\s؀-ۿ]", " ", clean)
+    return " ".join(clean.casefold().split())
+
+
+def _release_sort_key(album: Album) -> tuple[int, str]:
+    """
+    کلیدِ مرتب‌سازی برای انتشارها — جدیدترین اول (با `reverse=True`).
+
+    `(سال، تاریخ)` است نه `(تاریخ، سال)`: بعضی ردیف‌ها تاریخِ دقیق دارند و
+    بعضی فقط سال. اگر تاریخ اول مقایسه شود، انتشارِ بی‌تاریخِ ۲۰۲۶ با رشته‌ی
+    خالی زیرِ انتشارِ ۲۰۲۴ با تاریخِ کامل می‌افتد. سالِ اول باعث می‌شود
+    مقایسه‌ی درونِ یک سال با تاریخِ دقیق انجام شود و بینِ سال‌ها با سال.
+    """
+    return (album.year or 0, album.releaseDate or "")
+
+
+def _release_date(client: YTMusic, video_id: str | None) -> str | None:
+    """
+    تاریخِ انتشارِ یک ترک، به شکل `YYYY-MM-DD`.
+
+    `get_song` تنها جایی است که یوتیوب‌موزیک تاریخِ دقیق می‌دهد (ردیفِ جستجو
+    `year` ندارد). ارزان است — یک درخواستِ تک‌ترکی — و فقط برای انتشارهای
+    جامانده صدا زده می‌شود.
+    """
+    if not video_id:
+        return None
+    try:
+        song = client.get_song(video_id)
+    except Exception as exc:
+        log.debug("YouTube Music get_song failed for %s: %s", video_id, exc)
+        return None
+    microformat = (song.get("microformat") or {}).get("microformatDataRenderer") or {}
+    stamp = str(microformat.get("uploadDate") or microformat.get("publishDate") or "")
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", stamp)
+    return match.group(1) if match else None
+
+
+def _year_of(date: str | None) -> int:
+    """سالِ یک تاریخِ `YYYY-MM-DD` — صفر اگر نبود."""
+    return int(date[:4]) if date and date[:4].isdigit() else 0
 
 
 def get_artist(channel_id: str) -> ArtistDetail | None:
@@ -442,7 +701,10 @@ def get_artist(channel_id: str) -> ArtistDetail | None:
                 for t in pl.get("tracks") or []:
                     track = _item_to_track(t, default_artist=name)
                     if track:
-                        track.artistId = f"ytm:artist:{clean_id}"
+                        # شناسه‌ی هنرمند از خودِ ترک می‌آید و همان شناسه‌ی
+                        # یوتیوب‌موزیک است؛ `clean_id` شناسه‌ی *یوتیوب* است و
+                        # فقط وقتی می‌نشیند که ترک هیچ هنرمندی نداشته باشد.
+                        track.artistId = track.artistId or f"ytm:artist:{clean_id}"
                         top_tracks.append(track)
             except Exception as pl_exc:
                 log.warning("YouTube Music get_playlist failed for %s: %s", songs_playlist_id, pl_exc)
@@ -452,7 +714,7 @@ def get_artist(channel_id: str) -> ArtistDetail | None:
             for s in songs_sec.get("results") or []:
                 track = _item_to_track(s, default_artist=name)
                 if track:
-                    track.artistId = f"ytm:artist:{clean_id}"
+                    track.artistId = track.artistId or f"ytm:artist:{clean_id}"
                     top_tracks.append(track)
 
         # ۲. استخراج دیسکوگرافی با تفکیک دقیق آلبوم‌ها و تک‌آهنگ‌ها
@@ -472,12 +734,21 @@ def get_artist(channel_id: str) -> ArtistDetail | None:
                 if raw_type in ("album", "single", "ep", "compilation")
                 else default_type
             )
+            count_raw = r.get("count") or r.get("total_tracks") or r.get("track_count")
+            if count_raw and str(count_raw).isdigit():
+                track_count = int(count_raw)
+            elif rel_type in ("album", "compilation"):
+                track_count = 10
+            elif rel_type == "ep":
+                track_count = 4
+            else:
+                track_count = 1
             return Album(
                 id=f"ytm:album:{bid}",
                 title=title,
                 artist=_clean_artists(r.get("artists")) if r.get("artists") else name,
                 year=int(r.get("year") or 0),
-                trackCount=1,
+                trackCount=track_count,
                 artworkUrl=_best_thumb(r),
                 source="youtube_music",
                 sourceUrl=f"https://music.youtube.com/browse/{bid}",
@@ -519,11 +790,45 @@ def get_artist(channel_id: str) -> ArtistDetail | None:
             except Exception as single_exc:
                 log.warning("YouTube Music get_artist_singles failed for %s: %s", clean_id, single_exc)
 
-        if singles_sec.get("results"):
+        if not singles_list and singles_sec.get("results"):
             for s in singles_sec.get("results") or []:
                 mapped = _map_release(s, default_type="single")
                 if mapped:
                     singles_list.append(mapped)
+
+        # ۲الف. استخراج تاریخ دقیق برای اولین تک‌آهنگ‌های کاروسل تا تازه‌ترین اثر مشخص باشد
+        for s in singles_list[:3]:
+            if not s.releaseDate:
+                norm_title = _release_title_key(s.title)
+                matching_vid = None
+                for t in top_tracks:
+                    t_norm = _release_title_key(t.title)
+                    if t.id and (t_norm == norm_title or norm_title in t_norm):
+                        matching_vid = t.id.rsplit(":", 1)[-1]
+                        break
+                if not matching_vid:
+                    try:
+                        clean_bid = s.id.removeprefix("ytm:album:")
+                        alb_data = client.get_album(clean_bid)
+                        if alb_data and alb_data.get("tracks"):
+                            matching_vid = alb_data["tracks"][0].get("videoId")
+                    except Exception:
+                        pass
+                if matching_vid:
+                    s.releaseDate = _release_date(client, matching_vid)
+                    if s.releaseDate:
+                        s.year = _year_of(s.releaseDate) or s.year
+
+        # ۲ب. تکمیل فقط برای هنرمندان کم‌اثری که کاروسل رسمی ندارند
+        # اگر هنرمند دیسکوگرافی رسمی دارد، کاتالوگ دقیقاً مطابق پلتفرم یوتیوب موزیک می‌ماند
+        # و نباید با نتایج جستجوی آهنگ (نسخه‌های تکراری و فیچرینگ‌ها) آلوده شود.
+        if not singles_list and not albums_list:
+            _supplement_releases(
+                client, _ytm_artist_id(top_tracks, clean_id), name, seen_release_ids, singles_list
+            )
+
+        # ۲ج. مرتب‌سازی دیسکوگرافی کلی بر اساس سال (جدیدترین به قدیمی‌ترین) با حفظ ترتیب اصیل یوتیوب موزیک
+        all_releases = sorted(albums_list + singles_list, key=lambda a: -(a.year or 0))
 
         # ۳. ویدیوهای رسمی (Music Videos)
         videos_list: list[Track] = []
@@ -614,7 +919,7 @@ def get_artist(channel_id: str) -> ArtistDetail | None:
             else "YouTube Music"
         )
 
-        all_releases = albums_list + singles_list
+        all_releases = sorted(albums_list + singles_list, key=_release_sort_key, reverse=True)
 
         return ArtistDetail(
             id=f"ytm:artist:{clean_id}",

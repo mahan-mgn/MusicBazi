@@ -193,7 +193,7 @@ class TestReuseLyrics:
 
         calls: list[str] = []
 
-        def fake_fetch(track):
+        def fake_fetch(track, uid="local"):
             calls.append(track.title)
             return Lyrics(plain="متن", synced=None)
 

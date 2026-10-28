@@ -2,13 +2,20 @@ import { useMemo, useState, type CSSProperties } from 'react'
 import { usePopover } from '../lib/usePopover'
 import { useI18n } from '../lib/i18n'
 import PillNav from './PillNav'
-import QualityPicker from './QualityPicker'
 import SearchBar from './SearchBar'
 import type { Tab } from './TabBar'
-import { DotsIcon, LinkIcon, MicIcon, MoonIcon, PhoneIcon, SlidersIcon, SunIcon } from './icons'
+import {
+  DotsIcon,
+  GearIcon,
+  LinkIcon,
+  MicIcon,
+  PhoneIcon,
+  SlidersIcon,
+} from './icons'
 import { isLocalServer, isNativeApp, serverBase } from '../lib/server'
 import { BatteryRow } from './NativeHealth'
 import { useSettings } from '../store/settings'
+import ProfileMenu from './ProfileMenu'
 import TopFadeBlur from './TopFadeBlur'
 
 interface Props {
@@ -20,8 +27,17 @@ interface Props {
   onServer: () => void
   /** «راه‌اندازی» — تنظیم کلیدها و بررسی پیش‌نیازها */
   onSetup?: () => void
-  /** همان تبی که تب‌بارِ موبایل هم نشان می‌دهد؛ اینجا قرصِ فعال را مشخص می‌کند */
-  active: Tab
+  /** مقصدِ صفحه‌ی تنظیمات */
+  onSettings: () => void
+  /** مقصدِ صفحه‌ی پروفایل */
+  onProfile: () => void
+  /** باز کردنِ صفحه‌ی ورود — از منوی پروفایلِ مهمان */
+  onLogin: () => void
+  /**
+   * همان تبی که تب‌بارِ موبایل هم نشان می‌دهد؛ اینجا قرصِ فعال را مشخص می‌کند.
+   * `undefined` یعنی «هیچ‌کدام» — صفحه‌ی تنظیمات زیرِ هیچ تبی نیست.
+   */
+  active: Tab | undefined
   searchValue: string
   searchLoading: boolean
   onSearch: (value: string, opts: { live: boolean }) => void
@@ -57,25 +73,31 @@ const menuItem =
  * همان کنترل‌هایی که روی دسکتاپ کنارِ هم در نوار بالا نشسته‌اند، روی موبایل
  * پشتِ یک دکمه جمع می‌شوند.
  *
- * دلیلش حساب ساده است: شناسایی + کیفیت + زبان + تم روی عرضِ ۳۶۰ پیکسل حدود
+ * دلیلش حساب ساده است: شناسایی + سرور + راه‌اندازی روی عرضِ ۳۶۰ پیکسل حدود
  * ۱۷۰ پیکسل می‌خورند و از سرچ‌بار — که کارِ اصلیِ همین صفحه است — یک جعبه‌ی
  * صد پیکسلی باقی می‌گذارند.
+ *
+ * زبان و تم اینجا نیستند: هر دو ردیفِ خودشان را در صفحه‌ی تنظیمات دارند و
+ * تکرارشان در دو جا یعنی دو جای نگه‌داشتن. گزینه‌ی «تنظیمات» خودش ته همین منو
+ * هست.
  */
 function OverflowMenu({
   onIdentify,
   onServer,
   onSetup,
+  onSettings,
 }: {
   onIdentify: () => void
   onServer: () => void
   onSetup?: () => void
+  onSettings: () => void
 }) {
-  const { t, lang, setLang } = useI18n()
-  const { theme, toggleTheme, liquidGlass, setLiquidGlass } = useSettings()
+  const { t } = useI18n()
+  const { liquidGlass, setLiquidGlass } = useSettings()
   const [open, setOpen] = useState(false)
   const box = usePopover<HTMLDivElement>(open, () => setOpen(false))
 
-  // همان الگوی بستنِ QualityPicker: کلیک بیرون یا Escape
+  // الگوی بستنِ همان popoverهای دیگر: کلیک بیرون یا Escape
   const native = isNativeApp()
 
   return (
@@ -96,6 +118,25 @@ function OverflowMenu({
           role="menu"
           className="sheet-in absolute end-0 z-40 mt-2 w-48 rounded-xl border border-line bg-panel p-1.5 shadow-xl"
         >
+          {/*
+            تنظیمات اول می‌آید چون *مقصد* است، نه کنشِ سریع: بقیه‌ی آیتم‌ها
+            (شناسایی، شیشه‌ی مایع) چیزهایی‌اند که کاربر همین حالا می‌خواهد، و
+            ترتیب باید از «برو یک جایی» به «همین حالا این را عوض کن» برود.
+          */}
+          <button
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              onSettings()
+            }}
+            className={menuItem}
+          >
+            <GearIcon className="size-4 shrink-0" />
+            {t.openSettings}
+          </button>
+
+          {(native || onSetup) && <div className="my-1 border-t border-line-soft" />}
+
           {native && (
             <button
               role="menuitem"
@@ -161,36 +202,6 @@ function OverflowMenu({
             role="menuitem"
             onClick={() => {
               setOpen(false)
-              setLang(lang === 'fa' ? 'en' : 'fa')
-            }}
-            className={menuItem}
-          >
-            <span aria-hidden className="grid size-4 shrink-0 place-items-center text-[10px] font-bold">
-              {lang === 'fa' ? 'EN' : 'فا'}
-            </span>
-            {t.langSwitch}
-          </button>
-
-          <button
-            role="menuitem"
-            onClick={() => {
-              setOpen(false)
-              toggleTheme()
-            }}
-            className={menuItem}
-          >
-            {theme === 'dark' ? (
-              <SunIcon className="size-4 shrink-0" />
-            ) : (
-              <MoonIcon className="size-4 shrink-0" />
-            )}
-            {theme === 'dark' ? t.themeLight : t.themeDark}
-          </button>
-
-          <button
-            role="menuitem"
-            onClick={() => {
-              setOpen(false)
               setLiquidGlass(!liquidGlass)
             }}
             className={menuItem}
@@ -222,13 +233,15 @@ export default function Header({
   onIdentify,
   onServer,
   onSetup,
+  onSettings,
+  onProfile,
+  onLogin,
   active,
   searchValue,
   searchLoading,
   onSearch,
 }: Props) {
-  const { theme, toggleTheme } = useSettings()
-  const { t, lang, setLang } = useI18n()
+  const { t } = useI18n()
 
   /*
    * آرایه باید بینِ رندرها یکی بماند.
@@ -262,13 +275,13 @@ export default function Header({
           aria-label={t.brand}
           className="flex shrink-0 items-center gap-2 rounded-lg py-1 text-[15px] font-bold transition hover:opacity-80 sm:hidden"
         >
-          <img src="/logo.png" alt="" className="size-7 rounded-lg object-cover" />
+          <img src="/logo-mark.png" alt="" className="size-7 object-contain" />
         </button>
 
         {/* روی دسکتاپ همین نشان، سرِ همان ناوبری می‌نشیند */}
         <PillNav
           className="hidden shrink-0 sm:block"
-          logo="/logo.png"
+          logo="/logo-mark.png"
           logoAlt={t.brand}
           logoHref={HOME_HREF}
           onLogoClick={onHome}
@@ -309,25 +322,39 @@ export default function Header({
             <MicIcon className="size-3.5" />
           </button>
 
-          <QualityPicker />
+          {/*
+            کیفیت، زبان و تم اینجا نیستند.
+            هر سه ردیفِ خودشان را در صفحه‌ی تنظیمات دارند (ظاهر: تم و زبان،
+            پخش و صدا: کیفیت پیش‌فرض) و همان مقدارِ مشترک را عوض می‌کنند. تکرارشان
+            در نوار بالا فقط یک ردیفِ شلوغ می‌ساخت و دو جا برای نگه‌داشتن.
+          */}
 
+          {/*
+            چرخ‌دندهٔ تنظیمات — فقط دسکتاپ. روی موبایل همان مقصد داخلِ «⋯» است،
+            چون این ردیف روی ۳۶۰ پیکسل جا برای یک دکمه‌ی دیگر ندارد.
+          */}
           <button
-            onClick={() => setLang(lang === 'fa' ? 'en' : 'fa')}
-            className="hidden rounded-full border border-line bg-panel px-2.5 py-1.5 text-xs text-muted transition hover:text-fg sm:inline-block sm:px-3"
+            onClick={onSettings}
+            aria-label={t.openSettings}
+            title={t.openSettings}
+            className="hidden size-[30px] place-items-center rounded-full border border-line bg-panel text-muted transition hover:text-fg sm:grid"
           >
-            {t.langSwitch}
+            <GearIcon className="size-3.5" />
           </button>
 
-          <button
-            onClick={toggleTheme}
-            aria-label={theme === 'dark' ? t.themeLight : t.themeDark}
-            className="hidden items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1.5 text-xs text-muted transition hover:text-fg sm:flex sm:px-3"
-          >
-            {theme === 'dark' ? <SunIcon className="size-3.5" /> : <MoonIcon className="size-3.5" />}
-            <span className="hidden sm:inline">{theme === 'dark' ? t.themeLight : t.themeDark}</span>
-          </button>
+          <OverflowMenu
+            onIdentify={onIdentify}
+            onServer={onServer}
+            onSetup={onSetup}
+            onSettings={onSettings}
+          />
 
-          <OverflowMenu onIdentify={onIdentify} onServer={onServer} onSetup={onSetup} />
+          {/*
+            پروفایل آخرین آیتمِ خوشه است، پس در فارسی (RTL) گوشه‌ی چپِ بالا
+            می‌افتد و در انگلیسی راست. «کنارِ بقیه‌ی دکمه‌ها» بودن از یک گوشه‌ی
+            ثابت مهم‌تر است: جای دکمه قابلِ حدس می‌ماند.
+          */}
+          <ProfileMenu onProfile={onProfile} onLogin={onLogin} />
         </div>
       </div>
     </header>

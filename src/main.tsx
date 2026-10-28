@@ -5,8 +5,20 @@ import App from './App'
 import ErrorBoundary from './components/ErrorBoundary'
 import './index.css'
 import { setupNative } from './lib/native'
+import { engine } from './lib/audioEngine'
 import { installErrorReporting } from './lib/telemetry'
 import { useToasts } from './store/toasts'
+
+// آماده‌سازی اولیه گراف صوتی با اولین تعامل لمسی/کلیکی کاربر
+if (typeof window !== 'undefined') {
+  const onFirstInteraction = () => {
+    engine.prewarm()
+    window.removeEventListener('pointerdown', onFirstInteraction)
+    window.removeEventListener('keydown', onFirstInteraction)
+  }
+  window.addEventListener('pointerdown', onFirstInteraction, { passive: true })
+  window.addEventListener('keydown', onFirstInteraction, { passive: true })
+}
 
 /*
  * پوسته‌ی نیتیو پیش از اولین رندر راه می‌افتد، نه بعدش.

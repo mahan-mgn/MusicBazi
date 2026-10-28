@@ -1,0 +1,648 @@
+"""
+پارسرهای متن: LRC خطی، LRC تقویت‌شده (Enhanced LRC) و TTML → مدلِ مشترکِ `Lyrics`.
+
+هر Provider شکلِ خامِ خودش را دارد (LRC خطی، LRC کلمه‌ای، TTML) ولی همه‌ی
+مصرف‌کننده‌ها یک چیز می‌خواهند: `Lyrics.lines`. اگر تبدیل را داخلِ هر Provider
+بنویسیم، سه پیاده‌سازیِ متفاوت از یک قاعده‌ی واحد می‌شود — همان اشتباهی که
+`matching.py` برای تطبیق جلویش را گرفت.
+
+قواعدِ کلیِ این ماژول:
+
+۱. هیچ استثنایی بیرون نمی‌زند. ورودیِ خراب → `None`، یا نتیجه‌ی جزئی از
+   خط‌هایی که سالم پارس شدند. پارسر روی داده‌ی اینترنت کار می‌کند؛ یک فایلِ
+   نیمه‌خراب نباید کلِ fetch را بیندازد.
+۲. زمان همه‌جا میلی‌ثانیه‌ی صحیح (int) است — واحدِ `LyricLine.start_ms` و
+   `LyricWord.start_ms`. کسرِ اعشاریِ LRC (صدم‌ثانیه) به ms تبدیل می‌شود.
+۳. پارسِ ما هرگز `synced` را عوض نمی‌کند. Providerها همان رشته‌ی خامِ منبع را
+   در `synced` می‌گذارند؛ این ماژول فقط `lines` را پر می‌کند.
+
+⚠️ دروغِ رایج: TTML استانداردِ واحدی برای «کدام ریشه‌ی زمانی» ندارد. `ttp:tickRate`
+و `ttp:frameRate` در خودِ سند می‌آیند و اگر نباشند مقدارِ پیش‌فرضِ spec لازم
+می‌شود؛ اینجا پیش‌فرض‌های ساده‌ی مستندشده گذاشته شده و در گزارش «محتاجِ
+راستی‌آزمایی با سندِ واقعی» ثبت شده است.
+"""
+
+from __future__ import annotations
+
+import re
+import xml.etree.ElementTree as ET
+
+from .models import LyricLine, LyricWord, Lyrics
+
+# ---------------------------------------------------------------- زمان
+
+# [mm:ss.xx] و [mm:ss:xx] و [mm:ss] — دقیقاً همان الگوی `src/lib/lrc.ts`
+_LRC_TAG = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
+# متادیتای LRC. مقدار ممکن است خط جدید داشته باشد، پس `.` با DOTALL نه؛
+# ولی `[ar:...]` تک‌خطی است و `$` کافی است.
+_LRC_META = re.compile(r"^\[(ar|ti|al|length|offset):(.*)\]$", re.IGNORECASE)
+# <mm:ss.xx> — تگِ کلمه در LRC تقویت‌شده
+_WORD_TAG = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")
+
+# زمانِ ساعتِ TTML: hh:mm:ss.fff ، mm:ss.fff ، و شکلِ فریمی hh:mm:ss:ff.sub
+#
+# ترتیبِ تطبیق مهم است: شکلِ فریمی یک کولونِ *اضافه* دارد (`ss:ff`) و شکلِ
+# ساعتی یک نقطه دارد (`ss.fff`). الگوی فریمی اگر اول بیاید `00:00:12.500` را
+# هم می‌گیرد و «۱۲» را فریم حساب می‌کند — یعنی ۵۰۰ms به‌جای ۱۲۵۰۰ms.
+_TTML_CLOCK = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d+))?$")
+_TTML_FRAMES = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2}):(\d+)(?:\.(\d+))?$")
+# زمانِ آفست: یک یا چند «عدد + واحد»، مثل `1500ms` یا `2m30s`.
+# spec ترکیبِ واحدها را مجاز می‌داند و منابع واقعی از آن استفاده می‌کنند.
+_TTML_OFFSET_PART = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s|f|t)")
+_TTML_OFFSET_UNITS = {"h", "m", "s", "ms", "f", "t"}
+
+# عددِ ساده با نقطهٔ اعشار و **بدونِ واحد** — در `ttp:timeBase="media"`
+# (پیش‌فرضِ متعارف) ثانیه است. منابعِ واقعی مثل binilyrics/lrc.red زمان‌ها را
+# دقیقاً به همین شکل می‌دهند: `27.395` و `2:52.186`.
+_TTML_BARE_NUMBER = re.compile(r"^\d+(?:\.\d+)?$")
+
+# namespaceها. با local-name تطبیق می‌دهیم چون پیشوندها در سندهای واقعی
+# دلخواه‌اند و نامِ کاملِ namespace تنها چیزی است که ثابت می‌ماند.
+_XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
+_TTM_METADATA = "http://www.w3.org/ns/ttml#metadata"
+_TTP_PARAMETER = "http://www.w3.org/ns/ttml#parameter"
+
+# DOCTYPE و ENTITY در XML هیچ مصرفِ مشروعی در متنِ آهنگ ندارند و فقط درِ
+# حمله‌ی «billion laughs» و entity expansion هستند. کتابخانه‌ی استاندارد
+# entity داخلی را بسط می‌دهد، پس قبل از پارس ردشان می‌کنیم.
+_FORBIDDEN_XML = re.compile(r"<!\s*(doctype|entity)", re.IGNORECASE)
+
+# سقفِ تعداد خط، تا یک سندِ متورم حافظه را نخورد
+_MAX_LINES = 5000
+
+
+def _frac_to_ms(frac: str | None) -> int:
+    """
+    کسرِ اعشاریِ LRC → ms.
+
+    «صدم‌ثانیه» است نه دهم: `[00:01.5]` یعنی ۵۰۰ms نه ۵۰. پس به سه رقم
+    راست‌چین پر می‌شود، عیناً همان کاری که `lrc.ts:tagTime` می‌کند.
+    """
+    if not frac:
+        return 0
+    return int(frac.ljust(3, "0")[:3])
+
+
+def _lrc_tag_ms(match: re.Match[str]) -> int:
+    minutes, seconds, frac = match.group(1), match.group(2), match.group(3)
+    return int(minutes) * 60_000 + int(seconds) * 1_000 + _frac_to_ms(frac)
+
+
+# ---------------------------------------------------------------- LRC
+
+
+def _parse_offset(raw: str) -> int:
+    """
+    مقدارِ `[offset:...]` به ms. نامعتبر → ۰.
+
+    ⚠️ **علامت، محتاجِ راستی‌آزمایی:** قراردادِ نوشتاریِ LRC می‌گوید
+    «+ زمان را جلو می‌اندازد». اینجا `effective = tag - offset` گرفته شده،
+    یعنی `offset:+500` متن را ۵۰۰ms **زودتر** نشان می‌دهد. بعضی پخش‌کننده‌ها
+    عکسش را پیاده کرده‌اند. تا وقتی با یک فایلِ واقعیِ دارای offset سنجیده
+    نشود، این یک انتخابِ مستندشده است نه یک قراردادِ تأییدشده.
+    """
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _lrc_lines(text: str, *, words: bool) -> list[LyricLine]:
+    """هسته‌ی مشترکِ LRC خطی و تقویت‌شده."""
+    offset = 0
+    out: list[LyricLine] = []
+
+    for raw in text.splitlines():
+        row = raw.strip()
+        if not row:
+            continue
+
+        if meta := _LRC_META.match(row):
+            if meta.group(1).lower() == "offset":
+                offset = _parse_offset(meta.group(2))
+            continue
+
+        tags = list(_LRC_TAG.finditer(row))
+        if not tags:
+            # خطِ بی‌تگ: متادیتای ناشناس یا متنِ آزاد. نادیده گرفته می‌شود،
+            # چون «زمانِ نامعلوم» را نمی‌شود در خطِ زمان‌دار جا داد.
+            continue
+
+        body = _LRC_TAG.sub("", row).strip()
+        parsed_words = _word_tags(body) if words else ()
+
+        # یک خط می‌تواند چند تگِ زمانی داشته باشد (همان متن در چند لحظه).
+        for tag in tags:
+            start = max(0, _lrc_tag_ms(tag) - offset)
+            out.append(
+                LyricLine(
+                    start_ms=start,
+                    text=parsed_words_text(parsed_words) if parsed_words else body,
+                    words=parsed_words,
+                )
+            )
+            if len(out) >= _MAX_LINES:
+                break
+        if len(out) >= _MAX_LINES:
+            break
+
+    return out
+
+
+def parsed_words_text(words: tuple[LyricWord, ...]) -> str:
+    """متنِ کاملِ یک خط از روی کلمه‌هایش — همان چیزی که UI نمایش می‌دهد."""
+    return "".join(w.text for w in words)
+
+
+def _word_tags(body: str) -> tuple[LyricWord, ...]:
+    """
+    کلمه‌های زمان‌دارِ یک خط.
+
+    قاعده‌ی `lrc.ts`: فاصله‌ی بین دو تگ به کلمه‌ی *قبلی* می‌چسبد تا گرادیانِ
+    رنگ از روی فاصله هم طبیعی رد شود، و متنِ قبل از اولین تگ کلمه نیست و
+    می‌افتد (چون زمان ندارد).
+    """
+    tags = list(_WORD_TAG.finditer(body))
+    if not tags:
+        return ()
+
+    words: list[LyricWord] = []
+    cursor = 0
+    for tag in tags:
+        gap = body[cursor : tag.start()]
+        if words:
+            words[-1] = LyricWord(
+                start_ms=words[-1].start_ms, text=words[-1].text + gap, end_ms=None
+            )
+        words.append(LyricWord(start_ms=_lrc_tag_ms(tag), text=""))
+        cursor = tag.end()
+    words[-1] = LyricWord(
+        start_ms=words[-1].start_ms, text=words[-1].text + body[cursor:].rstrip(), end_ms=None
+    )
+
+    if not any(w.text.strip() for w in words):
+        return ()
+    return tuple(words)
+
+
+def _fill_line_indices(lines: list[LyricLine]) -> list[LyricLine]:
+    """مرتب‌سازی بر اساس زمان و شماره‌گذاریِ صریح (`LyricLine.index`)."""
+    lines.sort(key=lambda line: line.start_ms)
+    return [
+        LyricLine(
+            start_ms=line.start_ms,
+            text=line.text,
+            end_ms=line.end_ms,
+            words=line.words,
+            index=i,
+            role=line.role,
+        )
+        for i, line in enumerate(lines)
+    ]
+
+
+def _fill_word_ends(lines: list[LyricLine]) -> list[LyricLine]:
+    """
+    `end_ms` کلمه‌ها را پر کن.
+
+    پارسر فقط شروعِ هر کلمه را می‌بیند (تگِ LRC همین را می‌دهد). پایانِ یک
+    کلمه = شروعِ کلمه‌ی بعدی؛ و پایانِ کلمه‌ی آخر = شروعِ خطِ بعدی. برای خطِ
+    آخر پایان نامعلوم می‌ماند (`None`) و UI از طولِ ترک استفاده می‌کند.
+    """
+    out: list[LyricLine] = []
+    for i, line in enumerate(lines):
+        if not line.words:
+            out.append(line)
+            continue
+        next_start = lines[i + 1].start_ms if i + 1 < len(lines) else None
+        filled: list[LyricWord] = []
+        for j, word in enumerate(line.words):
+            if j + 1 < len(line.words):
+                end = line.words[j + 1].start_ms
+            else:
+                end = next_start
+            filled.append(LyricWord(start_ms=word.start_ms, text=word.text, end_ms=end))
+        out.append(
+            LyricLine(
+                start_ms=line.start_ms,
+                text=line.text,
+                end_ms=next_start,
+                words=tuple(filled),
+                index=line.index,
+                role=line.role,
+            )
+        )
+    return out
+
+
+def parse_lrc(text: str | None) -> Lyrics | None:
+    """
+    LRC خطی → `Lyrics`.
+
+    چند تگ در یک خط، متادیتای `[ar:] [ti:] [al:] [length:] [offset:]`.
+    `offset` اعمال می‌شود. خطِ بی‌تگ نادیده می‌رود. هیچ تگِ زمانی = `None`.
+    """
+    if not text:
+        return None
+    try:
+        lines = _fill_word_ends(_fill_line_indices(_lrc_lines(text, words=False)))
+    except Exception:
+        return None
+    if not lines:
+        return None
+    return Lyrics(
+        plain="\n".join(line.text for line in lines),
+        synced=to_lrc(lines),
+        format="lrc",
+        sync_type="line",
+        lines=tuple(lines),
+    )
+
+
+def parse_enhanced_lrc(text: str | None) -> Lyrics | None:
+    """
+    LRC تقویت‌شده → `Lyrics` با زمان‌بندیِ کلمه‌ای.
+
+    اگر خط‌ها تگِ کلمه نداشته باشند، مثل LRC خطی رفتار می‌کند ولی
+    `sync_type` را `line` می‌گذارد — نه `word`. برچسبِ اشتباه بدتر از نبودِ
+    برچسب است: UI روی `sync_type` تصمیم می‌گیرد.
+    """
+    if not text:
+        return None
+    try:
+        lines = _fill_word_ends(_fill_line_indices(_lrc_lines(text, words=True)))
+    except Exception:
+        return None
+    if not lines:
+        return None
+    has_words = any(line.words for line in lines)
+    return Lyrics(
+        plain="\n".join(line.text for line in lines),
+        synced=to_enhanced_lrc(lines) if has_words else to_lrc(lines),
+        format="enhanced_lrc" if has_words else "lrc",
+        sync_type="word" if has_words else "line",
+        lines=tuple(lines),
+    )
+
+
+# ---------------------------------------------------------------- TTML
+
+
+def _ttml_time(raw: str | None, ctx: "_TtmlClock") -> int | None:
+    """یک عبارتِ زمانیِ TTML → ms. نامفهوم → `None`."""
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+
+    if clock := _TTML_CLOCK.match(value):
+        hours = int(clock.group(1) or 0)
+        ms = hours * 3_600_000 + int(clock.group(2)) * 60_000 + int(clock.group(3)) * 1_000
+        frac = clock.group(4)
+        if frac:
+            # کسرِ ثانیه: ۳ رقم = ms، کمتر = دهم/صدم ثانیه (راست‌چین)، بیشتر = کسرِ واقعی.
+            ms += (
+                int(frac.ljust(3, "0")[:3])
+                if len(frac) <= 3
+                else int(round(float(f"0.{frac}") * 1000))
+            )
+        return ms
+
+    if frames := _TTML_FRAMES.match(value):
+        hours = int(frames.group(1) or 0)
+        ms = hours * 3_600_000 + int(frames.group(2)) * 60_000 + int(frames.group(3)) * 1_000
+        return ms + ctx.frames_to_ms(int(frames.group(4)), frames.group(5))
+
+    # `0s` یک زمانِ کاملاً معتبر است، پس بررسیِ None لازم است نه truthiness —
+    # با `if offset := ...` خطِ شروع‌ازصفر بی‌صدا حذف می‌شد.
+    offset = _parse_offset_time(value, ctx)
+    if offset is not None:
+        return offset
+
+    # عددِ **بدونِ واحد**: در `ttp:timeBase="media"` (پیش‌فرضِ متعارف) ثانیه است.
+    #
+    # این شاخه بعد از `offset` می‌آید تا `27.395s` همچنان از مسیرِ واحددار
+    # برود؛ ولی خودش *آخرین* چاره است وگرنه زمانِ بدونِ واحد بی‌صدا حذف
+    # می‌شد — که دقیقاً همان باگی است که خط‌های زیرِ یک دقیقه را از فایل‌های
+    # واقعیِ TTML دور می‌ریخت.
+    if _TTML_BARE_NUMBER.match(value):
+        return int(round(float(value) * 1000))
+
+    return None
+
+
+def _parse_offset_time(value: str, ctx: "_TtmlClock") -> int | None:
+    """
+    زمانِ آفستِ TTML → ms. تنها اگر *کلِ* رشته از «عدد+واحد» ساخته شده باشد
+    قبول می‌شود (مثل `1500ms` یا `2m30s`)، وگرنه `None` — تا عددِ بی‌واحد به
+    مسیرِ `_ttml_time` برگردد و آنجا ثانیه حساب شود.
+    """
+    parts = list(_TTML_OFFSET_PART.finditer(value))
+    if not parts or "".join(part.group(0) for part in parts) != value:
+        return None
+
+    total = 0.0
+    for part in parts:
+        amount, unit = float(part.group(1)), part.group(2)
+        if unit == "h":
+            total += amount * 3_600_000
+        elif unit == "m":
+            total += amount * 60_000
+        elif unit == "s":
+            total += amount * 1_000
+        elif unit == "ms":
+            total += amount
+        elif unit == "f":
+            total += ctx.frames_to_ms(int(amount), None)
+        elif unit == "t":
+            total += ctx.ticks_to_ms(int(amount))
+    return int(round(total))
+
+
+class _TtmlClock:
+    """
+    نرخ‌های زمانیِ سندِ TTML.
+
+    همه‌ی این‌ها *اختیاری*‌اند و اگر در سند نباشند، spec پیش‌فرض‌هایی دارد که
+    در عمل همه پیاده‌سازها با آن موافق نیستند. اینجا فقط مقداری گذاشته شده که
+    برای سندهای متعارفِ متنِ آهنگ درست است؛ سندهای فریمی/تیکی نادرند و
+    عددِ دقیقشان باید با سندِ واقعی سنجیده شود.
+    """
+
+    def __init__(self, root: ET.Element) -> None:
+        self.frame_rate = self._float(root, f"{{{_TTP_PARAMETER}}}frameRate") or 25.0
+        self.tick_rate = self._float(root, f"{{{_TTP_PARAMETER}}}tickRate")
+        if self.tick_rate is None:
+            multiplier = self._multiplier(root)
+            self.tick_rate = self.frame_rate * multiplier
+
+    @staticmethod
+    def _float(root: ET.Element, name: str) -> float | None:
+        raw = root.get(name)
+        try:
+            return float(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _multiplier(root: ET.Element) -> float:
+        raw = root.get(f"{{{_TTP_PARAMETER}}}frameRateMultiplier")
+        if not raw:
+            return 1.0
+        parts = raw.split()
+        if len(parts) != 2:
+            return 1.0
+        try:
+            numerator, denominator = int(parts[0]), int(parts[1])
+        except ValueError:
+            return 1.0
+        return numerator / denominator if denominator else 1.0
+
+    def frames_to_ms(self, frames: int, subframes: str | None) -> int:
+        if self.frame_rate <= 0:
+            return 0
+        total = frames
+        if subframes:
+            total += float(f"0.{subframes}")
+        return int(round(total * 1000 / self.frame_rate))
+
+    def ticks_to_ms(self, ticks: int) -> int:
+        if self.tick_rate <= 0:
+            return 0
+        return int(round(ticks * 1000 / self.tick_rate))
+
+
+def _local(tag: str) -> str:
+    """نامِ محلیِ تگ/اتریبیوت، بدونِ namespace."""
+    return tag.rpartition("}")[2]
+
+
+def _attr(element: ET.Element, name: str) -> str | None:
+    """اتریبیوت را با نامِ محلی پیدا کن — پیشوندِ namespace مهم نیست."""
+    if name in element.attrib:
+        return element.attrib[name]
+    for key, value in element.attrib.items():
+        if _local(key) == name:
+            return value
+    return None
+
+
+def _span_ms(element: ET.Element, ctx: _TtmlClock) -> tuple[int | None, int | None]:
+    """`begin`/`end`/`dur` یک عنصر را به (شروع، پایان) تبدیل کن."""
+    begin = _ttml_time(_attr(element, "begin"), ctx)
+    end = _ttml_time(_attr(element, "end"), ctx)
+    if end is None:
+        duration = _ttml_time(_attr(element, "dur"), ctx)
+        if duration is not None and begin is not None:
+            end = begin + duration
+        elif duration is not None:
+            end = duration
+    return begin, end
+
+
+def _element_text(element: ET.Element, *, strip: bool = True) -> str:
+    """
+    متنِ یک عنصر.
+
+    `strip=False` برای `<span>` لازم است: فاصله‌ی انتهاییِ یک کلمه بخشی از
+    آن کلمه است و اگر برداشته شود، `"one "` و `"two"` به هم می‌چسبند و
+    LRC تقویت‌شده‌ی بازتولیدشده غلط می‌شود.
+    """
+    text = "".join(element.itertext())
+    return text.strip() if strip else text
+
+
+def _ttml_paragraph(element: ET.Element, ctx: _TtmlClock, index: int) -> LyricLine | None:
+    """یک `<p>` → یک `LyricLine`، با کلمه‌های `<span>` داخلش."""
+    begin, end = _span_ms(element, ctx)
+    if begin is None:
+        return None
+
+    words: list[LyricWord] = []
+    for child in element:
+        if _local(child.tag) != "span":
+            continue
+        child_begin, child_end = _span_ms(child, ctx)
+        text = _element_text(child, strip=False)
+        if child_begin is None or not text.strip():
+            continue
+        words.append(LyricWord(start_ms=child_begin, text=text, end_ms=child_end))
+
+    text = _element_text(element)
+    if not text and not words:
+        return None
+
+    return LyricLine(
+        start_ms=begin,
+        text=text,
+        end_ms=end,
+        words=tuple(words),
+        index=index,
+        role=_attr(element, "role"),
+    )
+
+
+def _is_supported(root: ET.Element) -> bool:
+    """
+    آیا این سند در محدودهٔ چیزی است که پارسر واقعاً پیاده کرده؟
+
+    سه چیزی که **پشتیبانی نمی‌شوند** و در نتیجه سند را رد می‌کنند:
+
+    ۱. `ttp:timeBase` غیر از `media` (و `clock` هم که آنجا عددِ بی‌واحد
+       ثانیه نیست). نبودنش یعنی media — همان پیش‌فرضِ متعارف.
+    ۲. `timeContainer` غیر از `par` روی هر عنصری. در `seq` زمانِ هر فرزند از
+       پایانِ قبلی شمرده می‌شود، نه از صفر.
+    ۳. `begin` روی والدِ یک `<p>` **وقتی با خوانشِ مطلق تناقض داشته باشد** —
+       یعنی `begin` فرزند از `begin` والدش کوچک‌تر باشد. توضیح پایین.
+
+    هر سه در داده‌های واقعیِ این پروژه دیده نشدند، پس رد کردنشان چیزی را از
+    دست نمی‌دهد؛ ولی اگر روزی بیایند، سکوتِ غلط جلویشان گرفته می‌شود.
+    """
+    base = root.get(f"{{{_TTP_PARAMETER}}}timeBase")
+    if base is not None and base.strip().lower() not in ("", "media"):
+        return False
+
+    for element in root.iter():
+        container = _attr(element, "timeContainer")
+        if container is not None and container.strip().lower() not in ("", "par"):
+            return False
+
+    # `begin` روی والد: با خوانشِ مطلق مشکلی ندارد، با خوانشِ نسبی نه.
+    #
+    # ⚠️ اینجا عمداً **همهٔ** والدهای `begin`دار رد نمی‌شوند، چون دادهٔ واقعیِ
+    # binilyrics/lrc.red دقیقاً همین شکل است: `<div begin="27.395">` که
+    # `<p begin="27.395">` را در خود دارد — یعنی زمانِ فرزند با والد **برابر**
+    # است، که فقط با خوانشِ مطلق می‌خواند. رد کردنِ شکلِ والد به‌طورِ کلی یعنی
+    # از دست دادنِ ۳۵ خطِ متنِ واقعی.
+    #
+    # پس فقط جایی که دو خوانش ناسازگار می‌شوند رد می‌کنیم: اگر `begin` فرزند
+    # از `begin` والدش **کوچک‌تر** باشد، هر دو خوانش غلط می‌شوند (نسبی یعنی
+    # عددِ کوچکِ بی‌معنا، مطلق یعنی خارج از پنجرهٔ والد). آن تناقض است و
+    # سند رد می‌شود.
+    ctx = _TtmlClock(root)
+    for parent in root.iter():
+        if _local(parent.tag) not in ("div", "body"):
+            continue
+        parent_begin = _ttml_time(_attr(parent, "begin"), ctx)
+        if parent_begin is None:
+            continue
+        for child in parent:
+            if _local(child.tag) != "p":
+                continue
+            child_begin = _ttml_time(_attr(child, "begin"), ctx)
+            if child_begin is not None and child_begin < parent_begin:
+                return False
+
+    return True
+
+
+def parse_ttml(text: str | None) -> Lyrics | None:
+    """
+    TTML → `Lyrics`. فقط کتابخانه‌ی استانداردِ XML.
+
+    امنیت: DOCTYPE و ENTITY قبل از پارس رد می‌شوند (billion laughs / XXE).
+    ورودیِ خراب → `None`. سندِ بی‌`<p>` زمان‌دار → `None`.
+
+    پشتیبانی: clock-time، offset-time، tick، `<p>`/`<span>`،
+    `begin`/`end`/`dur`، `xml:lang`، `ttm:role`، ترتیبِ خط در
+    `LyricLine.index`، زبان در `Lyrics.language`.
+    """
+    if not text:
+        return None
+    if _FORBIDDEN_XML.search(text):
+        return None
+
+    try:
+        root = ET.fromstring(text)
+    except Exception:
+        return None
+
+    if _local(root.tag) != "tt":
+        # بعضی منابع بدونِ ریشه‌ی `<tt>` یک `<body>` یا `<div>` تنها می‌دهند
+        if _local(root.tag) not in ("body", "div"):
+            return None
+
+    # ---- دروازهٔ پشتیبانیِ ساختار (P2) ----
+    #
+    # اگر سند از چیزی که پارسر پیاده کرده بیرون باشد، `None` می‌دهیم — نه
+    # زمان‌بندیِ خاموشِ غلط. متنِ با زمانِ اشتباه بدتر از نبودِ متن است:
+    # کاربر نمی‌فهمد چرا پخش هماهنگ نیست و فکر می‌کند فایلش خراب است.
+    if not _is_supported(root):
+        return None
+
+    ctx = _TtmlClock(root)
+    language = _attr(root, "lang")
+
+    lines: list[LyricLine] = []
+    try:
+        for element in root.iter():
+            if _local(element.tag) != "p":
+                continue
+            line = _ttml_paragraph(element, ctx, len(lines))
+            if line is None:
+                continue
+            # زبانِ سند از ریشه می‌آید؛ `xml:lang` روی خودِ خط فقط اگر ریشه
+            # چیزی نگفته باشد استفاده می‌شود.
+            if language is None and (line_lang := _attr(element, "lang")):
+                language = line_lang
+            lines.append(line)
+            if len(lines) >= _MAX_LINES:
+                break
+    except Exception:
+        # پارسِ جزئی بهتر از هیچ است: هر چه تا اینجا سالم بود برمی‌گردد.
+        if not lines:
+            return None
+
+    if not lines:
+        return None
+
+    has_words = any(line.words for line in lines)
+    return Lyrics(
+        plain="\n".join(line.text for line in lines),
+        format="ttml",
+        sync_type="word" if has_words else "line",
+        lines=tuple(lines),
+        language=language,
+    )
+
+
+# ---------------------------------------------------------------- سریال‌سازی
+
+
+def _stamp(ms: int) -> str:
+    """
+    ms → `mm:ss.cc`.
+
+    ⚠️ **اتلافِ عمدی:** LRC فقط صدم‌ثانیه دارد، پس `ms` به نزدیک‌ترین صدم
+    گرد می‌شود و حداکثر ۵ms از دست می‌رود. این گردکردن در یک‌جا انجام
+    می‌شود و carry را خودش مدیریت می‌کند (۱۵۰۰ms → `00:01.50` نه `00:00.150`).
+    """
+    total_centis = round(max(0, ms) / 10)
+    minutes, remainder = divmod(total_centis, 6_000)
+    seconds, centis = divmod(remainder, 100)
+    return f"{minutes:02d}:{seconds:02d}.{centis:02d}"
+
+
+def to_lrc(lines: tuple[LyricLine, ...] | list[LyricLine]) -> str:
+    """خط‌ها → LRC خطی. همان قالبی که `src/lib/lrc.ts` می‌خواند."""
+    return "\n".join(f"[{_stamp(line.start_ms)}]{line.text}" for line in lines)
+
+
+def to_enhanced_lrc(lines: tuple[LyricLine, ...] | list[LyricLine]) -> str:
+    """
+    خط‌ها → LRC تقویت‌شده (`[line]<word>text<word>text`).
+
+    خطی که کلمه ندارد ساده می‌ماند — نه تگِ خالی، نه از دست رفتنِ خط. برای
+    رفت‌وبرگشتِ کاملِ زمان‌بندیِ کلمه‌ای باید هر کلمه `start_ms` داشته باشد
+    که همیشه دارد؛ `end_ms` در LRC جا نمی‌شود و هنگام خواندن دوباره از
+    شروعِ کلمه‌ی بعدی ساخته می‌شود.
+    """
+    out: list[str] = []
+    for line in lines:
+        if not line.words:
+            out.append(f"[{_stamp(line.start_ms)}]{line.text}")
+            continue
+        body = "".join(f"<{_stamp(word.start_ms)}>{word.text}" for word in line.words)
+        out.append(f"[{_stamp(line.start_ms)}]{body}")
+    return "\n".join(out)

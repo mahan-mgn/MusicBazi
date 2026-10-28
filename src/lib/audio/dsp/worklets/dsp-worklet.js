@@ -1,0 +1,1010 @@
+/*
+ * پوستهٔ AudioWorklet برای زنجیرهٔ DSP موتور صوتی.
+ *
+ * این فایل مستقل بارگذاری می‌شود (AudioWorklet.addModule) و نباید import
+ * داشته باشد. کلاس‌های پردازش داخل آن **کپیِ خط‌به‌خط** کلاس‌های خالص
+ * TypeScript هستند:
+ *
+ *   Equalizer   ← src/lib/audio/dsp/Equalizer.ts   (پورت EqualizerProcessor.kt)
+ *   Spatializer ← src/lib/audio/dsp/Spatializer.ts (پورت SpatialAudioProcessor.kt)
+ *   Loudness    ← src/lib/audio/dsp/Loudness.ts    (پورت LoudnessProcessor.kt)
+ *
+ * هم‌ارزیِ این کپی با نسخهٔ TS با تست `dsp-worklet.parity.test.ts` به‌صورت
+ * مکانیکی تضمین می‌شود — اگر یکی عوض شود و دیگری نه، تست قرمز می‌شود.
+ *
+ * پروتکل پیام‌ها (port.postMessage):
+ *   { type: 'eq',      curve: { gainsDb, qs, preampDb }, balance }  → اکولایزر
+ *   { type: 'spatial', enabled }                                     → فضاساز
+ *   { type: 'gain',    mediaId, gain }                               → ثبت گین ترک
+ *   { type: 'track',   mediaId, nextMediaId }                        → ترک جاری زنجیره
+ *   { type: 'normalize', on }                                        → کلید هم‌ترازی
+ *   { type: 'trim',    value }                                       → هدرروم ترکیب
+ *   { type: 'boundary' }                                             → اسنپ مرز ترک (گپلس درون‌دکی)
+ */
+
+(function () {
+  'use strict'
+
+  // =========================================================================
+  // کلاس‌های خالص — کپی از نسخهٔ TypeScript (تغییر فقط با تست هم‌ارزی)
+  // =========================================================================
+
+  var GLIDE_FRAMES = 64
+  var GLIDE_RATE = 0.08
+  var SETTLED_DB = 0.01
+  var SETTLED_BALANCE = 0.0005
+  var MIN_Q = 0.05
+  var MIN_HZ = 10
+  var MAX_FREQUENCY_FRACTION = 0.45
+  var DENORMAL_FLOOR = 1e-12
+
+  var EQ_SLOT_KINDS = ['LOW_SHELF', 'BELL', 'BELL', 'BELL', 'BELL', 'BELL', 'HIGH_SHELF', 'LOW_SHELF', 'BELL', 'HIGH_SHELF']
+  var EQ_SLOT_HZ = [60, 150, 400, 1000, 2500, 6000, 14000, 250, 1000, 4000]
+  var SLOTS = 10
+
+  function clamp(v, min, max) {
+    return Math.min(max, Math.max(min, v))
+  }
+
+  function Equalizer() {
+    this.targetCurve = null
+    this.targetBalance = 0
+
+    this.sampleRate = 0
+    this.channelCount = 0
+
+    this.currentGainDb = new Float32Array(SLOTS)
+    this.currentQ = new Float32Array(SLOTS).fill(0.707)
+    this.currentPreampDb = 0
+    this.currentBalance = 0
+
+    this.coeffA1 = new Float32Array(SLOTS)
+    this.coeffA2 = new Float32Array(SLOTS)
+    this.coeffA3 = new Float32Array(SLOTS)
+    this.mixInput = new Float32Array(SLOTS)
+    this.mixBand = new Float32Array(SLOTS)
+    this.mixLow = new Float32Array(SLOTS)
+
+    this.activeSlots = new Int32Array(SLOTS)
+    this.running = new Uint8Array(SLOTS)
+    this.state = new Float32Array(0)
+    this.channelGain = new Float32Array(0)
+  }
+
+  Equalizer.prototype.setTarget = function (curve, balance, enabled) {
+    this.targetCurve = enabled ? curve : null
+    this.targetBalance = enabled ? clamp(balance, -1, 1) : 0
+  }
+
+  Equalizer.prototype.configure = function (sampleRate, channelCount) {
+    this.sampleRate = sampleRate
+    this.channelCount = channelCount
+    var requiredSize = channelCount * SLOTS * 2
+    if (this.state.length !== requiredSize) this.state = new Float32Array(requiredSize)
+    if (this.channelGain.length !== channelCount) {
+      this.channelGain = new Float32Array(channelCount)
+      for (var c = 0; c < channelCount; c++) this.channelGain[c] = 1
+    }
+    this.running.fill(0)
+    this.snapToTarget()
+  }
+
+  Equalizer.prototype.process = function (samples, frameCount, channelCount) {
+    if (frameCount === 0 || this.channelCount < 1 || this.sampleRate <= 0) return
+    var tuningCurve = this.targetCurve
+    if (tuningCurve === null && this.isSettledFlat()) return
+
+    var remaining = frameCount
+    var frameOffset = 0
+    while (remaining > 0) {
+      var subBlock = Math.min(remaining, GLIDE_FRAMES)
+      this.glideTowards(tuningCurve)
+      var active = this.prepareSections()
+      this.prepareChannelGains()
+
+      for (var f = 0; f < subBlock; f++) {
+        var baseIdx = (frameOffset + f) * channelCount
+        for (var channel = 0; channel < channelCount; channel++) {
+          var sample = samples[baseIdx + channel]
+          for (var index = 0; index < active; index++) {
+            sample = this.section(this.activeSlots[index], channel, sample)
+          }
+          samples[baseIdx + channel] = sample * this.channelGain[channel]
+        }
+      }
+      this.flushDenormals(active)
+      frameOffset += subBlock
+      remaining -= subBlock
+    }
+  }
+
+  Equalizer.prototype.snapToTarget = function () {
+    if (this.targetCurve === null) {
+      this.currentGainDb.fill(0)
+      this.currentQ.fill(0.707)
+      this.currentPreampDb = 0
+      this.currentBalance = 0
+      return
+    }
+    this.currentGainDb.set(this.targetCurve.gainsDb)
+    this.currentQ.set(this.targetCurve.qs)
+    this.currentPreampDb = this.targetCurve.preampDb
+    this.currentBalance = this.targetBalance
+  }
+
+  Equalizer.prototype.glideTowards = function (targetCurve) {
+    for (var slot = 0; slot < SLOTS; slot++) {
+      var targetGainDb = targetCurve === null ? 0 : targetCurve.gainsDb[slot]
+      var targetQ = targetCurve === null ? 0.707 : targetCurve.qs[slot]
+      this.currentGainDb[slot] += (targetGainDb - this.currentGainDb[slot]) * GLIDE_RATE
+      var from = Math.log(Math.max(MIN_Q, this.currentQ[slot]))
+      var to = Math.log(Math.max(MIN_Q, targetQ))
+      this.currentQ[slot] = Math.exp(from + (to - from) * GLIDE_RATE)
+    }
+    var targetPreamp = targetCurve === null ? 0 : targetCurve.preampDb
+    this.currentPreampDb += (targetPreamp - this.currentPreampDb) * GLIDE_RATE
+    this.currentBalance += (this.targetBalance - this.currentBalance) * GLIDE_RATE
+  }
+
+  Equalizer.prototype.isSettledFlat = function () {
+    if (Math.abs(this.currentBalance) >= SETTLED_BALANCE) return false
+    if (Math.abs(this.currentPreampDb) >= SETTLED_DB) return false
+    for (var slot = 0; slot < SLOTS; slot++) {
+      if (Math.abs(this.currentGainDb[slot]) >= SETTLED_DB) return false
+    }
+    return true
+  }
+
+  Equalizer.prototype.prepareSections = function () {
+    var active = 0
+    for (var slot = 0; slot < SLOTS; slot++) {
+      if (Math.abs(this.currentGainDb[slot]) >= SETTLED_DB) {
+        this.updateCoefficients(slot)
+        this.activeSlots[active++] = slot
+        this.running[slot] = 1
+      } else if (this.running[slot]) {
+        this.clearState(slot)
+        this.running[slot] = 0
+      }
+    }
+    return active
+  }
+
+  Equalizer.prototype.updateCoefficients = function (slot) {
+    if (this.sampleRate <= 0) return
+    var kind = EQ_SLOT_KINDS[slot]
+    var hz = EQ_SLOT_HZ[slot]
+    var a = Math.pow(10, this.currentGainDb[slot] / 40)
+    var q = Math.max(MIN_Q, this.currentQ[slot])
+    var usable = clamp(hz, MIN_HZ, this.sampleRate * MAX_FREQUENCY_FRACTION)
+    var base = Math.tan((Math.PI * usable) / this.sampleRate)
+    var g, k
+    if (kind === 'BELL') {
+      g = base
+      k = 1 / (q * a)
+      this.mixInput[slot] = 1
+      this.mixBand[slot] = k * (a * a - 1)
+      this.mixLow[slot] = 0
+    } else if (kind === 'LOW_SHELF') {
+      g = base / Math.sqrt(a)
+      k = 1 / q
+      this.mixInput[slot] = 1
+      this.mixBand[slot] = k * (a - 1)
+      this.mixLow[slot] = a * a - 1
+    } else {
+      g = base * Math.sqrt(a)
+      k = 1 / q
+      this.mixInput[slot] = a * a
+      this.mixBand[slot] = k * (1 - a) * a
+      this.mixLow[slot] = 1 - a * a
+    }
+    var d = 1 / (1 + g * (g + k))
+    this.coeffA1[slot] = d
+    this.coeffA2[slot] = g * d
+    this.coeffA3[slot] = g * (g * d)
+  }
+
+  Equalizer.prototype.prepareChannelGains = function () {
+    var preamp = Math.pow(10, this.currentPreampDb / 20)
+    if (this.channelCount === 2) {
+      this.channelGain[0] = preamp * Math.min(1, 1 - this.currentBalance)
+      this.channelGain[1] = preamp * Math.min(1, 1 + this.currentBalance)
+    } else {
+      for (var c = 0; c < this.channelCount; c++) this.channelGain[c] = preamp
+    }
+  }
+
+  Equalizer.prototype.section = function (slot, channel, input) {
+    var i = (channel * SLOTS + slot) * 2
+    var ic1 = this.state[i]
+    var ic2 = this.state[i + 1]
+    var v3 = input - ic2
+    var v1 = this.coeffA1[slot] * ic1 + this.coeffA2[slot] * v3
+    var v2 = ic2 + this.coeffA2[slot] * ic1 + this.coeffA3[slot] * v3
+    this.state[i] = 2 * v1 - ic1
+    this.state[i + 1] = 2 * v2 - ic2
+    return this.mixInput[slot] * input + this.mixBand[slot] * v1 + this.mixLow[slot] * v2
+  }
+
+  Equalizer.prototype.clearState = function (slot) {
+    for (var channel = 0; channel < this.channelCount; channel++) {
+      var i = (channel * SLOTS + slot) * 2
+      this.state[i] = 0
+      this.state[i + 1] = 0
+    }
+  }
+
+  Equalizer.prototype.flushDenormals = function (active) {
+    for (var index = 0; index < active; index++) {
+      var slot = this.activeSlots[index]
+      for (var channel = 0; channel < this.channelCount; channel++) {
+        var i = (channel * SLOTS + slot) * 2
+        if (Math.abs(this.state[i]) < DENORMAL_FLOOR) this.state[i] = 0
+        if (Math.abs(this.state[i + 1]) < DENORMAL_FLOOR) this.state[i + 1] = 0
+      }
+    }
+  }
+
+  // ---- Spatializer --------------------------------------------------------
+
+  var SP_WIDTH_GAIN = 2.5
+  var SP_OUTPUT_GAIN = 0.82
+  var SP_CROSSFEED_GAIN = 0.2
+  var SP_LOWPASS_COEFF = 0.3
+  var SP_DELAY_MS = 15
+
+  function Spatializer(enabled) {
+    this.enabled = !!enabled
+    this.sampleRate = 0
+    this.channelCount = 0
+    this.delayLeft = new Float32Array(0)
+    this.delayRight = new Float32Array(0)
+    this.delayIndex = 0
+    this.lowpassLeft = 0
+    this.lowpassRight = 0
+  }
+
+  Spatializer.prototype.configure = function (sampleRate, channelCount) {
+    this.sampleRate = sampleRate
+    this.channelCount = channelCount
+    if (channelCount !== 2 || sampleRate <= 0) {
+      this.delayLeft = new Float32Array(0)
+      this.delayRight = new Float32Array(0)
+      this.delayIndex = 0
+      this.lowpassLeft = 0
+      this.lowpassRight = 0
+      return
+    }
+    var delaySamples = Math.max(1, Math.round((sampleRate * SP_DELAY_MS) / 1000))
+    if (this.delayLeft.length !== delaySamples) {
+      this.delayLeft = new Float32Array(delaySamples)
+      this.delayRight = new Float32Array(delaySamples)
+    }
+    this.flush()
+  }
+
+  Spatializer.prototype.process = function (samples, frameCount, channelCount) {
+    if (!this.enabled || frameCount === 0) return
+    if (channelCount !== 2) return
+
+    var delaySize = this.delayLeft.length
+    if (delaySize === 0) return
+
+    var totalSamples = frameCount * 2
+    var idx = 0
+    var dIdx = this.delayIndex
+    var lpL = this.lowpassLeft
+    var lpR = this.lowpassRight
+
+    while (idx < totalSamples) {
+      var left = samples[idx]
+      var right = samples[idx + 1]
+
+      var mid = (left + right) * 0.5
+      var side = (left - right) * 0.5 * SP_WIDTH_GAIN
+
+      var delayedRight = this.delayRight[dIdx]
+      var delayedLeft = this.delayLeft[dIdx]
+      lpL += SP_LOWPASS_COEFF * (delayedRight - lpL)
+      lpR += SP_LOWPASS_COEFF * (delayedLeft - lpR)
+      samples[idx] = (mid + side + lpL * SP_CROSSFEED_GAIN) * SP_OUTPUT_GAIN
+      samples[idx + 1] = (mid - side + lpR * SP_CROSSFEED_GAIN) * SP_OUTPUT_GAIN
+
+      this.delayLeft[dIdx] = left
+      this.delayRight[dIdx] = right
+      dIdx = (dIdx + 1) % delaySize
+      idx += 2
+    }
+
+    this.delayIndex = dIdx
+    this.lowpassLeft = lpL
+    this.lowpassRight = lpR
+  }
+
+  Spatializer.prototype.flush = function () {
+    this.delayLeft.fill(0)
+    this.delayRight.fill(0)
+    this.delayIndex = 0
+    this.lowpassLeft = 0
+    this.lowpassRight = 0
+  }
+
+  // ---- Loudness -----------------------------------------------------------
+
+  var LD_LIMIT = 0.985
+  var LD_MIN_TRIM = 0.5
+  var LD_GLIDE_SECONDS = 0.04
+  var LD_RELEASE_SECONDS = 0.08
+  var LD_SETTLED = 1e-4
+
+  function Loudness() {
+    this.gainByMediaId = {}
+    this.mediaId = null
+    this.nextMediaId = null
+    this.normalize = true
+
+    this.trimTarget = 1
+    this.sampleRate = 0
+    this.channelCount = 0
+    this.currentGain = 1
+    this.currentTrim = 1
+    this.reduction = 1
+    this.glideCoef = 1
+    this.releaseCoef = 1
+    this.snap = true
+  }
+
+  Loudness.prototype.track = function (mediaId, nextMediaId) {
+    this.mediaId = mediaId
+    this.nextMediaId = nextMediaId === undefined ? null : nextMediaId
+  }
+
+  Loudness.prototype.setNormalize = function (on) {
+    this.normalize = !!on
+  }
+
+  Loudness.prototype.setBlendTrim = function (value) {
+    this.trimTarget = clamp(value, LD_MIN_TRIM, 1)
+  }
+
+  Loudness.prototype.onStreamBoundary = function () {
+    if (this.nextMediaId !== null) this.mediaId = this.nextMediaId
+    this.snap = true
+  }
+
+  Loudness.prototype.configure = function (sampleRate, channelCount) {
+    this.sampleRate = sampleRate
+    this.channelCount = channelCount
+    this.glideCoef = coefficient(LD_GLIDE_SECONDS, sampleRate)
+    this.releaseCoef = coefficient(LD_RELEASE_SECONDS, sampleRate)
+    this.snap = true
+  }
+
+  Loudness.prototype.targetGain = function () {
+    if (this.mediaId === null || !this.normalize) return 1
+    var gain = this.gainByMediaId[this.mediaId]
+    return typeof gain === 'number' && isFinite(gain) && gain > 0 ? gain : 1
+  }
+
+  Loudness.prototype.process = function (samples, frameCount, channelCount) {
+    if (frameCount === 0 || channelCount < 1 || this.sampleRate <= 0) return
+
+    var targetGain = this.targetGain()
+    var targetTrim = this.trimTarget
+    if (this.snap) {
+      this.currentGain = targetGain
+      this.currentTrim = targetTrim
+      this.snap = false
+    }
+
+    if (
+      targetGain === 1 &&
+      targetTrim >= 1 &&
+      Math.abs(this.currentGain - 1) < LD_SETTLED &&
+      this.currentTrim >= 1 - LD_SETTLED &&
+      this.reduction >= 1 - LD_SETTLED
+    ) {
+      this.currentGain = 1
+      this.currentTrim = 1
+      this.reduction = 1
+      return
+    }
+
+    var gain = this.currentGain
+    var trim = this.currentTrim
+    var gr = this.reduction
+    var index = 0
+    for (var frame = 0; frame < frameCount; frame++) {
+      gain += (targetGain - gain) * this.glideCoef
+      trim += (targetTrim - trim) * this.glideCoef
+      var scale = gain * trim
+      var peak = 0
+      for (var channel = 0; channel < channelCount; channel++) {
+        var magnitude = Math.abs(samples[index + channel])
+        if (magnitude > peak) peak = magnitude
+      }
+      peak *= scale
+      var wanted = peak > LD_LIMIT ? LD_LIMIT / peak : 1
+      gr = wanted < gr ? wanted : gr + (wanted - gr) * this.releaseCoef
+      var applied = scale * gr
+      for (channel = 0; channel < channelCount; channel++) {
+        samples[index + channel] *= applied
+      }
+      index += channelCount
+    }
+    this.currentGain = gain
+    this.currentTrim = trim
+    this.reduction = gr
+  }
+
+  function coefficient(seconds, rate) {
+    return rate <= 0 ? 1 : 1 - Math.exp(-1 / (seconds * rate))
+  }
+
+  // ---- TransitionFilter ---------------------------------------------------
+
+  var TF_OPEN_HZ = 20000
+  var TF_OFF_HZ = 20
+  var TF_MAX_HIGH_PASS_HZ = 2000
+  var TF_MIN_HZ = 10
+  var TF_STAGES = 2
+  var TF_BUTTERWORTH_Q = [0.5412, 1.30656]
+  var TF_GLIDE_FRAMES = 64
+  var TF_GLIDE_RATE = 0.05
+  var TF_SETTLED_HZ = 1
+  var TF_MAX_CUTOFF_FRACTION = 0.45
+  var TF_ECHO_FEEDBACK = 0.4
+  var TF_ECHO_WET = 0.5
+  var TF_ECHO_LOW_PASS_HZ = 3500
+  var TF_ECHO_HIGH_PASS_HZ = 250
+  var TF_MAX_ECHO_SECONDS = 1.0
+
+  function tfOnePole(hz, sampleRate) {
+    if (sampleRate <= 0) return 0
+    return 1 - Math.exp((-2 * Math.PI * hz) / sampleRate)
+  }
+
+  function TransitionFilter() {
+    this.targetLowPassHz = TF_OPEN_HZ
+    this.targetHighPassHz = TF_OFF_HZ
+    this.channelCount = 0
+    this.sampleRate = 0
+    this.currentLowPassHz = TF_OPEN_HZ
+    this.currentHighPassHz = TF_OFF_HZ
+    this.lowState = new Float32Array(0)
+    this.highState = new Float32Array(0)
+    this.lowA1 = new Float32Array(TF_STAGES)
+    this.lowA2 = new Float32Array(TF_STAGES)
+    this.lowA3 = new Float32Array(TF_STAGES)
+    this.highA1 = new Float32Array(TF_STAGES)
+    this.highA2 = new Float32Array(TF_STAGES)
+    this.highA3 = new Float32Array(TF_STAGES)
+    this.highK = new Float32Array(TF_STAGES)
+    this.filterStateDirty = false
+    this.echoEngaged = false
+    this.echoTargetSend = 0
+    this.echoTargetDry = 1
+    this.echoSeconds = 0
+    this.echoGeneration = 0
+    this.pendingEchoRing = null
+    this.echoFormatRate = 0
+    this.echoFormatChannels = 0
+    this.echoRing = new Float32Array(0)
+    this.echoSeenGeneration = 0
+    this.echoDelayFrames = 0
+    this.echoPosition = 0
+    this.echoSend = 0
+    this.echoDry = 1
+    this.echoLow = new Float32Array(0)
+    this.echoHigh = new Float32Array(0)
+    this.echoLowCoefficient = 0
+    this.echoHighCoefficient = 0
+  }
+
+  TransitionFilter.prototype.setCutoffs = function (lowPassHz, highPassHz) {
+    this.targetLowPassHz = clamp(lowPassHz, TF_MIN_HZ, TF_OPEN_HZ)
+    this.targetHighPassHz = clamp(highPassHz, TF_OFF_HZ, TF_MAX_HIGH_PASS_HZ)
+  }
+
+  TransitionFilter.prototype.open = function () {
+    this.setCutoffs(TF_OPEN_HZ, TF_OFF_HZ)
+  }
+
+  Object.defineProperty(TransitionFilter.prototype, 'isFiltering', {
+    get: function () {
+      return (
+        this.targetLowPassHz < TF_OPEN_HZ ||
+        this.targetHighPassHz > TF_OFF_HZ ||
+        this.currentLowPassHz < TF_OPEN_HZ - TF_SETTLED_HZ ||
+        this.currentHighPassHz > TF_OFF_HZ + TF_SETTLED_HZ
+      )
+    },
+  })
+
+  TransitionFilter.prototype.setEcho = function (delaySeconds, send, dry) {
+    if (delaySeconds !== this.echoSeconds || !this.echoEngaged) {
+      var frames = Math.floor(clamp(delaySeconds, 0, TF_MAX_ECHO_SECONDS) * this.echoFormatRate)
+      var needed = frames * this.echoFormatChannels
+      if (needed > this.echoRing.length) {
+        this.pendingEchoRing = new Float32Array(needed)
+      }
+      this.echoSeconds = delaySeconds
+      this.echoGeneration++
+    }
+    this.echoTargetSend = clamp(send, 0, 1)
+    this.echoTargetDry = clamp(dry, 0, 1)
+    this.echoEngaged = true
+  }
+
+  TransitionFilter.prototype.parkEcho = function () {
+    this.echoEngaged = false
+    this.echoTargetSend = 0
+    this.echoTargetDry = 1
+  }
+
+  TransitionFilter.prototype.configure = function (sampleRate, channelCount) {
+    this.sampleRate = sampleRate
+    this.channelCount = channelCount
+    var requiredSize = channelCount * TF_STAGES * 2
+    if (this.lowState.length !== requiredSize) {
+      this.lowState = new Float32Array(requiredSize)
+      this.highState = new Float32Array(requiredSize)
+    }
+    this.currentLowPassHz = this.targetLowPassHz
+    this.currentHighPassHz = this.targetHighPassHz
+    if (this.echoLow.length !== channelCount) {
+      this.echoLow = new Float32Array(channelCount)
+      this.echoHigh = new Float32Array(channelCount)
+    }
+    this.echoLowCoefficient = tfOnePole(TF_ECHO_LOW_PASS_HZ, sampleRate)
+    this.echoHighCoefficient = tfOnePole(TF_ECHO_HIGH_PASS_HZ, sampleRate)
+    this.echoFormatRate = sampleRate
+    this.echoFormatChannels = channelCount
+    this.echoSeenGeneration = this.echoGeneration - 1
+  }
+
+  TransitionFilter.prototype.process = function (samples, frameCount, channelCount) {
+    if (frameCount === 0 || this.channelCount < 1 || this.sampleRate <= 0) return
+    this.filter(samples, frameCount)
+    if (this.echoEngaged) this.echo(samples, frameCount)
+  }
+
+  TransitionFilter.prototype.filter = function (samples, frameCount) {
+    var targetLow = this.targetLowPassHz
+    var targetHigh = this.targetHighPassHz
+    var parked =
+      targetLow >= TF_OPEN_HZ &&
+      targetHigh <= TF_OFF_HZ &&
+      this.currentLowPassHz >= TF_OPEN_HZ - TF_SETTLED_HZ &&
+      this.currentHighPassHz <= TF_OFF_HZ + TF_SETTLED_HZ
+
+    if (parked) {
+      this.clearStateIfNeeded()
+      return
+    }
+    this.filterStateDirty = true
+
+    var remaining = frameCount
+    var frameOffset = 0
+    while (remaining > 0) {
+      var subBlock = Math.min(remaining, TF_GLIDE_FRAMES)
+      this.currentLowPassHz = this.glide(this.currentLowPassHz, targetLow)
+      this.currentHighPassHz = this.glide(this.currentHighPassHz, targetHigh)
+      var lowOn = this.currentLowPassHz < TF_OPEN_HZ - TF_SETTLED_HZ
+      var highOn = this.currentHighPassHz > TF_OFF_HZ + TF_SETTLED_HZ
+      if (lowOn) this.updateLowCoefficients()
+      if (highOn) this.updateHighCoefficients()
+
+      for (var f = 0; f < subBlock; f++) {
+        var baseIdx = (frameOffset + f) * this.channelCount
+        for (var channel = 0; channel < this.channelCount; channel++) {
+          var sample = samples[baseIdx + channel]
+          if (lowOn) sample = this.lowPass(channel, sample)
+          if (highOn) sample = this.highPass(channel, sample)
+          samples[baseIdx + channel] = sample
+        }
+      }
+      frameOffset += subBlock
+      remaining -= subBlock
+    }
+  }
+
+  TransitionFilter.prototype.clearStateIfNeeded = function () {
+    if (!this.filterStateDirty) return
+    this.lowState.fill(0)
+    this.highState.fill(0)
+    this.filterStateDirty = false
+  }
+
+  TransitionFilter.prototype.echo = function (samples, frameCount) {
+    if (this.echoSeenGeneration !== this.echoGeneration) this.startEcho()
+    var channels = this.channelCount
+    var delay = this.echoDelayFrames
+    var ring = this.echoRing
+    var targetSend = this.echoTargetSend
+    var targetDry = this.echoTargetDry
+    var sendStep = (targetSend - this.echoSend) / frameCount
+    var dryStep = (targetDry - this.echoDry) / frameCount
+    var send = this.echoSend
+    var dry = this.echoDry
+
+    if (delay <= 0) {
+      for (var f = 0; f < frameCount; f++) {
+        dry += dryStep
+        var base = f * channels
+        for (var c = 0; c < channels; c++) samples[base + c] *= dry
+      }
+      this.echoSend = targetSend
+      this.echoDry = targetDry
+      return
+    }
+
+    var lowCoefficient = this.echoLowCoefficient
+    var highCoefficient = this.echoHighCoefficient
+    var low = this.echoLow
+    var high = this.echoHigh
+    var position = this.echoPosition
+
+    for (var f = 0; f < frameCount; f++) {
+      send += sendStep
+      dry += dryStep
+      var base = f * channels
+      var ringBase = position * channels
+      for (var c = 0; c < channels; c++) {
+        var input = samples[base + c]
+        var delayed = ring[ringBase + c]
+        var darker = low[c] + lowCoefficient * (delayed - low[c])
+        low[c] = darker
+        var rumble = high[c] + highCoefficient * (darker - high[c])
+        high[c] = rumble
+        ring[ringBase + c] = input * send + (darker - rumble) * TF_ECHO_FEEDBACK
+        samples[base + c] = input * dry + delayed * TF_ECHO_WET
+      }
+      if (++position === delay) position = 0
+    }
+    this.echoPosition = position
+    this.echoSend = targetSend
+    this.echoDry = targetDry
+  }
+
+  TransitionFilter.prototype.startEcho = function () {
+    this.echoSeenGeneration = this.echoGeneration
+    if (this.pendingEchoRing) {
+      this.echoRing = this.pendingEchoRing
+      this.pendingEchoRing = null
+    }
+    var channels = Math.max(1, this.channelCount)
+    this.echoDelayFrames = clamp(
+      Math.floor(this.echoSeconds * this.sampleRate),
+      0,
+      Math.floor(this.echoRing.length / channels)
+    )
+    this.echoRing.fill(0, 0, this.echoDelayFrames * channels)
+    this.echoLow.fill(0)
+    this.echoHigh.fill(0)
+    this.echoPosition = 0
+    this.echoSend = 0
+    this.echoDry = 1
+  }
+
+  TransitionFilter.prototype.glide = function (current, target) {
+    var from = Math.log(Math.max(current, TF_MIN_HZ))
+    var to = Math.log(Math.max(target, TF_MIN_HZ))
+    return Math.exp(from + (to - from) * TF_GLIDE_RATE)
+  }
+
+  TransitionFilter.prototype.usableCutoff = function (hz) {
+    return clamp(hz, TF_MIN_HZ, this.sampleRate * TF_MAX_CUTOFF_FRACTION)
+  }
+
+  TransitionFilter.prototype.updateLowCoefficients = function () {
+    if (this.sampleRate <= 0) return
+    var g = Math.tan((Math.PI * this.usableCutoff(this.currentLowPassHz)) / this.sampleRate)
+    for (var stage = 0; stage < TF_STAGES; stage++) {
+      var k = 1 / TF_BUTTERWORTH_Q[stage]
+      var a1 = 1 / (1 + g * (g + k))
+      this.lowA1[stage] = a1
+      this.lowA2[stage] = g * a1
+      this.lowA3[stage] = g * (g * a1)
+    }
+  }
+
+  TransitionFilter.prototype.updateHighCoefficients = function () {
+    if (this.sampleRate <= 0) return
+    var g = Math.tan((Math.PI * this.usableCutoff(this.currentHighPassHz)) / this.sampleRate)
+    for (var stage = 0; stage < TF_STAGES; stage++) {
+      var k = 1 / TF_BUTTERWORTH_Q[stage]
+      var a1 = 1 / (1 + g * (g + k))
+      this.highA1[stage] = a1
+      this.highA2[stage] = g * a1
+      this.highA3[stage] = g * (g * a1)
+      this.highK[stage] = k
+    }
+  }
+
+  TransitionFilter.prototype.lowPass = function (channel, input) {
+    var value = input
+    for (var stage = 0; stage < TF_STAGES; stage++) {
+      var i = (channel * TF_STAGES + stage) * 2
+      var ic1 = this.lowState[i]
+      var ic2 = this.lowState[i + 1]
+      var v3 = value - ic2
+      var v1 = this.lowA1[stage] * ic1 + this.lowA2[stage] * v3
+      var v2 = ic2 + this.lowA2[stage] * ic1 + this.lowA3[stage] * v3
+      this.lowState[i] = 2 * v1 - ic1
+      this.lowState[i + 1] = 2 * v2 - ic2
+      value = v2
+    }
+    return value
+  }
+
+  TransitionFilter.prototype.highPass = function (channel, input) {
+    var value = input
+    for (var stage = 0; stage < TF_STAGES; stage++) {
+      var i = (channel * TF_STAGES + stage) * 2
+      var ic1 = this.highState[i]
+      var ic2 = this.highState[i + 1]
+      var v3 = value - ic2
+      var v1 = this.highA1[stage] * ic1 + this.highA2[stage] * v3
+      var v2 = ic2 + this.highA2[stage] * ic1 + this.highA3[stage] * v3
+      this.highState[i] = 2 * v1 - ic1
+      this.highState[i + 1] = 2 * v2 - ic2
+      value -= this.highK[stage] * v1 + v2
+    }
+    return value
+  }
+
+  TransitionFilter.prototype.flush = function () {
+    this.lowState.fill(0)
+    this.highState.fill(0)
+    this.currentLowPassHz = this.targetLowPassHz
+    this.currentHighPassHz = this.targetHighPassHz
+    this.echoSeenGeneration = this.echoGeneration - 1
+  }
+
+  TransitionFilter.prototype.reset = function () {
+    this.parkEcho()
+    this.echoSeenGeneration = this.echoGeneration - 1
+    this.targetLowPassHz = TF_OPEN_HZ
+    this.targetHighPassHz = TF_OFF_HZ
+    this.lowState = new Float32Array(0)
+    this.highState = new Float32Array(0)
+    this.channelCount = 0
+    this.sampleRate = 0
+  }
+
+  // =========================================================================
+  // پوسته‌های AudioWorkletProcessor — فقط داخل AudioWorkletGlobalScope
+  // =========================================================================
+
+  var DSP = {
+    Equalizer: Equalizer,
+    Spatializer: Spatializer,
+    Loudness: Loudness,
+    TransitionFilter: TransitionFilter,
+  }
+
+  if (typeof AudioWorkletProcessor !== 'undefined' && typeof registerProcessor !== 'undefined') {
+    // ورودی MediaElementSource با channelCountMode='explicit' روی ۲ کانال
+    // آپ‌میکس می‌شود، پس پردازنده‌ها می‌توانند استریو فرض کنند
+
+    /**
+     * زنجیرهٔ یکپارچهٔ پردازش صوتی (MbDspChainProcessor)
+     * معادل دقیق DspChain.kt اندروید:
+     *   Spatializer -> Equalizer -> TransitionFilter -> Loudness
+     * در یک گذر مستقیم روی Float32Array بدون تخصیص حافظه و بدون عبور بین چند نود.
+     */
+    var MbDspChainProcessor = class extends AudioWorkletProcessor {
+      constructor() {
+        super()
+        this.sp = new Spatializer(false)
+        this.eq = new Equalizer()
+        this.tf = new TransitionFilter()
+        this.loud = new Loudness()
+
+        this.sp.configure(sampleRate, 2)
+        this.eq.configure(sampleRate, 2)
+        this.tf.configure(sampleRate, 2)
+        this.loud.configure(sampleRate, 2)
+
+        this.scratch = new Float32Array(256)
+
+        this.port.onmessage = (event) => {
+          const msg = event.data
+          if (msg.type === 'eq') {
+            this.eq.setTarget(msg.curve, msg.balance, msg.curve !== null)
+          } else if (msg.type === 'spatial') {
+            this.sp.enabled = !!msg.enabled
+          } else if (msg.type === 'gain') {
+            this.loud.gainByMediaId[msg.mediaId] = msg.gain
+          } else if (msg.type === 'track') {
+            this.loud.track(msg.mediaId, msg.nextMediaId ?? null)
+          } else if (msg.type === 'normalize') {
+            this.loud.setNormalize(msg.on)
+          } else if (msg.type === 'trim') {
+            this.loud.setBlendTrim(msg.value)
+          } else if (msg.type === 'boundary') {
+            this.loud.onStreamBoundary()
+          } else if (msg.type === 'transition_filter') {
+            this.tf.setCutoffs(msg.lowPassHz, msg.highPassHz)
+          } else if (msg.type === 'transition_echo') {
+            this.tf.setEcho(msg.delaySeconds, msg.send, msg.dry)
+          } else if (msg.type === 'transition_park_echo') {
+            this.tf.parkEcho()
+          } else if (msg.type === 'flush') {
+            this.sp.flush()
+            this.eq.flush()
+            this.tf.flush()
+            this.loud.flush()
+          }
+        }
+      }
+
+      process(inputs, outputs) {
+        const input = inputs[0]
+        const output = outputs[0]
+        if (!input || input.length === 0 || !output || output.length === 0) return true
+
+        const frames = input[0].length
+        const totalSamples = frames * 2
+        if (this.scratch.length < totalSamples) {
+          this.scratch = new Float32Array(totalSamples)
+        }
+        const scratch = this.scratch
+        const inL = input[0]
+        const inR = input.length > 1 ? input[1] : input[0]
+        const outL = output[0]
+        const outR = output.length > 1 ? output[1] : output[0]
+
+        // ۱. اینترلیو ورودی‌های پلانار به بافر موقت Float32
+        for (let f = 0; f < frames; f++) {
+          scratch[f * 2] = inL[f]
+          scratch[f * 2 + 1] = inR[f]
+        }
+
+        // ۲. گذر متوالی و بی‌درنگ در زنجیره DSP (عیناً مانند اندروید)
+        this.sp.process(scratch, frames, 2)
+        this.eq.process(scratch, frames, 2)
+        this.tf.process(scratch, frames, 2)
+        this.loud.process(scratch, frames, 2)
+
+        // ۳. دی-اینترلیو خروجی به بافرهای پلانار خروجی Web Audio
+        for (let f = 0; f < frames; f++) {
+          outL[f] = scratch[f * 2]
+          if (output.length > 1) {
+            outR[f] = scratch[f * 2 + 1]
+          }
+        }
+
+        return true
+      }
+    }
+    registerProcessor('mb-dsp-chain', MbDspChainProcessor)
+
+    /** اکولایزر مستقل (پشتیبانی گذشته‌نگر با تبدیل صحیح بافر) */
+    var EqProcessor = class extends AudioWorkletProcessor {
+      constructor() {
+        super()
+        this.eq = new Equalizer()
+        this.eq.configure(sampleRate, 2)
+        this.scratch = new Float32Array(256)
+        this.port.onmessage = (event) => {
+          const msg = event.data
+          if (msg.type === 'eq') {
+            this.eq.setTarget(msg.curve, msg.balance, msg.curve !== null)
+          }
+        }
+      }
+      process(inputs, outputs) {
+        const input = inputs[0]
+        const output = outputs[0]
+        if (!input || input.length === 0 || !output || output.length === 0) return true
+        const frames = input[0].length
+        const totalSamples = frames * 2
+        if (this.scratch.length < totalSamples) this.scratch = new Float32Array(totalSamples)
+        const scratch = this.scratch
+        const inL = input[0]
+        const inR = input.length > 1 ? input[1] : input[0]
+        for (let f = 0; f < frames; f++) {
+          scratch[f * 2] = inL[f]
+          scratch[f * 2 + 1] = inR[f]
+        }
+        this.eq.process(scratch, frames, 2)
+        const outL = output[0]
+        const outR = output.length > 1 ? output[1] : output[0]
+        for (let f = 0; f < frames; f++) {
+          outL[f] = scratch[f * 2]
+          if (output.length > 1) outR[f] = scratch[f * 2 + 1]
+        }
+        return true
+      }
+    }
+    registerProcessor('mb-equalizer', EqProcessor)
+
+    /** فضاساز مستقل */
+    var SpatialProcessor = class extends AudioWorkletProcessor {
+      constructor() {
+        super()
+        this.sp = new Spatializer(false)
+        this.sp.configure(sampleRate, 2)
+        this.scratch = new Float32Array(256)
+        this.port.onmessage = (event) => {
+          const msg = event.data
+          if (msg.type === 'spatial') this.sp.enabled = !!msg.enabled
+        }
+      }
+      process(inputs, outputs) {
+        const input = inputs[0]
+        const output = outputs[0]
+        if (!input || input.length === 0 || !output || output.length === 0) return true
+        const frames = input[0].length
+        const totalSamples = frames * 2
+        if (this.scratch.length < totalSamples) this.scratch = new Float32Array(totalSamples)
+        const scratch = this.scratch
+        const inL = input[0]
+        const inR = input.length > 1 ? input[1] : input[0]
+        for (let f = 0; f < frames; f++) {
+          scratch[f * 2] = inL[f]
+          scratch[f * 2 + 1] = inR[f]
+        }
+        this.sp.process(scratch, frames, 2)
+        const outL = output[0]
+        const outR = output.length > 1 ? output[1] : output[0]
+        for (let f = 0; f < frames; f++) {
+          outL[f] = scratch[f * 2]
+          if (output.length > 1) outR[f] = scratch[f * 2 + 1]
+        }
+        return true
+      }
+    }
+    registerProcessor('mb-spatial', SpatialProcessor)
+
+    /** هم‌ترازی بلندی + لیمیتر مستقل */
+    var LoudnessProcessor = class extends AudioWorkletProcessor {
+      constructor() {
+        super()
+        this.loud = new Loudness()
+        this.loud.configure(sampleRate, 2)
+        this.scratch = new Float32Array(256)
+        this.port.onmessage = (event) => {
+          const msg = event.data
+          if (msg.type === 'gain') this.loud.gainByMediaId[msg.mediaId] = msg.gain
+          else if (msg.type === 'track') this.loud.track(msg.mediaId, msg.nextMediaId ?? null)
+          else if (msg.type === 'normalize') this.loud.setNormalize(msg.on)
+          else if (msg.type === 'trim') this.loud.setBlendTrim(msg.value)
+          else if (msg.type === 'boundary') this.loud.onStreamBoundary()
+          else if (msg.type === 'flush') this.loud.flush()
+        }
+      }
+      process(inputs, outputs) {
+        const input = inputs[0]
+        const output = outputs[0]
+        if (!input || input.length === 0 || !output || output.length === 0) return true
+        const frames = input[0].length
+        const totalSamples = frames * 2
+        if (this.scratch.length < totalSamples) this.scratch = new Float32Array(totalSamples)
+        const scratch = this.scratch
+        const inL = input[0]
+        const inR = input.length > 1 ? input[1] : input[0]
+        for (let f = 0; f < frames; f++) {
+          scratch[f * 2] = inL[f]
+          scratch[f * 2 + 1] = inR[f]
+        }
+        this.loud.process(scratch, frames, 2)
+        const outL = output[0]
+        const outR = output.length > 1 ? output[1] : output[0]
+        for (let f = 0; f < frames; f++) {
+          outL[f] = scratch[f * 2]
+          if (output.length > 1) outR[f] = scratch[f * 2 + 1]
+        }
+        return true
+      }
+    }
+    registerProcessor('mb-loudness', LoudnessProcessor)
+  }
+
+  // قلاب تست هم‌ارزی در Node — در مرورگر هیچ‌گاه صدا زده نمی‌شود
+  if (typeof globalThis !== 'undefined' && globalThis.__dspWorkletTestHook) {
+    globalThis.__dspWorkletTestHook(DSP)
+  }
+})()

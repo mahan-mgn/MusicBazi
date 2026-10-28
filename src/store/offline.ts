@@ -1,8 +1,17 @@
 import { create } from 'zustand'
+import { onIdentityChange } from '../lib/identity'
 import * as offline from '../lib/offline'
+import { scopedKey } from '../lib/storage'
 import type { LibraryItem } from '../lib/types'
 
 const KEY = 'offline:pinned'
+
+/**
+ * حساب‌محور: فهرستِ سنجاق‌ها شناسه‌ی جابِ حسابِ قبلی را دارد و آدرس‌هایش هم
+ * بعد از تعویضِ حساب پخش نمی‌شوند. فایل‌های کش‌شده سرِ جایشان می‌مانند؛ فقط
+ * فهرست جدا می‌شود.
+ */
+const key = () => scopedKey(KEY)
 
 /**
  * ردیف‌هایی که برای پخشِ بدون اینترنت سنجاق شده‌اند.
@@ -13,7 +22,7 @@ const KEY = 'offline:pinned'
  */
 function read(): Record<string, LibraryItem> {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(key())
     return raw ? (JSON.parse(raw) as Record<string, LibraryItem>) : {}
   } catch {
     return {}
@@ -22,7 +31,7 @@ function read(): Record<string, LibraryItem> {
 
 function write(items: Record<string, LibraryItem>): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(items))
+    localStorage.setItem(key(), JSON.stringify(items))
   } catch {
     // سهمیه پر است — سنجاق‌ها سر جایشان‌اند، فقط فهرستِ آفلاین به‌روز نشد
   }
@@ -79,6 +88,13 @@ export const useOffline = create<OfflineState>((set, get) => ({
     }
   },
 }))
+
+/*
+ * ورود/خروج بدونِ رفرش: فایل‌های کش‌شده روی دستگاه می‌مانند (Cache Storage
+ * مالِ مرورگر است، نه حساب)، ولی فهرست باید از کلیدِ حسابِ تازه بیاید —
+ * وگرنه حسابِ دوم ردیف‌هایی می‌بیند که سرور برایش ۴۰۴ می‌دهد.
+ */
+onIdentityChange(() => useOffline.setState({ items: read() }))
 
 /** آیا این ردیف سنجاق شده — برای دکمه‌ی هر سطر */
 export function usePinned(jobId: string): boolean {

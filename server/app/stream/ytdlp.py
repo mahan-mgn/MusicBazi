@@ -93,9 +93,10 @@ class YtDlpResolver:
     def __init__(self, timeout_seconds: float = 20.0) -> None:
         self.timeout_seconds = timeout_seconds
 
-    def _build_ydl_opts(self) -> dict[str, Any]:
+    def _build_ydl_opts(self, user_id: str = "local") -> dict[str, Any]:
         """پیکربندی بهینه yt-dlp با بهره‌گیری از زیرساخت رسمی ydl.opts."""
         return ydl.opts(
+            user_id=user_id,
             skip_download=True,
             format="bestaudio/best",
             format_sort=["abr", "asr"],
@@ -109,13 +110,15 @@ class YtDlpResolver:
             socket_timeout=self.timeout_seconds,
         )
 
-    def _extract_sync(self, video_id: str, quality: str | None = None) -> ResolvedStream:
+    def _extract_sync(
+        self, video_id: str, quality: str | None = None, user_id: str = "local"
+    ) -> ResolvedStream:
         clean_vid = video_id.strip()
         if not clean_vid:
             raise ValueError("video_id cannot be empty")
 
         url = f"https://www.youtube.com/watch?v={clean_vid}"
-        opts = self._build_ydl_opts()
+        opts = self._build_ydl_opts(user_id)
 
         info: dict[str, Any] | None = None
         try:
@@ -306,9 +309,10 @@ class YtDlpResolver:
         video_id: str,
         purpose: str = "playback",
         quality: str | None = None,
+        user_id: str = "local",
     ) -> ResolvedStream:
         """
         استخراج غیرمسدودکننده آدرس استریم صوتی و متادیتا از طریق yt-dlp.
         عملیات استخراج در thread pool اجرا می‌شود.
         """
-        return await asyncio.to_thread(self._extract_sync, video_id, quality)
+        return await asyncio.to_thread(self._extract_sync, video_id, quality, user_id)

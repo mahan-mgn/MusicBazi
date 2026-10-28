@@ -225,6 +225,27 @@ async def playlist(client: httpx.AsyncClient, playlist_id: str) -> AlbumDetail |
     )
 
 
+async def track(client: httpx.AsyncClient, track_id: str) -> AlbumDetail | None:
+    """تک‌آهنگ هم در قالب AlbumDetail برمی‌گردد تا فرانت مسیر جدا لازم نداشته باشد."""
+    row = await _get(client, f"/track/{track_id}")
+    if not row.get("id"):
+        return None
+    single = _track(row)
+    alb = row.get("album") or {}
+    return AlbumDetail(
+        id=f"deezer:track:{row['id']}",
+        title=single.title,
+        artist=single.artist,
+        year=_year(alb.get("release_date")) or 0,
+        artworkUrl=single.artworkUrl,
+        trackCount=1,
+        source="deezer",
+        sourceUrl=single.sourceUrl,
+        durationMs=single.durationMs,
+        tracks=[single],
+    )
+
+
 async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | None:
     head, top, albums, related, radio, playlists = await asyncio.gather(
         _get(client, f"/artist/{artist_id}"),

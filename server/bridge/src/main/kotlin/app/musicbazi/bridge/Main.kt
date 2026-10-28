@@ -142,6 +142,7 @@ fun Application.bridgeModule(
                     purpose = req.purpose,
                     qualityStr = req.quality,
                     refreshVisitor = req.refresh_visitor,
+                    cookie = req.cookie,
                 )
                 log.info("Resolved videoId=${req.video_id} client=${stream.resolver_metadata["client_name"]} bitrate=${stream.bitrate} codec=${stream.codec}")
                 call.respond(

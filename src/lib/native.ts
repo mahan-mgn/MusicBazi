@@ -89,6 +89,7 @@ interface DownloadsPlugin {
     artist: string
     album: string
     ext: string
+    mime?: string
   }): Promise<{ uri: string; name: string }>
   addListener(
     event: 'progress',
@@ -145,6 +146,7 @@ export interface AudioDiagnostics {
 
 interface AudioEnginePlugin {
   play(options: NativeAudioStreamOptions): Promise<void>
+  setNext(options: NativeAudioStreamOptions | { url: string }): Promise<void>
   pause(): Promise<void>
   resume(): Promise<void>
   stop(): Promise<void>
@@ -183,6 +185,19 @@ const AudioEngine = registerPlugin<AudioEnginePlugin>('AudioEngine')
 export async function nativePlay(options: NativeAudioStreamOptions): Promise<void> {
   if (!isNativeApp()) return
   await AudioEngine.play(options)
+}
+
+export async function nativeSetNext(options: NativeAudioStreamOptions | null): Promise<void> {
+  if (!isNativeApp()) return
+  try {
+    if (!options) {
+      await AudioEngine.setNext({ url: '' })
+    } else {
+      await AudioEngine.setNext(options)
+    }
+  } catch (err) {
+    console.warn('[native] setNext failed:', err)
+  }
 }
 
 export async function nativePause(): Promise<void> {
@@ -338,6 +353,25 @@ export async function ensureNotificationPermission(): Promise<boolean> {
 /** آیا این دستگاه اصلاً می‌تواند در کتابخانه‌ی موسیقیِ سیستم بنویسد؟ */
 export const canSaveToDevice = (): boolean => isNativeApp()
 
+function mimeFromExt(ext: string): string {
+  const clean = ext.toLowerCase().replace('.', '')
+  switch (clean) {
+    case 'flac':
+      return 'audio/flac'
+    case 'm4a':
+      return 'audio/mp4'
+    case 'aac':
+      return 'audio/aac'
+    case 'ogg':
+    case 'opus':
+      return 'audio/ogg'
+    case 'wav':
+      return 'audio/wav'
+    default:
+      return 'audio/mpeg'
+  }
+}
+
 /**
  * فایل را در `Music/MusicBazi` گوشی می‌نشاند تا هر موزیک‌پلیرِ دیگری هم ببیندش.
  *
@@ -352,12 +386,14 @@ export async function saveToDevice(options: {
   ext?: string
 }): Promise<string | null> {
   if (!isNativeApp()) return null
+  const ext = options.ext ?? 'mp3'
   const { uri } = await Downloads.save({
     url: options.url,
     title: options.title,
     artist: options.artist ?? '',
     album: options.album ?? '',
-    ext: options.ext ?? 'mp3',
+    ext,
+    mime: mimeFromExt(ext),
   })
   return uri
 }
@@ -571,15 +607,26 @@ export async function openExternal(url: string): Promise<boolean> {
 /**
  * دانلود فایل (مثل آرشیو ZIP).
  *
- * در وب با `location.href` مستقیم دانلود می‌شود.
- * در اپ اندروید اگر `location.href` تغییر کند WebView صفحه را عوض می‌کند و اپ سفید می‌شود؛
- * پس با `openExternal` به دانلود منیجر اندروید سپرده می‌شود.
+ * در وب با عنصر موقت <a> و خصیصه‌ی download دانلود می‌شود، نه با location.href:
+ * تغییرِ location.href توسط سرویس‌ورکرِ PWA به‌عنوان ناوبریِ صفحه قاپیده می‌شد
+ * و به‌جای فایل، index.html را لود کرده و کاربر را به صفحه‌ی اصلی برمی‌گرداند.
+ *
+ * در اپ اندروید اگر location.href تغییر کند WebView صفحه را عوض می‌کند و اپ سفید می‌شود؛
+ * پس با openExternal به دانلود منیجر اندروید سپرده می‌شود.
  */
-export async function downloadFile(url: string): Promise<void> {
+export async function downloadFile(url: string, filename?: string): Promise<void> {
   if (isNativeApp()) {
     await openExternal(url)
   } else {
-    location.href = url
+    const a = document.createElement('a')
+    a.href = url
+    if (filename) a.download = filename
+    else a.setAttribute('download', '')
+    a.rel = 'noopener'
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
   }
 }
 

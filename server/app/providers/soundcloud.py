@@ -79,7 +79,7 @@ def _http() -> httpx.Client:
     )
 
 
-def _scrape_client_id(http: httpx.Client) -> str | None:
+def _scrape_client_id(http: httpx.Client, force: bool = False) -> str | None:
     """
     client_id را از جاوااسکریپتِ خودِ سایت درمی‌آورد — همان کاری که yt-dlp می‌کند.
 
@@ -90,11 +90,13 @@ def _scrape_client_id(http: httpx.Client) -> str | None:
     """
     global _cached_id
     with _id_lock:
-        if _cached_id:
+        if _cached_id and not force:
             return _cached_id
         fresh = _scrape_client_id_unlocked(http)
         if fresh:
             _cached_id = fresh
+        elif force:
+            _cached_id = None
         return fresh
 
 
@@ -119,7 +121,10 @@ def _scrape_client_id_unlocked(http: httpx.Client) -> str | None:
     try:
         import yt_dlp
 
-        y = yt_dlp.YoutubeDL({"quiet": True})
+        opts: dict[str, Any] = {"quiet": True}
+        if YTDLP_PROXY:
+            opts["proxy"] = YTDLP_PROXY
+        y = yt_dlp.YoutubeDL(opts)
         ie = yt_dlp.extractor.soundcloud.SoundcloudIE(y)
         ie._update_client_id()
         if cid := getattr(ie, "_CLIENT_ID", None):
@@ -169,16 +174,20 @@ def _with_client_id(
 
         for client_id in [*known, None]:
             if client_id is None:
-                # هیچ‌کدام از کشده‌ها کار نکرد؛ یکی تازه از سایت درمی‌آوریم
-                client_id = _scrape_client_id(http)
+                # هیچ‌کدام از کش‌شده‌ها کار نکرد؛ یکی تازه با اسکرپ اجباری از سایت درمی‌آوریم
+                client_id = _scrape_client_id(http, force=True)
                 if not client_id or client_id in tried:
                     break
             tried.add(client_id)
             try:
                 return attempt(client_id)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code not in (401, 403):
-                    raise
+                if e.response.status_code in (401, 403, 429):
+                    with _id_lock:
+                        if _cached_id == client_id:
+                            _cached_id = None
+                    continue
+                raise
 
         # اسکرپ هم جواب نداد — شناسه‌های پیکربندی و یدکی می‌مانند
         for fallback_id in (SOUNDCLOUD_CLIENT_ID, *_FALLBACK_CLIENT_IDS):
@@ -188,8 +197,12 @@ def _with_client_id(
             try:
                 return attempt(fallback_id)
             except httpx.HTTPStatusError as e:
-                if e.response.status_code not in (401, 403):
-                    raise
+                if e.response.status_code in (401, 403, 429):
+                    with _id_lock:
+                        if _cached_id == fallback_id:
+                            _cached_id = None
+                    continue
+                raise
 
     raise httpx.HTTPError("client_id معتبری برای ساندکلاد پیدا نشد")
 
@@ -206,7 +219,12 @@ def _upsize(url: str | None) -> str | None:
 
 
 def _artwork(row: dict[str, Any]) -> str | None:
-    return _upsize(row.get("artwork_url") or (row.get("user") or {}).get("avatar_url"))
+    art = row.get("artwork_url")
+    if not art:
+        user_avatar = (row.get("user") or {}).get("avatar_url")
+        if user_avatar and "default_avatar" not in user_avatar:
+            art = user_avatar
+    return _upsize(art)
 
 
 def as_entry(row: dict[str, Any]) -> dict[str, Any]:
@@ -315,9 +333,10 @@ def _entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {**as_entry(row), "id": str(row["id"])}
         for row in rows
-        # بی‌لینک یعنی غیرقابل دانلود، و BLOCK یعنی از این IP پخش نمی‌شود —
-        # همان IP ای که خودِ دانلود هم از آن می‌رود، پس نتیجه‌ی مرده است
-        if row.get("id") and row.get("permalink_url") and row.get("policy") != "BLOCK"
+        # بی‌لینک یعنی غیرقابل دانلود، و BLOCK/SNIPPET یعنی از این IP پخش نمی‌شود یا قطعه پیش‌نمایش ۳۰ ثانیه‌ای Go+ است
+        if row.get("id")
+        and row.get("permalink_url")
+        and row.get("policy") not in ("BLOCK", "SNIPPET")
     ]
 
 
@@ -366,7 +385,7 @@ def _album(row: dict[str, Any]) -> Album:
         artworkUrl=_artwork(row),
         trackCount=tracks,
         source="soundcloud",
-        sourceUrl=row["permalink_url"],
+        sourceUrl=row.get("permalink_url") or "",
         artistId=_user_artist_id(row),
         releaseType=_release_type(tracks, row.get("set_type")),
         releaseDate=((row.get("release_date") or row.get("created_at") or "")[:10]) or None,
@@ -438,7 +457,7 @@ def _user(row: dict[str, Any]) -> Artist:
         name=clean_artist(row.get("username") or row.get("permalink") or ""),
         artworkUrl=_avatar(row.get("avatar_url")),
         source="soundcloud",
-        sourceUrl=row["permalink_url"],
+        sourceUrl=row.get("permalink_url") or "",
         subtitle=subtitle,
         # ساندکلاد بین هنرمند و شنونده تفکیک ندارد، پس تنها چیزی که می‌شود به آن
         # تکیه کرد خودِ داده است: حسابی که هیچ ترکی منتشر نکرده و فقط پلی‌لیست
@@ -485,6 +504,7 @@ def resolve_user_id(url: str) -> str | None:
 # هر پاسخ حداکثر پنجاه ردیف می‌دهد؛ `_collection` همه‌ی `next_href`ها را تا
 # سقفِ موردنیاز دنبال می‌کند.
 USER_TRACKS = 5000
+USER_TOP_TRACKS = 50
 USER_ALBUMS = 5000
 
 
@@ -497,7 +517,7 @@ def user_tracks(user_id: str, limit: int = USER_TRACKS) -> list[dict[str, Any]]:
     return _entries(_collection(f"/users/{user_id}/tracks", limit=limit))
 
 
-def user_top_tracks(user_id: str, limit: int = USER_TRACKS) -> list[dict[str, Any]]:
+def user_top_tracks(user_id: str, limit: int = USER_TOP_TRACKS) -> list[dict[str, Any]]:
     """Top Tracks واقعیِ SoundCloud را با مرتب‌سازی رسمیِ hotness می‌گیرد."""
     return _entries(
         _collection(f"/users/{user_id}/tracks", limit=limit, order="hotness")
@@ -628,20 +648,6 @@ def user_discography(
 USER_PLAYLISTS = 50
 
 
-def _playlist(row: dict[str, Any]) -> Playlist:
-    return Playlist(
-        # همان شناسه‌ای که `_album` می‌سازد: ساندکلاد آلبوم و پلی‌لیست را با یک
-        # نوع نگه می‌دارد و صفحه‌شان هم یکی است
-        id=f"sc:playlist:{row['id']}",
-        title=row.get("title") or "",
-        owner=(row.get("user") or {}).get("username") or "ناشناس",
-        trackCount=int(row.get("track_count") or 0),
-        artworkUrl=_artwork(row),
-        source="soundcloud",
-        sourceUrl=row["permalink_url"],
-    )
-
-
 def user_playlists(user_id: str, limit: int = USER_PLAYLISTS) -> list[Playlist]:
     """
     ست‌هایی که کاربر ساخته و آلبوم نیستند — همان تبِ Playlists صفحه‌اش.
@@ -703,9 +709,16 @@ def _paged(path: str, limit: int) -> list[dict[str, Any]]:
             if not fresh:
                 break
             rows.extend(fresh)
-            # next_href پارامترهای صفحه‌ی بعد را خودش دارد؛ فقط client_id کم دارد
+            # next_href پارامترهای صفحه‌ی بعد را خودش دارد؛ client_id کهنه جایگزین یا اضافه می‌شود
             url = body.get("next_href")
-            params = {"client_id": client_id}
+            if url:
+                if "client_id=" in url:
+                    url = re.sub(r"([?&])client_id=[^&]*", r"\g<1>client_id=" + client_id, url)
+                    params = None
+                else:
+                    params = {"client_id": client_id}
+            else:
+                params = None
         return rows[:limit]
 
     return _with_client_id(call)

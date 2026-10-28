@@ -177,6 +177,59 @@ class TestBoundedRangeStreaming:
         assert requested_ranges[0] == f"bytes=0-{DEFAULT_BOUNDED_CHUNK_SIZE - 1}"
 
     @pytest.mark.asyncio
+    async def test_read_ahead_prefetches_next_chunk_concurrently(self):
+        """
+        پایپ‌لاین پیش‌گیرانه (Lookahead=1): هم‌زمان با تحویل اولین قطعه به کلاینت،
+        درخواست چانک بعدی در پس‌زمینه به سرور بالادست ارسال می‌شود.
+        """
+        total_size = 1_200_000
+        reference_data = bytes(i % 251 for i in range(total_size))
+        requested_ranges = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            range_hdr = request.headers.get("range", "")
+            requested_ranges.append(range_hdr)
+            spec = range_hdr[6:].split("-")
+            start = int(spec[0])
+            end = int(spec[1])
+            chunk = reference_data[start : end + 1]
+            return httpx.Response(
+                206,
+                content=chunk,
+                headers={"Content-Range": f"bytes {start}-{end}/{total_size}"},
+            )
+
+        stream = make_test_stream(length=total_size)
+        mock_resolver = AsyncMock()
+        mock_resolver.resolve.return_value = stream
+
+        streamer = LivePlaybackStreamer(
+            resolver=mock_resolver, http_transport=httpx.MockTransport(handler)
+        )
+
+        response = await streamer.stream_response(
+            make_track(), range_header=None, env=FLAG_ON
+        )
+        assert response is not None
+        assert response.status_code == 200
+
+        # یک چانک را از iterator برمی‌داریم
+        iter_obj = response.body_iterator.__aiter__()
+        first_chunk = await iter_obj.__anext__()
+        assert len(first_chunk) > 0
+
+        # به دلیل پایپ‌لاین lookahead=1، درخواست قطعه دوم در پس‌زمینه ارسال شده است
+        await asyncio.sleep(0.01)
+        assert len(requested_ranges) >= 2
+        assert requested_ranges[1] == f"bytes={DEFAULT_BOUNDED_CHUNK_SIZE}-{min(total_size - 1, 2 * DEFAULT_BOUNDED_CHUNK_SIZE - 1)}"
+
+        # باقی‌مانده داده‌ها را مصرف می‌کنیم
+        rest = b"".join([c async for c in iter_obj])
+        full_data = first_chunk + rest
+        assert len(full_data) == total_size
+        assert full_data == reference_data
+
+    @pytest.mark.asyncio
     async def test_exact_partial_range_requests(self):
         """
         درخواست بازه‌های خاص (ابتدا، وسط، انتها) از کلاینت و تحویل صحیح با کد ۲0۶.

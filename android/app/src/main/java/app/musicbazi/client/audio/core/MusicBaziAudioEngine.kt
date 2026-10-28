@@ -83,6 +83,7 @@ class MusicBaziAudioEngine(
 
     private var progressJob: Job? = null
     private var currentStream: ResolvedAudioStream? = null
+    private var spareStream: ResolvedAudioStream? = null
 
     init {
         runOnMain {
@@ -175,10 +176,64 @@ class MusicBaziAudioEngine(
             }
     }
 
+    fun setNext(stream: ResolvedAudioStream?) {
+        runOnMain {
+            spareStream = stream
+            val spare = sparePlayer ?: return@runOnMain
+            if (stream == null) {
+                spare.stop()
+                spare.clearMediaItems()
+                return@runOnMain
+            }
+
+            // آماده‌سازی بلندی صدای ترک بعدی روی زنجیره standby
+            stream.gainDb?.let { gain ->
+                spareDspChain.loudness.gainFor = { id -> if (id == stream.sourceId) gain else 1f }
+                spareDspChain.loudness.track(stream.sourceId, null)
+            }
+
+            val mediaItem = buildMediaItem(stream)
+            spare.setMediaItem(mediaItem)
+            spare.prepare()
+            Log.d(TAG, "sparePlayer prepared with next track: ${stream.sourceId}")
+        }
+    }
+
     fun play(stream: ResolvedAudioStream) {
         runOnMain {
             currentStream = stream
-            val p = activePlayer ?: return@runOnMain
+            val spare = sparePlayer
+            val active = activePlayer ?: return@runOnMain
+
+            // Fast Swap: اگر دک آماده sparePlayer از قبل همین ترک را بافر کرده است
+            if (spare != null && (spareStream?.sourceId == stream.sourceId || spare.currentMediaItem?.mediaId == stream.sourceId)) {
+                Log.d(TAG, "Fast swap to prebuffered sparePlayer for: ${stream.sourceId}")
+                val outgoing = active
+                val incoming = spare
+
+                // جابه‌جایی دک‌ها و زنجیره‌های DSP
+                activePlayer = incoming
+                sparePlayer = outgoing
+                activeDspChain = if (incoming === playerA) dspChainA else dspChainB
+                spareDspChain = if (incoming === playerA) dspChainB else dspChainA
+
+                outgoing.pause()
+                outgoing.clearMediaItems()
+                spareStream = null
+
+                incoming.play()
+
+                _state.value = _state.value.copy(
+                    currentTrackId = stream.sourceId,
+                    status = if (incoming.playbackState == Player.STATE_READY) AudioState.Status.READY else AudioState.Status.BUFFERING,
+                    isBuffering = incoming.playbackState == Player.STATE_BUFFERING,
+                    durationMs = if (incoming.duration > 0) incoming.duration else _state.value.durationMs,
+                    isPlaying = true,
+                    errorMessage = null,
+                )
+                startProgressTracker()
+                return@runOnMain
+            }
 
             // Level current track's loudness
             stream.gainDb?.let { gain ->
@@ -188,9 +243,9 @@ class MusicBaziAudioEngine(
             }
 
             val mediaItem = buildMediaItem(stream)
-            p.setMediaItem(mediaItem)
-            p.prepare()
-            p.play()
+            active.setMediaItem(mediaItem)
+            active.prepare()
+            active.play()
 
             _state.value = _state.value.copy(
                 currentTrackId = stream.sourceId,
@@ -250,21 +305,25 @@ class MusicBaziAudioEngine(
 
     // ---- DSP Controls (applied synchronously to both A & B peer chains) -----
 
+    private var currentEqCurve: EqCurve = EqCurve.FLAT
+    private var isEqEnabled: Boolean = false
+
     fun setEqualizerEnabled(enabled: Boolean) {
-        dspChainA.equalizer.setTuning(enabled, EqCurve.FLAT, 0f)
-        dspChainB.equalizer.setTuning(enabled, EqCurve.FLAT, 0f)
+        isEqEnabled = enabled
+        dspChainA.equalizer.setTuning(enabled, currentEqCurve, 0f)
+        dspChainB.equalizer.setTuning(enabled, currentEqCurve, 0f)
     }
 
     fun setEqualizerPreset(preset: EqualizerPreset) {
-        val curve = manualCurve(preset.bands)
-        dspChainA.equalizer.setTuning(true, curve, 0f)
-        dspChainB.equalizer.setTuning(true, curve, 0f)
+        currentEqCurve = manualCurve(preset.bands)
+        dspChainA.equalizer.setTuning(isEqEnabled, currentEqCurve, 0f)
+        dspChainB.equalizer.setTuning(isEqEnabled, currentEqCurve, 0f)
     }
 
     fun setEqualizerBands(bandsDb: List<Float>) {
-        val curve = manualCurve(bandsDb)
-        dspChainA.equalizer.setTuning(true, curve, 0f)
-        dspChainB.equalizer.setTuning(true, curve, 0f)
+        currentEqCurve = manualCurve(bandsDb)
+        dspChainA.equalizer.setTuning(isEqEnabled, currentEqCurve, 0f)
+        dspChainB.equalizer.setTuning(isEqEnabled, currentEqCurve, 0f)
     }
 
     fun setSpatialAudioEnabled(enabled: Boolean) {

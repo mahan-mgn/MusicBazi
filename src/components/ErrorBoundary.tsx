@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { apiUrl, isNativeApp, serverBase } from '../lib/server'
+import { isErrorReportingEnabled } from '../lib/telemetry'
 import { WarnIcon } from './icons'
 
 interface Props {
@@ -32,7 +33,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
     // ارسال خطا به تله‌متری سرور در صورت امکان
     try {
-      if (serverBase()) {
+      if (isErrorReportingEnabled() && serverBase()) {
         void fetch(apiUrl('/api/client-error'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },

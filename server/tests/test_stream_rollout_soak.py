@@ -124,7 +124,11 @@ class ScenarioResolver:
         self.calls: dict[str, int] = {}
         self.total = 0
 
-    async def resolve_stream(self, video_id: str, purpose: str = "playback", quality=None):
+    # `cookie` را می‌پذیرد ولی استفاده نمی‌کند: قرارداد واقعیِ resolver همین را
+    # پاس می‌دهد (کوکیِ هر کاربر)، و بدون آن TypeError می‌داد.
+    async def resolve_stream(
+        self, video_id: str, purpose: str = "playback", quality=None, user_id="local", cookie=None
+    ):
         self.total += 1
         self.calls[video_id] = self.calls.get(video_id, 0) + 1
         kind = self.kind
@@ -148,7 +152,7 @@ class ScenarioResolver:
         return make_stream(video_id)
 
 
-def build_stack(monitor: ClientHealthMonitor | None = None):
+def build_stack(monitor: ClientHealthMonitor | None = None, resolved_cache_ttl: float | None = 0):
     """(streamer, scenario, ytdlp_mock, upstream) با orchestration واقعی فاز ۶."""
     monitor = monitor or ClientHealthMonitor()
     scenario = ScenarioResolver()
@@ -161,7 +165,9 @@ def build_stack(monitor: ClientHealthMonitor | None = None):
     )
     upstream = ScriptedUpstream()
     streamer = LivePlaybackStreamer(
-        resolver=resolver, http_transport=httpx.MockTransport(upstream.handler)
+        resolver=resolver,
+        http_transport=httpx.MockTransport(upstream.handler),
+        resolved_cache_ttl=resolved_cache_ttl,
     )
     return streamer, scenario, mock_ytdlp, upstream, monitor
 
@@ -179,7 +185,7 @@ def patch_legacy(monkeypatch, ready_file=None):
     async def _find_ready(track, quality=None):
         return ready_file
 
-    async def _legacy(track, range_header=None, quality=None):
+    async def _legacy(track, range_header=None, quality=None, user_id="local"):
         calls["legacy"] += 1
         return ("LEGACY_SENTINEL", track.id)
 
@@ -312,9 +318,11 @@ class TestConcurrencySoak:
         gate = asyncio.Event()
         inner = streamer.resolver.primary  # ScenarioResolver
 
-        async def gated_resolve_stream(video_id, purpose="playback", quality=None):
+        async def gated_resolve_stream(
+            video_id, purpose="playback", quality=None, user_id="local", cookie=None
+        ):
             await gate.wait()
-            return await inner.resolve_stream(video_id, purpose, quality)
+            return await inner.resolve_stream(video_id, purpose, quality, user_id, cookie)
 
         # primary واقعی را با نسخه gated می‌پوشانیم
         class Gated:

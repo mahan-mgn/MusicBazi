@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.providers import audd
+from app import config
 
 
 class _Res:
@@ -35,7 +36,7 @@ def clip(tmp_path):
 
 
 def _reply(monkeypatch, payload, status=200):
-    monkeypatch.setattr(audd, "AUDD_TOKEN", "t")
+    monkeypatch.setattr(config, "AUDD_TOKEN", "t")
     monkeypatch.setattr(audd.httpx, "post", lambda *a, **k: _Res(payload, status))
 
 
@@ -68,7 +69,7 @@ def test_rejection_is_an_error_not_a_no_match(monkeypatch, clip):
 
 
 def test_network_failure_is_an_error_too(monkeypatch, clip):
-    monkeypatch.setattr(audd, "AUDD_TOKEN", "t")
+    monkeypatch.setattr(config, "AUDD_TOKEN", "t")
 
     def boom(*a, **k):
         raise httpx.ConnectError("down")
@@ -85,7 +86,7 @@ def test_missing_artist_does_not_break_the_match(monkeypatch, clip):
 
 def test_without_a_token_nothing_leaves_the_machine(monkeypatch, clip):
     """بدون توکن هیچ درخواستی نباید ساخته شود — صوتِ کاربر جای دیگری نمی‌رود."""
-    monkeypatch.setattr(audd, "AUDD_TOKEN", None)
+    monkeypatch.setattr(config, "AUDD_TOKEN", None)
 
     def boom(*a, **k):
         raise AssertionError("نباید صدا زده شود")
@@ -96,5 +97,5 @@ def test_without_a_token_nothing_leaves_the_machine(monkeypatch, clip):
 
 
 def test_missing_file_is_not_an_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(audd, "AUDD_TOKEN", "t")
+    monkeypatch.setattr(config, "AUDD_TOKEN", "t")
     assert audd.recognize(tmp_path / "gone.ogg") is None

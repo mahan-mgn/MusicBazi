@@ -1,3 +1,8 @@
 -r requirements.txt
 
 pytest>=8.0
+
+# ۱۵ فایل تست `@pytest.mark.asyncio` دارند. بدون این پلاگین، pytest آن‌ها را
+# «async def functions are not natively supported» می‌شمارد و شکست می‌دهد —
+# و چون فقط در venv توسعه‌دهنده نصب بود، CI قرمز می‌ماند در حالی که محلی سبز بود.
+pytest-asyncio==1.4.0

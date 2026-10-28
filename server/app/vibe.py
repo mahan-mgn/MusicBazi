@@ -29,9 +29,19 @@ from dataclasses import dataclass
 
 import httpx
 
-from . import catalog
-from .config import GEMINI_API_KEY, GEMINI_API_URL, GEMINI_MODEL
-from .models import AlbumDetail, Playlist, SearchResults, Track, VibeReady, VibeRequest, VibeSuggestion
+from . import catalog, db
+from . import credentials
+from .config import GEMINI_API_URL, GEMINI_MODEL
+from .models import (
+    AlbumDetail,
+    Playlist,
+    SearchResults,
+    Track,
+    VibeReady,
+    VibeRequest,
+    VibeSuggestion,
+    VibeTurn,
+)
 from .providers import deezer, spotify
 
 log = logging.getLogger(__name__)
@@ -474,7 +484,7 @@ def _parse_llm_json(raw: str) -> VibeResult | None:
     )
 
 
-def library_digest() -> str | None:
+def library_digest(user_id: str = db.GUEST_ID) -> str | None:
     """
     خلاصه‌ی یک‌خطیِ سلیقه‌ی کاربر از کتابخانه‌ی خودش — برای system prompt.
 
@@ -485,7 +495,7 @@ def library_digest() -> str | None:
     """
     from . import db
 
-    favorites = db.favorite_jobs()
+    favorites = db.favorite_jobs(user_id)
     if not favorites:
         return None
     artists: dict[str, int] = {}
@@ -524,12 +534,15 @@ def _contents(req: VibeRequest, text: str) -> list[dict]:
     return contents
 
 
-async def _call_llm(client: httpx.AsyncClient, req: VibeRequest, text: str) -> VibeResult | None:
+async def _call_llm(
+    client: httpx.AsyncClient, req: VibeRequest, text: str, user_id: str = db.GUEST_ID
+) -> VibeResult | None:
     """
     تشخیصِ حال‌وهوا با Gemini — بی‌صدا None برمی‌گرداند اگر کلید نباشد، شبکه
     بیفتد، یا پاسخ معتبر نباشد. suggest() در آن صورت به کلیدواژه می‌افتد.
     """
-    if not GEMINI_API_KEY:
+    key = credentials.gemini_key(user_id)
+    if not key:
         return None
 
     known = ", ".join(VIBES.keys())
@@ -558,7 +571,7 @@ async def _call_llm(client: httpx.AsyncClient, req: VibeRequest, text: str) -> V
         "If a taste profile is provided below, lean toward that taste but never "
         "repeat songs the user already owns — suggest what they don't have yet."
     )
-    digest = await asyncio.to_thread(library_digest)
+    digest = await asyncio.to_thread(library_digest, user_id)
     if digest:
         system += "\n\nTaste profile: " + digest
 
@@ -566,7 +579,7 @@ async def _call_llm(client: httpx.AsyncClient, req: VibeRequest, text: str) -> V
         res = await client.post(
             GEMINI_API_URL.format(model=GEMINI_MODEL),
             # هدر، نه ?key= در آدرس: کلید در query-logها می‌ماند
-            headers={"x-goog-api-key": GEMINI_API_KEY, "content-type": "application/json"},
+            headers={"x-goog-api-key": key, "content-type": "application/json"},
             json={
                 "systemInstruction": {"parts": [{"text": system}]},
                 "contents": _contents(req, text),
@@ -608,7 +621,9 @@ async def _call_llm(client: httpx.AsyncClient, req: VibeRequest, text: str) -> V
         return None
 
 
-async def suggest(client: httpx.AsyncClient, req: VibeRequest) -> VibeResult:
+async def suggest(
+    client: httpx.AsyncClient, req: VibeRequest, user_id: str = db.GUEST_ID
+) -> VibeResult:
     """
     تصمیمِ نهایی: Gemini (حتی برای کلیکِ چیپ) > کلیدواژه > پیش‌فرضِ عمومی.
 
@@ -620,7 +635,7 @@ async def suggest(client: httpx.AsyncClient, req: VibeRequest) -> VibeResult:
     if not text and req.vibe and req.vibe in VIBES:
         text = VIBES[req.vibe].label
 
-    if text and (result := await _call_llm(client, req, text)):
+    if text and (result := await _call_llm(client, req, text, user_id)):
         return result
 
     # چیپِ صریح حتی وقتی LLM جواب نمی‌دهد نباید به «حدسِ متن» تبدیل شود:
@@ -650,7 +665,10 @@ def _dedupe_key(track: Track) -> tuple[str, str]:
 
 
 async def resolve_tracks(
-    client: httpx.AsyncClient, picks: list[tuple[str, str]], exclude: set[str] = frozenset()
+    client: httpx.AsyncClient,
+    picks: list[tuple[str, str]],
+    exclude: set[str] = frozenset(),
+    user_id: str = db.GUEST_ID,
 ) -> list[Track]:
     """
     هر (عنوان، هنرمند) را در کاتالوگ جستجو می‌کند و اولین نتیجه را برمی‌دارد.
@@ -662,7 +680,7 @@ async def resolve_tracks(
     بیاید چه از Gemini، اگر به همان ترکِ قبلی برسد همین‌جا حذف می‌شود.
     """
     results = await asyncio.gather(
-        *(catalog.search(client, f"{title} {artist}") for title, artist in picks),
+        *(catalog.search(client, f"{title} {artist}", user_id) for title, artist in picks),
         return_exceptions=True,
     )
 
@@ -686,7 +704,10 @@ async def resolve_tracks(
 
 
 async def _search_playlists(
-    client: httpx.AsyncClient, vibe_key: str, qualifiers: Qualifiers = Qualifiers()
+    client: httpx.AsyncClient,
+    vibe_key: str,
+    qualifiers: Qualifiers = Qualifiers(),
+    user_id: str = db.GUEST_ID,
 ) -> list[Playlist]:
     """
     پلی‌لیست‌های واقعیِ کاربرها/پلتفرم‌ها برای این وایب — چند عبارتِ جستجو، چند
@@ -706,7 +727,7 @@ async def _search_playlists(
     if not qualifiers.persian_only:
         searches += [
             deezer.search_playlists(client, en_query),
-            spotify.search_playlists(client, en_query),
+            spotify.search_playlists(client, en_query, 10, user_id),
         ]
 
     results = await asyncio.gather(*searches, return_exceptions=True)
@@ -751,7 +772,10 @@ def _pick_playlists(candidates: list[Playlist]) -> list[Playlist]:
 
 
 async def _tracks_from_playlists(
-    client: httpx.AsyncClient, playlists: list[Playlist], exclude: set[str]
+    client: httpx.AsyncClient,
+    playlists: list[Playlist],
+    exclude: set[str],
+    user_id: str = db.GUEST_ID,
 ) -> list[Track]:
     """
     هر پلی‌لیستِ انتخاب‌شده را کامل می‌گیرد (catalog.resolve_ref، هم دیزر هم
@@ -759,7 +783,7 @@ async def _tracks_from_playlists(
     نه کلِ پلی‌لیست را، که می‌تواند صدها ترک باشد.
     """
     details = await asyncio.gather(
-        *(catalog.resolve_ref(client, p.sourceUrl or p.id) for p in playlists),
+        *(catalog.resolve_ref(client, p.sourceUrl or p.id, user_id) for p in playlists),
         return_exceptions=True,
     )
 
@@ -796,7 +820,7 @@ def _describe_playlists(playlists: list[Playlist]) -> str:
     return f" این‌ها رو از پلی‌لیستِ {'، '.join(f'«{n}»' for n in names)} آوردم." if names else ""
 
 
-def _owned_files(tracks: list[Track]) -> dict[str, VibeReady]:
+def _owned_files(tracks: list[Track], user_id: str = db.GUEST_ID) -> dict[str, VibeReady]:
     """
     کدام ترک‌های پیشنهادی از قبل در کتابخانه‌اند — با فایلِ آماده، نه با
     «بازدانلودِ همان چیز».
@@ -809,7 +833,7 @@ def _owned_files(tracks: list[Track]) -> dict[str, VibeReady]:
     """
     from . import db, jobs, loudness
 
-    owned = db.owned_refs([t.id for t in tracks])
+    owned = db.owned_refs([t.id for t in tracks], user_id)
     out: dict[str, VibeReady] = {}
     for track_id, row in owned.items():
         out[track_id] = VibeReady(
@@ -821,7 +845,9 @@ def _owned_files(tracks: list[Track]) -> dict[str, VibeReady]:
     return out
 
 
-async def build_playlist(client: httpx.AsyncClient, req: VibeRequest) -> VibeSuggestion:
+async def build_playlist(
+    client: httpx.AsyncClient, req: VibeRequest, user_id: str = db.GUEST_ID
+) -> VibeSuggestion:
     """
     نقطه‌ی ورودیِ کاملِ چت‌بات: تشخیصِ وایب، بعد تلاش برای پلی‌لیستِ واقعیِ
     پلتفرم‌ها، و فقط اگر چیزی پیدا نشد برگشت به لیستِ تک‌ترکیِ قدیمی — چت
@@ -831,24 +857,26 @@ async def build_playlist(client: httpx.AsyncClient, req: VibeRequest) -> VibeSug
     جستجوی پلی‌لیستِ واقعی هم روی استخرِ کنسروی اعمال می‌شوند، تا درخواستِ
     ترکیبی («غمگینِ قدیمیِ ایرانی») واقعاً همان را برگرداند، نه فقط وایبِ کلی.
     """
-    result = await suggest(client, req)
+    result = await suggest(client, req, user_id)
     qualifiers = detect_qualifiers(req.message or "", req.history)
     exclude = set(req.excludeIds)
 
-    candidates = await _search_playlists(client, result.vibe, qualifiers)
+    candidates = await _search_playlists(client, result.vibe, qualifiers, user_id)
     chosen = _pick_playlists(candidates)
 
     reply = result.reply + _describe_qualifiers(qualifiers)
     tracks: list[Track] = []
     if chosen:
-        tracks = await _tracks_from_playlists(client, chosen, exclude)
+        tracks = await _tracks_from_playlists(client, chosen, exclude, user_id)
         if tracks:
             reply += _describe_playlists(chosen)
 
     if not tracks:
-        tracks = await resolve_tracks(client, _filter_picks(result.picks, qualifiers), exclude)
+        tracks = await resolve_tracks(
+            client, _filter_picks(result.picks, qualifiers), exclude, user_id
+        )
 
-    owned = await asyncio.to_thread(_owned_files, tracks)
+    owned = await asyncio.to_thread(_owned_files, tracks, user_id)
     return VibeSuggestion(
         vibe=result.vibe, label=result.label, reply=reply, tracks=tracks, reason=result.reason, ready=owned
     )

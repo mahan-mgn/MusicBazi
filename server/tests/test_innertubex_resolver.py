@@ -88,6 +88,26 @@ class TestInnerTubeXResolver:
         assert ready is True
 
     @pytest.mark.asyncio
+    async def test_resolve_with_cookie_payload(self, sample_bridge_stream_payload):
+        captured_payload = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
+            nonlocal captured_payload
+            captured_payload = json.loads(request.content)
+            return httpx.Response(200, json=sample_bridge_stream_payload)
+
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(transport=transport)
+
+        resolver = InnerTubeXResolver(base_url="http://127.0.0.1:8765", client=client)
+        stream = await resolver.resolve_stream(
+            "dQw4w9WgXcQ", purpose="playback", cookie="PREF=f4=4000000; SID=abc"
+        )
+        assert captured_payload.get("cookie") == "PREF=f4=4000000; SID=abc"
+        assert stream.video_id == "dQw4w9WgXcQ"
+
+    @pytest.mark.asyncio
     async def test_health_check_not_ready(self):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, text="Internal Server Error")

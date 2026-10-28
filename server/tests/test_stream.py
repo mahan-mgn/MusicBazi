@@ -79,6 +79,21 @@ def test_missing_file_is_404(stream_db, tmp_path, track):
     assert exc.value.status_code == 404
 
 
+def test_find_any_ready_by_meta_matches_different_track_id(stream_db, tmp_path, track):
+    """اگر ترکی با شناسه‌ی آلبوم دانلود شده باشد، درخواست با شناسه‌ی سینگل باید همان فایل را پیدا کند."""
+    album_track = track.model_copy(update={"id": "sp:track:album-id", "title": "Aminak Hit", "artist": "Aminak"})
+    _ready(stream_db, album_track, "job-album", tmp_path / "hit.mp3")
+
+    # جستجو با شناسه‌ی متفاوتِ سینگل
+    found = stream_db.find_any_ready("sp:track:single-id")
+    assert found is None
+
+    # ولی جستجو با متادیتا باید فایل دانلودشده را بیابد
+    found_meta = stream_db.find_any_ready_by_meta("Aminak Hit - Single", "Aminak")
+    assert found_meta is not None
+    assert found_meta["id"] == "job-album"
+
+
 class TestThumbEndpoint:
     """
     `/thumb` برای باتِ تلگرام است: بات به‌جای گرفتنِ دوباره‌ی کاور از CDN — که

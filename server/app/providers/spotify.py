@@ -22,12 +22,12 @@ from typing import Any
 
 import httpx
 
+from .. import credentials
 from ..config import (
     SPOTIFY_API,
-    SPOTIFY_CLIENT_ID,
-    SPOTIFY_CLIENT_SECRET,
     SPOTIFY_TOKEN_URL,
 )
+from ..db import GUEST_ID
 from ..models import Album, AlbumDetail, Artist, ArtistDetail, Playlist, SearchResults, Track
 
 log = logging.getLogger(__name__)
@@ -60,13 +60,17 @@ ARTIST_ALBUMS = MAX_TRACKS
 # آلبوم عوض می‌شود
 UNKNOWN_ARTIST = "هنرمند"
 
-_token: str | None = None
-_token_expires = 0.0
+# توکن به‌ازای `(user_id, client_id, version)` کش می‌شود، نه یک متغیرِ ماژولی:
+# هر حساب کلیدِ خودش را دارد و توکنِ یک حساب نباید به حسابِ دیگر برسد. کلیدِ
+# `client_id` هم لازم است چون اگر کاربر کلیدش را عوض کند، توکنِ قبلی بی‌اعتبار
+# می‌شود؛ `version` هم همان کار را برای عوض‌شدنِ *secret* می‌کند — عوض‌کردنِ
+# فقط secret با `client_id`ِ یکسان، بدونِ آن توکنِ قدیمی را زنده نگه می‌داشت.
+_tokens: dict[tuple[str, str, int], tuple[str, float]] = {}
 _token_lock = asyncio.Lock()
 
 
-def enabled() -> bool:
-    return bool(SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET)
+def enabled(uid: str = GUEST_ID) -> bool:
+    return credentials.spotify_pair(uid) is not None
 
 
 def parse_url(url: str) -> tuple[str, str] | None:
@@ -77,21 +81,27 @@ def parse_url(url: str) -> tuple[str, str] | None:
     return None
 
 
-async def _access_token(client: httpx.AsyncClient) -> str:
+async def _access_token(client: httpx.AsyncClient, uid: str = GUEST_ID) -> str:
     """
     Client Credentials — بدون کاربر، فقط برای داده‌ی عمومی.
     توکن یک ساعت اعتبار دارد؛ زودتر از موعد تازه‌اش می‌کنیم تا وسط یک پلی‌لیست
     بزرگ منقضی نشود.
+
+    کلید از `credentials` می‌آید، پس هر حساب توکنِ خودش را دارد و صاحبِ سرور
+    سهمیه‌ی اسپاتیفایش را خرجِ بازدیدکننده‌ها نمی‌کند.
     """
-    global _token, _token_expires
+    pair = credentials.spotify_pair(uid)
+    if pair is None:
+        raise RuntimeError("کلیدِ اسپاتیفای برای این حساب تنظیم نشده")
+    client_id, client_secret = pair
+    slot = (uid, client_id, credentials.version(uid))
 
     async with _token_lock:
-        if _token and time.time() < _token_expires:
-            return _token
+        cached = _tokens.get(slot)
+        if cached and time.time() < cached[1]:
+            return cached[0]
 
-        secret = base64.b64encode(
-            f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode()
-        ).decode()
+        secret = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         res = await client.post(
             SPOTIFY_TOKEN_URL,
             data={"grant_type": "client_credentials"},
@@ -102,14 +112,25 @@ async def _access_token(client: httpx.AsyncClient) -> str:
         )
         res.raise_for_status()
         body = res.json()
-        _token = body["access_token"]
-        _token_expires = time.time() + int(body.get("expires_in", 3600)) - 60
-        return _token
+        token = body["access_token"]
+        _tokens[slot] = (token, time.time() + int(body.get("expires_in", 3600)) - 60)
+        return token
 
 
-async def _get(client: httpx.AsyncClient, path: str, **params: Any) -> dict[str, Any]:
+def invalidate(uid: str) -> None:
+    """
+    توکن‌های یک حساب را دور می‌ریزد — بعد از عوض‌شدنِ کلیدش.
+
+    با کلیدِ نسخه‌دار در `slot` عملاً دیگر لازم نیست (نسخه‌ی تازه یعنی کلیدِ
+    کشِ تازه)، ولی صریح نگه داشته می‌شود تا حافظه با هر تغییرِ کلید رشد نکند.
+    """
+    for slot in [k for k in _tokens if k[0] == uid]:
+        del _tokens[slot]
+
+
+async def _get(client: httpx.AsyncClient, path: str, uid: str = GUEST_ID, **params: Any) -> dict[str, Any]:
     for attempt in range(3):
-        token = await _access_token(client)
+        token = await _access_token(client, uid)
         res = await client.get(
             f"{SPOTIFY_API}{path}",
             params=params,
@@ -233,7 +254,9 @@ def _playlist_head(row: dict[str, Any]) -> Playlist:
     )
 
 
-async def search_playlists(client: httpx.AsyncClient, query: str, limit: int = 10) -> list[Playlist]:
+async def search_playlists(
+    client: httpx.AsyncClient, query: str, limit: int = 10, uid: str = GUEST_ID
+) -> list[Playlist]:
     """
     جدا از `search` عمومی نگه داشته می‌شود (که فقط `type=album,track,artist`
     می‌زند و همه‌جای اپ استفاده می‌شود) — فقط چت‌بات وایب صدایش می‌زند، و اگر
@@ -241,9 +264,9 @@ async def search_playlists(client: httpx.AsyncClient, query: str, limit: int = 1
     تازه، مثل همان محدودیتِ artist top-tracks)، نباید جستجوی عمومی را با خودش
     پایین بکشد.
     """
-    if not enabled():
+    if not enabled(uid):
         return []
-    body = await _get(client, "/search", q=query, type="playlist", limit=limit)
+    body = await _get(client, "/search", q=query, type="playlist", limit=limit, uid=uid)
     items = (body.get("playlists") or {}).get("items") or []
     return [_playlist_head(r) for r in items if r and r.get("id")]
 
@@ -276,12 +299,17 @@ def _artist_head(row: dict[str, Any]) -> Artist:
 
 
 async def _all_pages(
-    client: httpx.AsyncClient, path: str, page: int, cap: int = MAX_TRACKS, **params: Any
+    client: httpx.AsyncClient,
+    path: str,
+    page: int,
+    uid: str = GUEST_ID,
+    cap: int = MAX_TRACKS,
+    **params: Any,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     offset = 0
     while offset < cap:
-        body = await _get(client, path, limit=page, offset=offset, **params)
+        body = await _get(client, path, limit=page, offset=offset, uid=uid, **params)
         batch = body.get("items") or []
         items += batch
         if len(batch) < page or not body.get("next"):
@@ -290,21 +318,21 @@ async def _all_pages(
     return items
 
 
-async def album(client: httpx.AsyncClient, album_id: str) -> AlbumDetail | None:
-    head = await _get(client, f"/albums/{album_id}")
+async def album(client: httpx.AsyncClient, album_id: str, uid: str = GUEST_ID) -> AlbumDetail | None:
+    head = await _get(client, f"/albums/{album_id}", uid=uid)
     if not head.get("id"):
         return None
 
     # صفحه‌ی اول ترک‌ها داخل خود پاسخ آلبوم است؛ فقط اگر بیشتر بود صفحه می‌زنیم
     rows = (head.get("tracks") or {}).get("items") or []
     if (head.get("tracks") or {}).get("next"):
-        rows = await _all_pages(client, f"/albums/{album_id}/tracks", ALBUM_PAGE)
+        rows = await _all_pages(client, f"/albums/{album_id}/tracks", ALBUM_PAGE, uid)
 
     tracks = [t for r in rows if (t := _track(r, head))]
     base = _album_head(head)
     # آواتارِ آرتیست: «Get Artist» یک درخواست بیشتر است و عکسِ واقعیِ پروفایل
     # را می‌دهد — چیزی که ردیفِ آلبوم ندارد
-    base.artistArtworkUrl = await _artist_avatar(client, base.artistId)
+    base.artistArtworkUrl = await _artist_avatar(client, base.artistId, uid)
     if base.artistArtworkUrl:
         for t in tracks:
             if not t.artistArtworkUrl:
@@ -316,12 +344,14 @@ async def album(client: httpx.AsyncClient, album_id: str) -> AlbumDetail | None:
     )
 
 
-async def _artist_avatar(client: httpx.AsyncClient, artist_id: str | None) -> str | None:
+async def _artist_avatar(
+    client: httpx.AsyncClient, artist_id: str | None, uid: str = GUEST_ID
+) -> str | None:
     """عکسِ پروفایلِ آرتیست با «Get Artist» — شکستش فقط None می‌شود، نه خطا."""
     if not artist_id:
         return None
     try:
-        head = await _get(client, f"/artists/{artist_id.rsplit(':', 1)[-1]}")
+        head = await _get(client, f"/artists/{artist_id.rsplit(':', 1)[-1]}", uid=uid)
         return _art(head.get("images"))
     except Exception:
         return None
@@ -386,7 +416,9 @@ ART_CONCURRENCY = 12
 _art_cache: dict[str, str | None] = {}
 
 
-async def _track_arts(client: httpx.AsyncClient, tracks: list[Track]) -> dict[str, str | None]:
+async def _track_arts(
+    client: httpx.AsyncClient, tracks: list[Track], uid: str = GUEST_ID
+) -> dict[str, str | None]:
     """
     کاورِ آلبومِ هر ترکِ پلی‌لیست.
 
@@ -413,7 +445,7 @@ async def _track_arts(client: httpx.AsyncClient, tracks: list[Track]) -> dict[st
         async with sem:
             art: str | None = None
             try:
-                row = await _get(client, f"/tracks/{tid}")
+                row = await _get(client, f"/tracks/{tid}", uid=uid)
                 art = _art((row.get("album") or {}).get("images"))
             except httpx.HTTPError:
                 pass
@@ -422,7 +454,7 @@ async def _track_arts(client: httpx.AsyncClient, tracks: list[Track]) -> dict[st
                 try:
                     body = await _get(
                         client, "/search", q=f'track:"{t.title}" artist:"{t.artist}"',
-                        type="track", limit=1,
+                        type="track", limit=1, uid=uid,
                     )
                     items = (body.get("tracks") or {}).get("items") or []
                     if items:
@@ -437,7 +469,7 @@ async def _track_arts(client: httpx.AsyncClient, tracks: list[Track]) -> dict[st
     return {raw_id(t): _art_cache.get(raw_id(t)) for t in tracks}
 
 
-async def playlist(client: httpx.AsyncClient, playlist_id: str) -> AlbumDetail | None:
+async def playlist(client: httpx.AsyncClient, playlist_id: str, uid: str = GUEST_ID) -> AlbumDetail | None:
     entity = await _embed_entity(client, "playlist", playlist_id)
     if not entity or not entity.get("id"):
         return None
@@ -447,7 +479,7 @@ async def playlist(client: httpx.AsyncClient, playlist_id: str) -> AlbumDetail |
 
     # کاورِ واقعیِ هر ترک؛ اگر لوکاپش شکست خورد یا خودِ ترک محلی/بی‌کاور بود،
     # کاورِ پلی‌لیست جای خالی‌اش را می‌گیرد تا کارت بی‌عکس نماند
-    arts = await _track_arts(client, tracks)
+    arts = await _track_arts(client, tracks, uid)
     for t in tracks:
         t.artworkUrl = arts.get(t.id.rsplit(":", 1)[-1]) or cover
 
@@ -465,9 +497,9 @@ async def playlist(client: httpx.AsyncClient, playlist_id: str) -> AlbumDetail |
     )
 
 
-async def track(client: httpx.AsyncClient, track_id: str) -> AlbumDetail | None:
+async def track(client: httpx.AsyncClient, track_id: str, uid: str = GUEST_ID) -> AlbumDetail | None:
     """تک‌آهنگ هم در قالب AlbumDetail برمی‌گردد تا فرانت مسیر جدا لازم نداشته باشد."""
-    row = await _get(client, f"/tracks/{track_id}")
+    row = await _get(client, f"/tracks/{track_id}", uid=uid)
     single = _track(row)
     if single is None:
         return None
@@ -486,7 +518,7 @@ async def track(client: httpx.AsyncClient, track_id: str) -> AlbumDetail | None:
     )
 
 
-async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | None:
+async def artist(client: httpx.AsyncClient, artist_id: str, uid: str = GUEST_ID) -> ArtistDetail | None:
     """
     صفحه‌ی هنرمند: ترک‌های محبوب به‌علاوه‌ی دیسکوگرافی.
 
@@ -494,15 +526,25 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
     برای اپ‌های جدید بست). صفحه بدون آن هم کار می‌کند — دیسکوگرافی سرِ جایش است و
     دانلود از صفحه‌ی آلبوم انجام می‌شود — پس خطایش خورده می‌شود و صدا نمی‌کند.
     """
-    head, top, albums = await asyncio.gather(
-        _get(client, f"/artists/{artist_id}"),
-        _get(client, f"/artists/{artist_id}/top-tracks", market=MARKET),
+    head, top, albums, appears_on_raw = await asyncio.gather(
+        _get(client, f"/artists/{artist_id}", uid=uid),
+        _get(client, f"/artists/{artist_id}/top-tracks", market=MARKET, uid=uid),
         _all_pages(
             client,
             f"/artists/{artist_id}/albums",
             ARTIST_ALBUM_PAGE,
+            uid,
             ARTIST_ALBUMS,
             include_groups="album,single",
+            market=MARKET,
+        ),
+        _all_pages(
+            client,
+            f"/artists/{artist_id}/albums",
+            ARTIST_ALBUM_PAGE,
+            uid,
+            ARTIST_ALBUMS,
+            include_groups="appears_on",
             market=MARKET,
         ),
         # سرِ صفحه بدون ترک و آلبوم هم به کار می‌آید؛ عکسِ خودِ هنرمند فقط همان‌جاست
@@ -519,6 +561,8 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         log.warning("spotify artist %s: top-tracks failed: %r", artist_id, top)
     if not isinstance(albums, list):
         log.warning("spotify artist %s: albums failed: %r", artist_id, albums)
+    if not isinstance(appears_on_raw, list):
+        log.warning("spotify artist %s: appears_on failed: %r", artist_id, appears_on_raw)
     if not head.get("id"):
         return None
 
@@ -548,6 +592,20 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
             seen.add(key)
             discography.append(album_row)
 
+    appears_on: list[Album] = []
+    if isinstance(appears_on_raw, list):
+        rows = sorted(appears_on_raw, key=lambda r: r.get("release_date") or "", reverse=True)
+        seen_ao: set[tuple[str, int]] = set()
+        for row in rows:
+            if not row.get("id"):
+                continue
+            album_row = _album_head(row)
+            key = (album_row.title.strip().lower(), album_row.year)
+            if key in seen_ao:
+                continue
+            seen_ao.add(key)
+            appears_on.append(album_row)
+
     base = _artist_head(head)
     if base.artworkUrl:
         for t in tracks:
@@ -557,12 +615,31 @@ async def artist(client: httpx.AsyncClient, artist_id: str) -> ArtistDetail | No
         # کلیدِ حالت توسعه ژانر و دنبال‌کننده را هم نمی‌دهد، پس زیرنویس «هنرمند»
         # خالی می‌ماند. تعداد آلبوم را همین‌جا داریم و مثل دیزر گویاتر است.
         base.subtitle = f"{len(discography)} آلبوم"
-    return ArtistDetail(**base.model_dump(), topTracks=tracks, albums=discography)
+    return ArtistDetail(**base.model_dump(), topTracks=tracks, albums=discography, appearsOn=appears_on)
 
 
-async def artist_discography(client: httpx.AsyncClient, artist_id: str) -> list[Track]:
+def _norm_track_title(title: str) -> str:
+    cleaned = re.sub(
+        r"\s*-\s*(single|ep|album version|remastered|mono|stereo).*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\s*\((single version|remastered[^)]*|mono|stereo|album version)\)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+
+async def artist_discography(
+    client: httpx.AsyncClient, artist_id: str, uid: str = GUEST_ID
+) -> list[Track]:
     """
     تمام ترک‌های دیسکوگرافی هنرمند (آلبوم‌ها + تک‌آهنگ‌ها + برترین‌ها) با دریافت دسته‌ای ۲۰تایی.
+    آلبوم‌های کامل بر تک‌آهنگ‌ها مقدم هستند تا متادیتای آلبوم حفظ شود.
     """
     detail = await artist(client, artist_id)
     if detail is None:
@@ -570,31 +647,68 @@ async def artist_discography(client: httpx.AsyncClient, artist_id: str) -> list[
 
     tracks: list[Track] = []
     seen_ids: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
-    for t in detail.topTracks:
-        if t.id not in seen_ids:
-            seen_ids.add(t.id)
-            tracks.append(t)
+    def _add_track(t: Track) -> bool:
+        if not t or not t.id:
+            return False
+        key = (_norm_track_title(t.title), (detail.name or t.artist).strip().lower())
+        if t.id in seen_ids or key in seen_keys:
+            return False
+        if detail.artworkUrl and not t.artistArtworkUrl:
+            t.artistArtworkUrl = detail.artworkUrl
+        seen_ids.add(t.id)
+        seen_keys.add(key)
+        tracks.append(t)
+        return True
 
-    raw_ids = [a.id.rsplit(":", 1)[-1] for a in detail.albums if a.id]
+    def _album_rank(alb: Album) -> int:
+        if alb.releaseType in ("album", "compilation") or alb.trackCount > 6:
+            return 0
+        if alb.releaseType == "ep" or alb.trackCount > 1:
+            return 1
+        return 2
+
+    # اولویت: آلبوم کامل > EP > سینگل؛ درون هر رتبه، جدیدتر به قدیمی‌تر
+    sorted_albums = sorted(
+        detail.albums,
+        key=lambda a: (_album_rank(a), -(a.year or 0)),
+    )
+    raw_ids = [a.id.rsplit(":", 1)[-1] for a in sorted_albums if a.id]
 
     for i in range(0, len(raw_ids), 20):
         chunk = raw_ids[i : i + 20]
         try:
-            body = await _get(client, "/albums", ids=",".join(chunk))
+            body = await _get(client, "/albums", ids=",".join(chunk), uid=uid)
         except Exception:
             continue
         for alb_row in body.get("albums") or []:
             if not alb_row:
                 continue
             item_rows = (alb_row.get("tracks") or {}).get("items") or []
+            is_multi = (
+                (alb_row.get("album_type") or "").lower() in ("album", "compilation")
+                or int(alb_row.get("total_tracks") or 0) > 1
+                or len(item_rows) > 1
+            )
+            album_name = alb_row.get("name")
+            album_artist = _artists(alb_row) or detail.name
+            album_id = f"sp:album:{alb_row['id']}" if alb_row.get("id") else None
             for item in item_rows:
                 t = _track(item, alb_row)
-                if t and t.id not in seen_ids:
-                    if detail.artworkUrl and not t.artistArtworkUrl:
-                        t.artistArtworkUrl = detail.artworkUrl
-                    seen_ids.add(t.id)
-                    tracks.append(t)
+                if t:
+                    if album_name:
+                        t.album = album_name
+                    t.albumArtist = album_artist
+                    if album_id:
+                        t.albumId = album_id
+                    _add_track(t)
+
+    # برترین‌ها فقط برای ترک‌هایی که در هیچ آلبوم یا تک‌آهنگی نبودند
+    for t in detail.topTracks:
+        if not t.albumArtist:
+            t.albumArtist = detail.name
+        _add_track(t)
 
     return tracks
 
@@ -704,14 +818,16 @@ async def user(client: httpx.AsyncClient, user_id: str) -> ArtistDetail | None:
     )
 
 
-async def search(client: httpx.AsyncClient, query: str, limit: int = 10) -> SearchResults:
+async def search(
+    client: httpx.AsyncClient, query: str, limit: int = 10, uid: str = GUEST_ID
+) -> SearchResults:
     """
     جستجوی اسپاتیفای فقط وقتی صدا زده می‌شود که کلید ست باشد.
 
     هنرمند هم می‌خواهیم تا بخش «هنرمندان» کارتِ اسپاتیفای هم داشته باشد. یک
     درخواست بیشتر نمی‌شود؛ `type` چندتایی در همان یک فراخوانی جواب می‌دهد.
     """
-    body = await _get(client, "/search", q=query, type="album,track,artist", limit=limit)
+    body = await _get(client, "/search", q=query, type="album,track,artist", limit=limit, uid=uid)
     tracks = [t for r in ((body.get("tracks") or {}).get("items") or []) if (t := _track(r))]
     albums = [
         _album_head(r) for r in ((body.get("albums") or {}).get("items") or []) if r.get("id")

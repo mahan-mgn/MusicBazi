@@ -1,4 +1,4 @@
-import { api } from '../lib/api'
+import { useEffect, useRef } from 'react'
 import {
   cleanArtist,
   digits,
@@ -10,7 +10,7 @@ import {
 } from '../lib/format'
 import { useI18n } from '../lib/i18n'
 import type { Track } from '../lib/types'
-import { isActive, useDownloads, useTrackJob } from '../store/downloads'
+import { isActive, jobErrorText, useDownloads, useTrackJob } from '../store/downloads'
 import { useFavorites } from '../store/favorites'
 import { usePlayer } from '../store/player'
 import { useSettings } from '../store/settings'
@@ -18,6 +18,7 @@ import { useToasts } from '../store/toasts'
 import { toPlayItem } from '../lib/stream'
 import { useRowSwipe } from '../lib/useRowSwipe'
 import { canSaveToDevice, haptic, saveToDevice } from '../lib/native'
+import { prewarmTrack } from '../lib/prewarm'
 import LikeHeart from './LikeHeart'
 import SendToTelegram from './SendToTelegram'
 import {
@@ -67,9 +68,12 @@ export default function AlbumTrackRow({
 }: Props) {
   const quality = useSettings((s) => s.quality)
   const job = useTrackJob(track.id, quality)
-  const isFavorite = useFavorites((s) => (job ? Boolean(s.items[job.id]) : false))
+  const isFavorite = useFavorites((s) => (job ? Boolean(s.items[job.jobId ?? job.id]) : false))
   const toggleFavorite = useFavorites((s) => s.toggle)
-  const { enqueue, cancel, retry } = useDownloads()
+  // selector تکی، نه کل استور: هر تیکِ SSE نباید کل لیست را رندر کند
+  const enqueue = useDownloads((s) => s.enqueue)
+  const cancel = useDownloads((s) => s.cancel)
+  const retry = useDownloads((s) => s.retry)
   const { t, lang } = useI18n()
 
   const currentTrackId = usePlayer((s) => s.queue[s.index]?.track?.id)
@@ -106,6 +110,32 @@ export default function AlbumTrackRow({
     useToasts.getState().push(t.queueAdded(track.title), 'info')
   }
 
+  const hoverTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+    }
+  }, [])
+
+  const handleMouseEnter = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
+    hoverTimer.current = window.setTimeout(() => {
+      prewarmTrack(track, quality)
+    }, 60)
+  }
+
+  const handleMouseLeave = () => {
+    if (hoverTimer.current) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }
+
+  const handlePointerDown = () => {
+    prewarmTrack(track, quality)
+  }
+
   const rowRef = useRowSwipe<HTMLDivElement>({
     onStartToEnd: handleSwipeToQueue,
     onEndToStart: handleSwipeToQueue,
@@ -115,9 +145,9 @@ export default function AlbumTrackRow({
   return (
     <div
       ref={rowRef}
-      onMouseEnter={() => {
-        if (!job) void api.prefetchStream?.(track)
-      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onPointerDown={handlePointerDown}
       className={`group relative flex items-center gap-2 overflow-hidden rounded-xl px-2.5 py-2.5 transition sm:gap-3 ${
         selected
           ? 'bg-accent-dim'
@@ -157,6 +187,7 @@ export default function AlbumTrackRow({
       {/* ستون شماره / دکمه پخش */}
       <button
         onClick={() => onTogglePlay(track)}
+        onFocus={() => prewarmTrack(track, quality)}
         aria-label={playing ? t.pause : t.play}
         title={playing ? t.pause : t.play}
         className="relative grid size-7 shrink-0 place-items-center rounded-lg text-muted-2 transition hover:bg-white/5 hover:text-fg"
@@ -189,6 +220,7 @@ export default function AlbumTrackRow({
           <button
             type="button"
             onClick={() => onTogglePlay(track)}
+            onFocus={() => prewarmTrack(track, quality)}
             className="bidi truncate text-start text-sm font-medium transition-colors hover:text-accent"
           >
             <span
@@ -259,7 +291,7 @@ export default function AlbumTrackRow({
         {job?.status === 'error' && (
           <button
             onClick={() => retry(job.id)}
-            title={job.error}
+            title={jobErrorText(job.error, t)}
             className="me-1 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-danger hover:bg-panel-2"
           >
             <RetryIcon className="size-3" />
@@ -271,7 +303,7 @@ export default function AlbumTrackRow({
         {job?.status === 'ready' && (
           <LikeHeart
             liked={isFavorite}
-            onToggle={() => toggleFavorite(job.id)}
+            onToggle={() => toggleFavorite(job.jobId ?? job.id)}
             ariaLabel={isFavorite ? t.favoriteRemove : t.favoriteAdd}
             className={`grid size-7 place-items-center rounded-md transition hover:bg-panel-2 ${
               isFavorite ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
